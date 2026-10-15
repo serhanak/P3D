@@ -1,0 +1,27 @@
+{
+  "name": "p3d",
+  "version": "1.0.0",
+  "description": "Doğal dille 3D yazıcı parçası modelleme (MVP)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "start": "tsx --env-file-if-exists=.env server/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "type": "module",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.134.0",
+    "fflate": "^0.8.3",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/three": "^0.186.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4"
+  },
+  "private": true
+}

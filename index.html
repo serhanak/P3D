@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>P3D — Doğal dille 3D parça tasarımı</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 28 9.5v13L16 29 4 22.5v-13z' fill='%234f8ef7'/%3E%3Cpath d='M16 16 28 9.5M16 16 4 9.5M16 16v13' stroke='%231b1e25' stroke-width='2'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand" title="P3D">P3D</div>
+        <input id="project-name" class="project-name" spellcheck="false" aria-label="Proje adı" />
+
+        <div class="tb-group">
+          <button id="btn-new" title="Yeni proje">Yeni</button>
+          <button id="btn-open" title="Proje dosyası aç (.p3d.json)">Aç…</button>
+          <button id="btn-save" title="Projeyi dosyaya kaydet (Ctrl+S)">Kaydet</button>
+          <div class="menu">
+            <button id="btn-export" class="primary" aria-haspopup="true">Dışa aktar ▾</button>
+            <div id="export-menu" class="menu-pop" hidden>
+              <button data-export="all-obj">Tüm görünür parçalar → tek OBJ</button>
+              <button data-export="all-zip">Tüm görünür parçalar → OBJ + MTL (renkli, ZIP)</button>
+              <button data-export="each-zip">Her parça ayrı OBJ (çok renkli baskı, ZIP)</button>
+              <button data-export="selected-obj">Yalnızca seçili parça → OBJ</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="tb-group">
+          <button id="btn-undo" class="icon" title="Geri al (Ctrl+Z)">↶</button>
+          <button id="btn-redo" class="icon" title="Yinele (Ctrl+Y)">↷</button>
+        </div>
+
+        <div class="tb-group">
+          <label class="switch" title="Parça isimlerini göster/gizle"><input type="checkbox" id="tg-names" /><span>İsimler</span></label>
+          <label class="switch" title="Ölçüleri göster/gizle"><input type="checkbox" id="tg-dims" /><span>Ölçüler</span></label>
+        </div>
+
+        <div class="tb-group views">
+          <button data-view="iso" title="İzometrik görünüm">İzo</button>
+          <button data-view="top" title="Üstten görünüm">Üst</button>
+          <button data-view="front" title="Önden görünüm">Ön</button>
+          <button data-view="right" title="Sağdan görünüm">Sağ</button>
+          <button id="btn-fit" title="Görünümü sığdır (F)">Sığdır</button>
+        </div>
+
+        <div class="spacer"></div>
+        <button id="btn-settings" title="Tabla boyutu ve çözünürlük">Ayarlar</button>
+        <input type="file" id="file-input" accept=".json,.p3d" hidden />
+      </header>
+
+      <aside class="panel left">
+        <div class="panel-head">Parçalar <span id="part-count" class="muted"></span></div>
+        <div class="add-row" id="add-row"></div>
+        <ul id="part-list" class="part-list"></ul>
+      </aside>
+
+      <main class="center">
+        <div id="viewport" class="viewport"></div>
+        <section class="console">
+          <div id="log" class="log" aria-live="polite"></div>
+          <form id="cmd-form" class="cmd-row" autocomplete="off">
+            <select id="cmd-mode" title="Komut yorumlayıcı">
+              <option value="auto">Otomatik</option>
+              <option value="local">Yerel</option>
+              <option value="claude">Claude</option>
+            </select>
+            <input id="cmd-input" placeholder="Komut yazın… örn. mil parçasının çapını 10mm büyüt  (yardım için: yardım)" />
+            <button type="submit" id="cmd-submit" class="primary">Uygula</button>
+          </form>
+          <div id="llm-status" class="llm-status"></div>
+        </section>
+      </main>
+
+      <aside class="panel right" id="props"></aside>
+    </div>
+
+    <dialog id="settings-dialog">
+      <form method="dialog" class="settings">
+        <h3>Ayarlar</h3>
+        <label>Tabla genişliği X (mm) <input type="number" id="set-bedx" min="20" max="2000" step="1" /></label>
+        <label>Tabla derinliği Y (mm) <input type="number" id="set-bedy" min="20" max="2000" step="1" /></label>
+        <label
+          >Yuvarlak yüzey çözünürlüğü
+          <select id="set-res">
+            <option value="32">Düşük (32)</option>
+            <option value="64">Orta (64)</option>
+            <option value="96">Yüksek (96)</option>
+            <option value="128">Çok yüksek (128)</option>
+            <option value="192">Baskı kalitesi (192)</option>
+          </select>
+        </label>
+        <p class="muted small">Çözünürlük hem ekranda hem OBJ dışa aktarımında kullanılır.</p>
+        <div class="dlg-actions">
+          <button value="cancel">Vazgeç</button>
+          <button value="ok" class="primary">Uygula</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" role="status"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
