@@ -13,7 +13,9 @@
    `section`. Ayrıntı: AGENTS.md → "Doğrulama döngüsü", "Serbest biçimler ve delikler".
 4. Örnekler uygulamanın kendi şekilleriyle kurulur, mesh gömülmez. 3DBenchy üreteci: `examples/tools/build-3dbenchy.ts`
    (referans STL indirme komutu dosyanın başında; repoya koymayın).
-5. Bu dosyayı iş bitince güncelleyin; commit mesajları kısa, Türkçe olabilir; `main` dalı, GitHub `serhanak/P3D` (özel). Bir işi bitiren ajan/geliştirici bu dosyayı güncellemelidir.
+5. Hacimli işleri alt ajanlara devredin (`.claude/agents/`: p3d-measurer, p3d-implementer, p3d-verifier, p3d-reviewer;
+   kurallar CLAUDE.md → "Alt ajanlar"). Sahneyi yalnızca ana oturum değiştirir.
+6. Bu dosyayı iş bitince güncelleyin; commit mesajları kısa, Türkçe olabilir; `main` dalı, GitHub `serhanak/P3D` (özel). Bir işi bitiren ajan/geliştirici bu dosyayı güncellemelidir.
 
 ## Tamamlananlar (MVP)
 

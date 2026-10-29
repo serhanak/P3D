@@ -154,6 +154,7 @@ tests/               parser.test.ts (ayrıştırıcı+motor), io.test.ts (OBJ ma
 examples/            Örnek .p3d.json projeleri (Aç… ile yüklenir); io.test.ts hepsinin onarımsız yüklendiğini doğrular
 examples/tools/      Örnek üreteçleri (tsx ile çalışır, tsconfig dışı): build-3dbenchy.ts referans STL'den Benchy'yi kurar
 docs/STATUS.md       Güncel durum, doğrulama durumu, bilinen sorunlar, yol haritası
+.claude/agents/      Claude Code alt ajanları (ölçüm, uygulama, doğrulama, inceleme); kullanım: CLAUDE.md
 ```
 
 ## Mimari: tek değişiklik yolu

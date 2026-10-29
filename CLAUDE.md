@@ -24,3 +24,25 @@ haritası `docs/STATUS.md`'dedir. İkisini de içe aktarıyoruz:
   hedef parçaya bağlayın.
 - Windows'ta `TaskStop` arka plandaki `npm run dev`'in alt node sürecini kapatmayabilir; port meşgul kalırsa
   `Get-NetTCPConnection -LocalPort 5173` ile süreci bulup kapatın.
+
+## Alt ajanlar (`.claude/agents/`)
+
+Ana oturumun bağlamını temiz tutmak için hacimli ve iyi tanımlı işleri devredin; kısa işleri (birkaç araç çağrısı)
+kendiniz yapın.
+
+| Ajan | Model | Ne zaman |
+|---|---|---|
+| `p3d-measurer` | haiku (yorum gerekirse `model: sonnet`) | Referans ağdan/sahneden kesit, kutu, hacim, endaze tablosu; ham döküm yerine ölçü tablosu döner |
+| `p3d-implementer` | opus | Kapsamı belli özellik/düzeltme + test; değişen dosya özeti döner |
+| `p3d-verifier` | sonnet | Model sonrası `check` + `measure` + `snapshot`, kod sonrası typecheck/test/build; kısa hüküm döner |
+| `p3d-reviewer` | sonnet | Commit öncesi diff incelemesi; bulgular önem sırasıyla |
+
+- **Sahneyi yalnızca ana oturum değiştirir.** Köprü tek sekmeye bağlıdır; alt ajanlar `ops`/`undo`/`redo`/`fit`/`import`
+  çalıştırmaz (tanımlarında yasak). Salt okunur komutlar (`scene`, `snapshot`, `measure`, `section`, `check`) paralel olabilir.
+- Görsel "yeterince iyi mi" kararı ve kullanıcı geri bildirimine göre yön değişikliği ana oturumdadır: doğrulayıcının
+  "BAK:" diye işaretlediği görüntüleri kendiniz Read ile açın.
+- Brief kendi kendine yetmeli: amaç, dosya yolları (referans STL, çıktı klasörü = scratchpad), kabul ölçütü, zaten
+  denenip elenenler. İnceleyiciye kendi sonucunuzu değil neyin neden değiştiğini verin.
+- Birbirinden bağımsız ölçüm/doğrulama işlerini tek mesajda paralel başlatın; aynı dosyalara yazacak iki uygulayıcıyı
+  aynı anda çalıştırmayın (gerekirse `isolation: "worktree"`).
+- Commit ve push ana oturumdadır; alt ajanlar commit atmaz.
