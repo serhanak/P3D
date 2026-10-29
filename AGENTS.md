@@ -92,7 +92,8 @@ scripts/p3d.ts       Köprü CLI'si (npm run p3d)
 server/prompt.ts     Claude sistem talimatı (sabit metin — önbelleklenir)
 server/index.ts      Üretim HTTP sunucusu (dist/ statik + /api)
 vite.config.ts       .env → process.env aktarımı, /api ara katmanı
-tests/               parser.test.ts (ayrıştırıcı+motor), io.test.ts (OBJ manifold, proje dosyası)
+tests/               parser.test.ts (ayrıştırıcı+motor), io.test.ts (OBJ manifold, proje dosyası, examples/)
+examples/            Örnek .p3d.json projeleri (Aç… ile yüklenir); io.test.ts hepsinin onarımsız yüklendiğini doğrular
 docs/STATUS.md       Güncel durum, doğrulama durumu, bilinen sorunlar, yol haritası
 ```
 

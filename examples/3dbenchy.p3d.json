@@ -1,0 +1,691 @@
+{
+  "format": "p3d",
+  "version": 1,
+  "name": "3DBenchy",
+  "parts": [
+    {
+      "id": "p_aor6ypfg",
+      "name": "tekne1",
+      "shape": "box",
+      "params": {
+        "width": 31.0753,
+        "depth": 24,
+        "height": 3
+      },
+      "position": {
+        "x": -12.9624,
+        "y": 0,
+        "z": 1.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#f08a24",
+      "visible": true
+    },
+    {
+      "id": "p_g3ogs5f0",
+      "name": "tekne1_baş",
+      "shape": "cylinder",
+      "params": {
+        "diameter": 24,
+        "height": 3
+      },
+      "position": {
+        "x": 2.5753,
+        "y": 0,
+        "z": 1.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#f08a24",
+      "visible": true
+    },
+    {
+      "id": "p_eq2khk2v",
+      "name": "tekne2",
+      "shape": "box",
+      "params": {
+        "width": 33.8505,
+        "depth": 27,
+        "height": 3
+      },
+      "position": {
+        "x": -12.2747,
+        "y": 0,
+        "z": 4.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#f08a24",
+      "visible": true
+    },
+    {
+      "id": "p_5zjzx6d9",
+      "name": "tekne2_baş",
+      "shape": "cylinder",
+      "params": {
+        "diameter": 27,
+        "height": 3
+      },
+      "position": {
+        "x": 4.6505,
+        "y": 0,
+        "z": 4.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#f08a24",
+      "visible": true
+    },
+    {
+      "id": "p_k83oukb4",
+      "name": "tekne3",
+      "shape": "box",
+      "params": {
+        "width": 36.6758,
+        "depth": 29.5,
+        "height": 3
+      },
+      "position": {
+        "x": -11.3621,
+        "y": 0,
+        "z": 7.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#f08a24",
+      "visible": true
+    },
+    {
+      "id": "p_h3qtfa1q",
+      "name": "tekne3_baş",
+      "shape": "cylinder",
+      "params": {
+        "diameter": 29.5,
+        "height": 3
+      },
+      "position": {
+        "x": 6.9758,
+        "y": 0,
+        "z": 7.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#f08a24",
+      "visible": true
+    },
+    {
+      "id": "p_90jzcqlz",
+      "name": "tekne4",
+      "shape": "box",
+      "params": {
+        "width": 2.051,
+        "depth": 30.5,
+        "height": 3
+      },
+      "position": {
+        "x": 9.0255,
+        "y": 0,
+        "z": 10.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#f08a24",
+      "visible": true
+    },
+    {
+      "id": "p_3t9p2siq",
+      "name": "tekne4_baş",
+      "shape": "cylinder",
+      "params": {
+        "diameter": 30.5,
+        "height": 3
+      },
+      "position": {
+        "x": 10.051,
+        "y": 0,
+        "z": 10.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#f08a24",
+      "visible": true
+    },
+    {
+      "id": "p_6e6bqw1r",
+      "name": "tekne5",
+      "shape": "box",
+      "params": {
+        "width": 6.5,
+        "depth": 31,
+        "height": 3
+      },
+      "position": {
+        "x": 11.25,
+        "y": 0,
+        "z": 13.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#f08a24",
+      "visible": true
+    },
+    {
+      "id": "p_1th55jrb",
+      "name": "tekne5_baş",
+      "shape": "cylinder",
+      "params": {
+        "diameter": 31,
+        "height": 3
+      },
+      "position": {
+        "x": 14.5,
+        "y": 0,
+        "z": 13.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#f08a24",
+      "visible": true
+    },
+    {
+      "id": "p_xrgjmvms",
+      "name": "küpeşte_sancak",
+      "shape": "box",
+      "params": {
+        "width": 38,
+        "depth": 1.5,
+        "height": 4.5
+      },
+      "position": {
+        "x": -11,
+        "y": -14.75,
+        "z": 11.25
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#f08a24",
+      "visible": true
+    },
+    {
+      "id": "p_8y5w9o2o",
+      "name": "küpeşte_iskele",
+      "shape": "box",
+      "params": {
+        "width": 38,
+        "depth": 1.5,
+        "height": 4.5
+      },
+      "position": {
+        "x": -11,
+        "y": 14.75,
+        "z": 11.25
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#f08a24",
+      "visible": true
+    },
+    {
+      "id": "p_kmo21vbo",
+      "name": "ayna",
+      "shape": "box",
+      "params": {
+        "width": 1.5,
+        "depth": 28,
+        "height": 4.5
+      },
+      "position": {
+        "x": -29.25,
+        "y": 0,
+        "z": 11.25
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#f08a24",
+      "visible": true
+    },
+    {
+      "id": "p_0ny6qnlj",
+      "name": "kabin",
+      "shape": "box",
+      "params": {
+        "width": 18,
+        "depth": 24,
+        "height": 23.8
+      },
+      "position": {
+        "x": -1,
+        "y": 0,
+        "z": 20.9
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#f4f1ea",
+      "visible": true
+    },
+    {
+      "id": "p_yxiktzuz",
+      "name": "çatı",
+      "shape": "box",
+      "params": {
+        "width": 23,
+        "depth": 27,
+        "height": 2
+      },
+      "position": {
+        "x": -1,
+        "y": 0,
+        "z": 32.9
+      },
+      "rotation": {
+        "x": 0,
+        "y": 5.5,
+        "z": 0
+      },
+      "color": "#2c3e50",
+      "visible": true
+    },
+    {
+      "id": "p_m0bz90qg",
+      "name": "baca",
+      "shape": "cylinder",
+      "params": {
+        "diameter": 7,
+        "height": 3
+      },
+      "position": {
+        "x": -7,
+        "y": 0,
+        "z": 35.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#c0392b",
+      "visible": true
+    },
+    {
+      "id": "p_edcmmmm4",
+      "name": "baca_ağzı",
+      "shape": "tube",
+      "params": {
+        "outerDiameter": 7,
+        "innerDiameter": 3,
+        "height": 11
+      },
+      "position": {
+        "x": -7,
+        "y": 0,
+        "z": 42.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#222222",
+      "visible": true
+    },
+    {
+      "id": "p_q1dl1kwb",
+      "name": "ön_cam",
+      "shape": "box",
+      "params": {
+        "width": 0.3,
+        "depth": 10.5,
+        "height": 9.5
+      },
+      "position": {
+        "x": 8.15,
+        "y": 0,
+        "z": 24
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#3b5b7a",
+      "visible": true
+    },
+    {
+      "id": "p_q9hyjiln",
+      "name": "yan_cam_sancak",
+      "shape": "box",
+      "params": {
+        "width": 9,
+        "depth": 0.3,
+        "height": 11
+      },
+      "position": {
+        "x": -1,
+        "y": -12.15,
+        "z": 22.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#3b5b7a",
+      "visible": true
+    },
+    {
+      "id": "p_3tixg0ck",
+      "name": "yan_cam_iskele",
+      "shape": "box",
+      "params": {
+        "width": 9,
+        "depth": 0.3,
+        "height": 11
+      },
+      "position": {
+        "x": -1,
+        "y": 12.15,
+        "z": 22.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#3b5b7a",
+      "visible": true
+    },
+    {
+      "id": "p_rdcxlsbi",
+      "name": "arka_pencere",
+      "shape": "tube",
+      "params": {
+        "outerDiameter": 12,
+        "innerDiameter": 9,
+        "height": 0.6
+      },
+      "position": {
+        "x": -10.3,
+        "y": 0,
+        "z": 24
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "color": "#2c3e50",
+      "visible": true
+    },
+    {
+      "id": "p_t6vq4buz",
+      "name": "arka_cam",
+      "shape": "cylinder",
+      "params": {
+        "diameter": 9,
+        "height": 0.3
+      },
+      "position": {
+        "x": -10.15,
+        "y": 0,
+        "z": 24
+      },
+      "rotation": {
+        "x": 0,
+        "y": 90,
+        "z": 0
+      },
+      "color": "#3b5b7a",
+      "visible": true
+    },
+    {
+      "id": "p_rc4twcwo",
+      "name": "kasa_ön",
+      "shape": "box",
+      "params": {
+        "width": 2,
+        "depth": 7,
+        "height": 6.5
+      },
+      "position": {
+        "x": -14,
+        "y": 0,
+        "z": 12.25
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#8d6e63",
+      "visible": true
+    },
+    {
+      "id": "p_ilbs2yld",
+      "name": "kasa_arka",
+      "shape": "box",
+      "params": {
+        "width": 2,
+        "depth": 7,
+        "height": 6.5
+      },
+      "position": {
+        "x": -24,
+        "y": 0,
+        "z": 12.25
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#8d6e63",
+      "visible": true
+    },
+    {
+      "id": "p_gue780p4",
+      "name": "kasa_sancak",
+      "shape": "box",
+      "params": {
+        "width": 12,
+        "depth": 1.905,
+        "height": 6.5
+      },
+      "position": {
+        "x": -19,
+        "y": -4.4525,
+        "z": 12.25
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#8d6e63",
+      "visible": true
+    },
+    {
+      "id": "p_pb0d3ksv",
+      "name": "kasa_iskele",
+      "shape": "box",
+      "params": {
+        "width": 12,
+        "depth": 1.905,
+        "height": 6.5
+      },
+      "position": {
+        "x": -19,
+        "y": 4.4525,
+        "z": 12.25
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#8d6e63",
+      "visible": true
+    },
+    {
+      "id": "p_zw30irz4",
+      "name": "kasa_iç",
+      "shape": "box",
+      "params": {
+        "width": 8,
+        "depth": 7,
+        "height": 0.2
+      },
+      "position": {
+        "x": -19,
+        "y": 0,
+        "z": 9.1
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#3e2723",
+      "visible": true
+    },
+    {
+      "id": "p_qgmd9fdt",
+      "name": "loça_sancak",
+      "shape": "tube",
+      "params": {
+        "outerDiameter": 6,
+        "innerDiameter": 4,
+        "height": 0.6
+      },
+      "position": {
+        "x": 22,
+        "y": -13.5647,
+        "z": 13
+      },
+      "rotation": {
+        "x": 90,
+        "y": 28.9385,
+        "z": 0
+      },
+      "color": "#5b5b5b",
+      "visible": true
+    },
+    {
+      "id": "p_30crupb3",
+      "name": "loça_iskele",
+      "shape": "tube",
+      "params": {
+        "outerDiameter": 6,
+        "innerDiameter": 4,
+        "height": 0.6
+      },
+      "position": {
+        "x": 22,
+        "y": 13.5647,
+        "z": 13
+      },
+      "rotation": {
+        "x": -90,
+        "y": 28.9385,
+        "z": 0
+      },
+      "color": "#5b5b5b",
+      "visible": true
+    },
+    {
+      "id": "p_dysgp8v2",
+      "name": "olta_tutucu",
+      "shape": "tube",
+      "params": {
+        "outerDiameter": 3,
+        "innerDiameter": 1.5,
+        "height": 5
+      },
+      "position": {
+        "x": -27,
+        "y": -11,
+        "z": 11.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#5b5b5b",
+      "visible": true
+    },
+    {
+      "id": "p_ehi43xtv",
+      "name": "isim_plakası",
+      "shape": "box",
+      "params": {
+        "width": 0.1,
+        "depth": 14,
+        "height": 2
+      },
+      "position": {
+        "x": -29.75,
+        "y": 0,
+        "z": 7.5
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "color": "#f1c40f",
+      "visible": true
+    }
+  ],
+  "view": {
+    "showNames": false,
+    "showDimensions": false
+  },
+  "settings": {
+    "resolution": 96,
+    "bedX": 220,
+    "bedY": 220
+  }
+}

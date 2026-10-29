@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
 import { SHAPES } from '../shared/ops';
 import { applyOps, partVolume } from '../src/engine';
 import { buildObj, parseProject, projectToJson } from '../src/io';
@@ -99,5 +100,21 @@ describe('proje dosyası', () => {
     expect(fixed.parts[0].color).toMatch(/^#[0-9a-f]{6}$/);
     expect(new Set(fixed.parts.map((x) => x.id)).size).toBe(3);
     expect(() => parseProject({ hello: 1 })).toThrow();
+  });
+});
+
+describe('örnek projeler (examples/)', () => {
+  const dir = new URL('../examples/', import.meta.url);
+  const files = readdirSync(dir).filter((f) => f.endsWith('.p3d.json'));
+
+  it('en az bir örnek var', () => expect(files.length).toBeGreaterThan(0));
+
+  it.each(files)('%s onarım gerekmeden yüklenir ve her parçası kapalı ağ olarak dışa aktarılır', (file) => {
+    const raw = JSON.parse(readFileSync(new URL(file, dir), 'utf8'));
+    const p = parseProject(raw);
+    expect(p).toEqual(raw);
+    const { verts, objects } = parseObj(buildObj(p.parts, p, null).obj);
+    expect(objects).toHaveLength(p.parts.filter((x) => x.visible).length);
+    for (const o of objects) expect(checkSolid(verts, o.faces).bad, o.name).toBe(0);
   });
 });

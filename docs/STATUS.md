@@ -18,6 +18,8 @@
 - **Claude Code köprüsü** (`/api/bridge`, `npm run p3d`): terminaldeki Claude Code oturumu açık sekmenin
   sahnesini okur ve işlem gönderir; sekmede canlı uygulanır, geri alınabilir, günlükte "Claude Code" etiketi.
   `npm run dev`'de açık, `npm start`'ta kapalı (`--bridge`).
+- **Örnek projeler** (`examples/`): `3dbenchy.p3d.json` — 3DBenchy (CC0) yaklaşık modeli, 31 parça, 60 × 31 × 48 mm;
+  testler her örneğin onarımsız yüklendiğini ve kapalı ağ olarak dışa aktarıldığını doğrular.
 - **Başlatıcı** (`scripts/launch.ts`): `npm run dev|start -- --llm --bridge --port --host --model --effort --claude-bin`.
 - **Görünüm:** Z-yukarı tabla ızgarası (10/50 mm), eksen göstergesi, renkli parçalar, kenar çizgileri,
   isim etiketleri (aç/kapa), ölçü çizgileri + etiketleri (aç/kapa), tıklayarak seçim, görünüm ön ayarları
@@ -36,7 +38,7 @@
 |---|---|
 | Ayrıştırıcı + işlem motoru | ✅ 22 otomatik test (`tests/parser.test.ts`) |
 | OBJ çıktısı | ✅ Her şekil için kapalı/doğru yönlü ağ ve hacim ≈ analitik değer (`tests/io.test.ts`) |
-| Proje kaydet/yükle | ✅ Gidiş-dönüş ve bozuk dosya onarımı testleri |
+| Proje kaydet/yükle | ✅ Gidiş-dönüş ve bozuk dosya onarımı testleri; `examples/` dosyaları onarımsız yüklenir |
 | Arayüz | ✅ Chrome'da elle denendi: komutlar, panelden düzenleme, geri al, isim/ölçü anahtarları, dışa aktarma menüsü, otomatik kayıttan geri yükleme; konsolda hata yok |
 | Claude isteği — `api` | ⚠️ Yalnızca **sahte (mock) API** ile doğrulandı: istek biçimi (model, `fallbacks`, beta başlığı, `output_config`, şema) ve yanıt işleme. **Gerçek API anahtarıyla hiç denenmedi.** |
 | Claude isteği — `claude-cli` | ✅ Gerçek `claude -p` (Claude Code 2.1.312, Windows) ile `/api/nl` uçtan uca: "tabanın dört köşesine … ayaklar koy" → doğru 5 işlem, ~9,4 sn. Tarayıcı arayüzünden (Claude modu seçiciyle) denenmedi; giriş yapılmamış/`claude` bulunamadı hata mesajları denenmedi |

@@ -84,6 +84,11 @@ isimleri gizle · ölçüleri göster · geri al
 
 Komut kutusuna `yardım` yazarak listeyi görebilirsiniz; ↑/↓ önceki komutları getirir.
 
+### Örnek projeler
+
+[`examples/`](examples/) klasöründe **Aç…** ile yüklenebilecek hazır projeler var; ör.
+[`3dbenchy.p3d.json`](examples/3dbenchy.p3d.json) — 3DBenchy'nin (CC0) temel şekillerle 60 × 31 × 48 mm yaklaşık modeli.
+
 ## Koordinatlar ve birimler
 
 - Birim mm, **Z yukarı**, tabla XY düzleminde (z = 0) ve orijin tabla merkezinde — dilimleyicilerin
