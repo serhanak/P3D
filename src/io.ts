@@ -1,17 +1,23 @@
 import * as THREE from 'three';
-import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { strToU8, zipSync } from 'fflate';
-import { SHAPES } from '../shared/ops';
+import { SHAPES, isGeomShape } from '../shared/ops';
+import { registerAsset, usedAssets } from './assets';
 import { isHexColor, normalizeHex } from './colors';
 import { newId, partMatrix } from './engine';
-import { PALETTE, buildGeometry, defaultParams, sanitizeParams } from './shapes';
+import { sanitizeGeom } from './geom';
+import { build3mf, buildStl, type WorldMesh } from './meshio';
+import { unionGeometries } from './csg';
+import { exportGeometry, exportableParts } from './model';
+import { PALETTE, defaultParams, sanitizeParams } from './shapes';
 import { newProject, type Part, type Project } from './types';
 
 // ---------------------------------------------------------------------------
 // Proje dosyası (.p3d.json)
 
+/** Proje dosyası metni; mesh parçalarının ağ verisi `assets` altında dosyaya gömülür. */
 export function projectToJson(project: Project): string {
-  return JSON.stringify(project, null, 2);
+  const assets = usedAssets(project);
+  return JSON.stringify(Object.keys(assets).length ? { ...project, assets } : project, null, 2);
 }
 
 /** Dosyadan/otomatik kayıttan gelen veriyi doğrular; bilinmeyen alanları atar, eksikleri tamamlar. */
@@ -28,9 +34,21 @@ export function parseProject(data: unknown): Project {
   };
   base.view.showNames = view.showNames !== false;
   base.view.showDimensions = view.showDimensions !== false;
+  base.view.showHoles = view.showHoles !== false;
   base.settings.resolution = Math.round(num(settings.resolution, base.settings.resolution, 16, 256));
   base.settings.bedX = num(settings.bedX, base.settings.bedX, 20, 2000);
   base.settings.bedY = num(settings.bedY, base.settings.bedY, 20, 2000);
+
+  // Ağ verisi depoya alınır; proje nesnesinde tutulmaz (bkz. assets.ts).
+  if (d.assets && typeof d.assets === 'object') {
+    for (const a of Object.values(d.assets as Record<string, unknown>)) {
+      try {
+        registerAsset(a);
+      } catch (e) {
+        console.warn('[p3d] ağ verisi atlandı:', (e as Error).message);
+      }
+    }
+  }
 
   const ids = new Set<string>();
   const parts = Array.isArray(d.parts) ? d.parts : [];
@@ -41,6 +59,15 @@ export function parseProject(data: unknown): Project {
     const shape = r.shape as Part['shape'];
     const params = { ...defaultParams(shape), ...((r.params ?? {}) as Record<string, number>) };
     sanitizeParams(shape, params);
+    let geom: Part['geom'];
+    if (isGeomShape(shape)) {
+      try {
+        geom = sanitizeGeom(shape, r.geom);
+      } catch (e) {
+        console.warn(`[p3d] '${String(r.name)}' atlandı:`, (e as Error).message);
+        return;
+      }
+    }
     const vec = (v: unknown) => {
       const o = (v ?? {}) as Record<string, unknown>;
       return { x: num(o.x, 0, -1e5, 1e5), y: num(o.y, 0, -1e5, 1e5), z: num(o.z, 0, -1e5, 1e5) };
@@ -57,6 +84,9 @@ export function parseProject(data: unknown): Project {
       rotation: vec(r.rotation),
       color: typeof r.color === 'string' && isHexColor(r.color) ? normalizeHex(r.color) : PALETTE[i % PALETTE.length],
       visible: r.visible !== false,
+      ...(geom ? { geom } : {}),
+      ...(r.role === 'hole' || r.role === 'reference' ? { role: r.role } : {}),
+      ...(r.role === 'hole' && Array.isArray(r.cuts) && r.cuts.length ? { cuts: r.cuts.filter((c): c is string => typeof c === 'string') } : {}),
     });
   });
   return base;
@@ -88,15 +118,11 @@ export function download(filename: string, data: BlobPart, mime: string): void {
 // ---------------------------------------------------------------------------
 // OBJ / MTL
 
-/** Parçanın dünya koordinatlarında, kaynaklı (köşe paylaşımlı) üçgen ağı. Birim: mm, Z yukarı. */
-function partMesh(part: Part, seg: number): { pos: Float32Array; tris: number[] } {
-  let g: THREE.BufferGeometry = buildGeometry(part.shape, part.params, seg);
+/** Parçanın son hâli (delikler çıkarılmış), dünya koordinatlarında kaynaklı üçgen ağ. Birim: mm, Z yukarı. */
+export function worldMesh(project: Project, part: Part): WorldMesh {
+  // İndisli son geometri olduğu gibi: konuma göre yeniden kaynaklamak, değen yüzeylerdeki ayrı köşeleri çökertir.
+  const g = exportGeometry(project, part);
   g.applyMatrix4(partMatrix(part));
-  for (const name of Object.keys(g.attributes)) if (name !== 'position') g.deleteAttribute(name);
-  g.clearGroups();
-  const merged = mergeVertices(g, 1e-4);
-  g.dispose();
-  g = merged;
   const pos = g.getAttribute('position').array as Float32Array;
   const index = g.getIndex()!;
   const tris: number[] = [];
@@ -107,7 +133,7 @@ function partMesh(part: Part, seg: number): { pos: Float32Array; tris: number[] 
     if (a !== b && b !== c && a !== c) tris.push(a, b, c); // kutup/tepe noktalarındaki dejenere üçgenler
   }
   g.dispose();
-  return { pos, tris };
+  return { name: part.name, color: part.color, pos, tris };
 }
 
 function objName(part: Part): string {
@@ -126,7 +152,6 @@ export interface ObjOutput {
 
 /** Parçaları tek bir OBJ'de ayrı nesneler olarak yazar; `mtlFile` verilirse renkler için MTL'ye bağlar. */
 export function buildObj(parts: Part[], project: Project, mtlFile: string | null): ObjOutput {
-  const seg = project.settings.resolution;
   const lines: string[] = [
     `# P3D - ${project.name}`,
     '# Birim: mm, Z ekseni yukari (tabla XY duzlemi)',
@@ -139,7 +164,7 @@ export function buildObj(parts: Part[], project: Project, mtlFile: string | null
     let name = objName(part);
     while (usedNames.has(name)) name += '_';
     usedNames.add(name);
-    const { pos, tris } = partMesh(part, seg);
+    const { pos, tris } = worldMesh(project, part);
     const c = new THREE.Color(part.color);
     mtl.push('', `newmtl mat_${name}`, `Kd ${f4(c.r)} ${f4(c.g)} ${f4(c.b)}`, 'Ka 0 0 0', 'Ks 0 0 0', 'd 1', 'illum 1');
     lines.push('', `o ${name}`, `# ${part.name}`);
@@ -151,19 +176,65 @@ export function buildObj(parts: Part[], project: Project, mtlFile: string | null
   return { obj: lines.join('\n') + '\n', mtl: mtl.join('\n') + '\n' };
 }
 
-export type ExportKind = 'all-obj' | 'all-zip' | 'each-zip' | 'selected-obj';
+export type ExportKind =
+  | 'all-obj'
+  | 'all-zip'
+  | 'each-zip'
+  | 'selected-obj'
+  | 'all-stl'
+  | 'selected-stl'
+  | 'all-3mf'
+  | 'merged-stl'
+  | 'merged-3mf';
 
+/** Görünür katıların birleşimi (union): örtüşen parçalar tek kapalı gövde olur (dilimleyiciye tek parça). */
+export function mergedMesh(project: Project, parts: Part[]): WorldMesh {
+  const geoms = parts.map((p) => {
+    const m = worldMesh(project, p);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(m.pos, 3));
+    g.setIndex(m.tris);
+    return g;
+  });
+  const u = unionGeometries(geoms);
+  for (const g of geoms) g.dispose();
+  const pos = u.getAttribute('position').array as Float32Array;
+  const tris = Array.from(u.getIndex()!.array);
+  u.dispose();
+  return { name: project.name, color: parts[0]?.color ?? '#cccccc', pos, tris };
+}
+
+/** Dışa aktarır ve indirir. Yalnızca görünür katılar çıkar; delik ve referans parçalar dosyaya girmez. */
 export function exportModel(kind: ExportKind, project: Project, selectedId: string | null): string {
   const base = safeFileName(project.name);
-  const visible = project.parts.filter((p) => p.visible);
-  if (kind === 'selected-obj') {
+  const visible = exportableParts(project.parts);
+  if (kind === 'selected-obj' || kind === 'selected-stl') {
     const part = project.parts.find((p) => p.id === selectedId);
     if (!part) throw new Error('Önce bir parça seçin.');
+    if ((part.role ?? 'solid') !== 'solid') throw new Error(`'${part.name}' bir ${part.role === 'hole' ? 'delik' : 'referans'} parçası; dışa aktarılmaz.`);
     const file = safeFileName(part.name);
+    if (kind === 'selected-stl') {
+      download(`${file}.stl`, buildStl([worldMesh(project, part)]), 'model/stl');
+      return `'${part.name}' → ${file}.stl`;
+    }
     download(`${file}.obj`, buildObj([part], project, null).obj, 'model/obj');
     return `'${part.name}' → ${file}.obj`;
   }
-  if (!visible.length) throw new Error('Dışa aktarılacak görünür parça yok.');
+  if (!visible.length) throw new Error('Dışa aktarılacak görünür katı parça yok.');
+  if (kind === 'all-stl') {
+    download(`${base}.stl`, buildStl(visible.map((p) => worldMesh(project, p))), 'model/stl');
+    return `${visible.length} parça → ${base}.stl`;
+  }
+  if (kind === 'merged-stl' || kind === 'merged-3mf') {
+    const m = mergedMesh(project, visible);
+    if (kind === 'merged-stl') download(`${base}_birlesik.stl`, buildStl([m]), 'model/stl');
+    else download(`${base}_birlesik.3mf`, build3mf(project.name, [m]) as BlobPart, 'model/3mf');
+    return `${visible.length} parça birleştirildi → ${base}_birlesik.${kind === 'merged-stl' ? 'stl' : '3mf'} (tek gövde)`;
+  }
+  if (kind === 'all-3mf') {
+    download(`${base}.3mf`, build3mf(project.name, visible.map((p) => worldMesh(project, p))) as BlobPart, 'model/3mf');
+    return `${visible.length} parça → ${base}.3mf (renkli, parça başına nesne)`;
+  }
   if (kind === 'all-obj') {
     download(`${base}.obj`, buildObj(visible, project, null).obj, 'model/obj');
     return `${visible.length} parça → ${base}.obj`;

@@ -1,8 +1,13 @@
 // Sahne üzerinde yapılabilecek işlemler. Yerel ayrıştırıcı, Claude ve arayüz
 // düzenlemeleri aynı işlem listesini üretir; tümü src/engine.ts'de uygulanır.
 
-export const SHAPES = ['box', 'cylinder', 'tube', 'cone', 'sphere', 'torus', 'prism'] as const;
+export const SHAPES = ['box', 'cylinder', 'tube', 'cone', 'sphere', 'torus', 'prism', 'extrude', 'revolve', 'loft', 'hull', 'mesh'] as const;
 export type ShapeType = (typeof SHAPES)[number];
+
+/** Geometrisi `params` yerine `geom` alanındaki nokta dizilerinden üretilen şekiller. */
+export const GEOM_SHAPES = ['extrude', 'revolve', 'loft', 'hull', 'mesh'] as const;
+export type GeomShape = (typeof GEOM_SHAPES)[number];
+export const isGeomShape = (s: string): s is GeomShape => (GEOM_SHAPES as readonly string[]).includes(s);
 
 export const PARAM_KEYS = [
   'width',
@@ -15,8 +20,82 @@ export const PARAM_KEYS = [
   'topDiameter',
   'thickness',
   'sides',
+  'scale',
 ] as const;
 export type ParamKey = (typeof PARAM_KEYS)[number];
+
+/** 2B nokta [a, b]; eksene göre anlamı: axis z → [x, y], axis x → [y, z], axis y → [x, z]. */
+export type Pt2 = [number, number];
+export type GeomAxis = 'x' | 'y' | 'z';
+
+/** Kapalı çokgen profil `axis` boyunca `height` kadar (merkezli: -h/2 … +h/2) uzatılır; `holes` iç boşluklar. */
+export interface ExtrudeGeom {
+  kind: 'extrude';
+  axis: GeomAxis;
+  profile: Pt2[];
+  holes?: Pt2[][];
+  /** > 0 ise katı, profilin dışında bu genişlikte bir çerçeve halkasıdır (profil = açıklık). */
+  frame?: number;
+  /** Çerçevede son→ilk kenar açık kalır (ör. kapı pervazının alt kenarı). */
+  open?: boolean;
+}
+/** Kapalı profil [r, a] (r ≥ 0 eksenden uzaklık, a eksen boyunca konum) `axis` etrafında 360° döndürülür. */
+export interface RevolveGeom {
+  kind: 'revolve';
+  axis: GeomAxis;
+  profile: Pt2[];
+}
+export interface LoftSection {
+  /** Kesitin eksen boyunca konumu (mm). */
+  at: number;
+  /** Kapalı çokgen kesit (axis'e dik düzlemde). */
+  points: Pt2[];
+}
+/** Eksen boyunca sıralı kesitler arasında yüzey germe (tekne, gövde, geçiş parçaları). */
+export interface LoftGeom {
+  kind: 'loft';
+  axis: GeomAxis;
+  /** İlk/son kesit tek nokta olabilir: loft o uçta sivrilir. */
+  sections: LoftSection[];
+  /** Catmull-Rom ile çevre ve eksen boyunca yumuşatma (yoğunluk çözünürlük ayarından). */
+  smooth?: boolean;
+  /** Yumuşatmada keskin kalacak nokta indisleri (tüm kesitlerde nokta sayısı aynıyken). */
+  sharp?: number[];
+}
+/** Endaze istasyonu: x'teki enine kesit. `breadth` omurgadan (ilk) küpeşteye (son) eşit aralıklı yarı genişlikler. */
+export interface HullStation {
+  x: number;
+  keel: number;
+  sheer: number;
+  breadth: number[];
+}
+/**
+ * Tekne / gövde (endaze tablosu): x boyunca uzanan, y'de simetrik gövde. Yüzey tablodan örtük olarak üretilir;
+ * küpeşte (üst), omurga (alt), ayna ve bodoslama yan profilden keskin kesilir.
+ */
+export interface HullGeom {
+  kind: 'hull';
+  stations: HullStation[];
+}
+/** İçe aktarılmış üçgen ağ; veri projenin `assets` deposundadır. */
+export interface MeshGeom {
+  kind: 'mesh';
+  asset: string;
+}
+export type PartGeom = ExtrudeGeom | RevolveGeom | LoftGeom | HullGeom | MeshGeom;
+
+/** solid: katı (varsayılan) · hole: kesiştiği katılardan çıkarılır · reference: yalnızca görsel referans, dışa aktarılmaz. */
+export const ROLES = ['solid', 'hole', 'reference'] as const;
+export type Role = (typeof ROLES)[number];
+
+/** İçe aktarılmış ağ verisi: kaynaklı köşe konumları (Float32, base64) ve üçgen indisleri (Uint32, base64). */
+export interface MeshAsset {
+  id: string;
+  name: string;
+  positions: string;
+  indices: string;
+  triangles: number;
+}
 
 export interface Vec3 {
   x: number;
@@ -48,6 +127,10 @@ export type Op =
       rotation?: Vec3 | null;
       color?: string;
       place_on?: string;
+      geom?: PartGeom | null;
+      role?: Role | '';
+      /** Delik hedefleri (ad ya da id); boş/yok = kesiştiği tüm katılar. */
+      cuts?: string[] | null;
     }
   | {
       op: 'update';
@@ -58,6 +141,10 @@ export type Op =
       rotation?: Vec3 | null;
       color?: string;
       visible?: boolean | null;
+      geom?: PartGeom | null;
+      role?: Role | '';
+      /** Delik hedefleri; [] / yok = değişmez, ["*"] = kesiştiği tüm katılar. */
+      cuts?: string[] | null;
     }
   | { op: 'move'; part: string; dx: number; dy: number; dz: number }
   /** Yalnızca yerel kullanım: x/y merkezi, z ise parçanın tabanı (alt yüzü) için mutlak değer. */
@@ -67,10 +154,14 @@ export type Op =
   | { op: 'place_on'; part: string; target: string }
   | { op: 'place_beside'; part: string; target: string; side: Side; gap: number }
   | { op: 'drop_to_bed'; part: string }
+  /** Parçayı hedefin yüzeyinde `near`'a en yakın noktaya koyar; yerel +Z yüzey normaline döner, `offset` normal boyunca kaydırır. */
+  | { op: 'place_on_surface'; part: string; target: string; near: Vec3; offset?: number }
   | { op: 'duplicate'; part: string; new_name?: string; offset?: Vec3 | null }
   | { op: 'delete'; part: string }
   | { op: 'select'; part: string }
-  | { op: 'view'; show_names?: boolean | null; show_dimensions?: boolean | null };
+  | { op: 'view'; show_names?: boolean | null; show_dimensions?: boolean | null; show_holes?: boolean | null }
+  /** Yalnızca yerel kullanım (arayüz/köprü): ağ verisiyle birlikte mesh parçası ekler. `position` yoksa tablaya yerleşir. */
+  | { op: 'import_mesh'; asset: MeshAsset; name?: string; role?: Role | ''; color?: string; position?: Vec3 | null };
 
 export type OpName = Op['op'];
 
@@ -97,6 +188,43 @@ const paramList = {
   },
 };
 
+const pt2 = { type: 'array', items: num };
+const loop = { type: 'array', items: pt2 };
+const axisEnum = { type: 'string', enum: ['x', 'y', 'z'] };
+const obj = (properties: Record<string, unknown>) => ({
+  type: 'object',
+  properties,
+  required: Object.keys(properties),
+  additionalProperties: false,
+});
+const nullableGeom = {
+  anyOf: [
+    { type: 'null' },
+    obj({
+      kind: { type: 'string', const: 'extrude' },
+      axis: axisEnum,
+      profile: loop,
+      holes: { type: 'array', items: loop },
+      frame: num,
+      open: { type: 'boolean' },
+    }),
+    obj({ kind: { type: 'string', const: 'revolve' }, axis: axisEnum, profile: loop }),
+    obj({
+      kind: { type: 'string', const: 'loft' },
+      axis: axisEnum,
+      sections: { type: 'array', items: obj({ at: num, points: loop }) },
+      smooth: { type: 'boolean' },
+      sharp: { type: 'array', items: num },
+    }),
+    obj({
+      kind: { type: 'string', const: 'hull' },
+      stations: { type: 'array', items: obj({ x: num, keel: num, sheer: num, breadth: { type: 'array', items: num } }) },
+    }),
+  ],
+};
+const roleEnum = { type: 'string', enum: ['', ...ROLES] };
+const LLM_SHAPES = SHAPES.filter((s) => s !== 'mesh');
+
 function opSchema(op: OpName, properties: Record<string, unknown>) {
   return {
     type: 'object',
@@ -115,13 +243,16 @@ export const RESPONSE_SCHEMA = {
       items: {
         anyOf: [
           opSchema('create', {
-            shape: { type: 'string', enum: [...SHAPES] },
+            shape: { type: 'string', enum: LLM_SHAPES },
             name: str,
             params: paramList,
             position: nullableVec3,
             rotation: nullableVec3,
             color: str,
             place_on: str,
+            geom: nullableGeom,
+            role: roleEnum,
+            cuts: { type: 'array', items: str },
           }),
           opSchema('update', {
             part: str,
@@ -131,6 +262,9 @@ export const RESPONSE_SCHEMA = {
             rotation: nullableVec3,
             color: str,
             visible: { anyOf: [{ type: 'boolean' }, { type: 'null' }] },
+            geom: nullableGeom,
+            role: roleEnum,
+            cuts: { type: 'array', items: str },
           }),
           opSchema('move', { part: str, dx: num, dy: num, dz: num }),
           opSchema('rotate', { part: str, axis: { type: 'string', enum: ['x', 'y', 'z'] }, degrees: num }),
@@ -143,12 +277,14 @@ export const RESPONSE_SCHEMA = {
             gap: num,
           }),
           opSchema('drop_to_bed', { part: str }),
+          opSchema('place_on_surface', { part: str, target: str, near: vec3, offset: num }),
           opSchema('duplicate', { part: str, new_name: str, offset: nullableVec3 }),
           opSchema('delete', { part: str }),
           opSchema('select', { part: str }),
           opSchema('view', {
             show_names: { anyOf: [{ type: 'boolean' }, { type: 'null' }] },
             show_dimensions: { anyOf: [{ type: 'boolean' }, { type: 'null' }] },
+            show_holes: { anyOf: [{ type: 'boolean' }, { type: 'null' }] },
           }),
         ],
       },
@@ -181,6 +317,11 @@ export interface SceneSummaryPart {
   color: string;
   visible: boolean;
   bbox: { min: Vec3; max: Vec3 };
+  role: Role;
+  /** Delik hedefleri (parça adları); yoksa kesiştiği tüm katılar. */
+  cuts?: string[];
+  /** extrude/revolve/loft için tam geometri; mesh için yalnızca özet. */
+  geom?: PartGeom | { kind: 'mesh'; asset: string; triangles: number };
 }
 
 export interface SceneSummary {
@@ -203,13 +344,25 @@ export interface NlResponse {
 
 // Claude Code köprüsü (server/bridge.ts ↔ src/bridge.ts)
 
-export type BridgeAction = 'undo' | 'redo' | 'fit';
+export type BridgeAction = 'undo' | 'redo' | 'fit' | 'snapshot';
+
+export const SNAPSHOT_VIEWS = ['iso', 'front', 'back', 'left', 'right', 'top', 'bottom'] as const;
+export type SnapshotView = (typeof SNAPSHOT_VIEWS)[number];
+
+export interface SnapshotOptions {
+  views: SnapshotView[];
+  width: number;
+  height: number;
+  /** Ölçü çizgileri görüntüye girsin mi. */
+  dims: boolean;
+}
 
 /** Sunucudan tarayıcıya giden komut. */
 export interface BridgeCommand {
   id: string;
   ops?: Op[];
   action?: BridgeAction;
+  snapshot?: SnapshotOptions;
   /** Günlükte gösterilecek açıklama (ör. kullanıcının komutu). */
   label?: string;
 }
@@ -220,6 +373,8 @@ export interface BridgeResult {
   messages: string[];
   errors: string[];
   scene: SceneSummary;
+  /** snapshot: görünüm adı + PNG data URL. */
+  images?: { view: SnapshotView; png: string }[];
 }
 
 /** GET /api/status yanıtı. */

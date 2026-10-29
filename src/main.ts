@@ -1,8 +1,11 @@
 import './style.css';
+import wasmUrl from 'manifold-3d/manifold.wasm?url';
 import type { Op } from '../shared/ops';
 import { sceneSummary, type ApplyResult } from './engine';
 import { exportModel, parseProject, projectToJson, download, safeFileName, type ExportKind } from './io';
 import { connectBridge } from './bridge';
+import { initCsg } from './csg';
+import { meshAssetFromSoup, meshFormatOf, parseMeshFile } from './meshio';
 import { askClaude, fetchLlmStatus, type LlmStatus } from './nlp/llm';
 import { HELP_TEXT, parseCommand } from './nlp/parser';
 import { Store } from './store';
@@ -28,6 +31,14 @@ try {
 } catch {
   initial = demoProject();
   firstRun = true;
+}
+
+// Delik (boolean) çekirdeği: yüklenemezse uygulama deliksiz çalışır.
+let csgError = '';
+try {
+  await initCsg(wasmUrl);
+} catch (e) {
+  csgError = (e as Error).message;
 }
 
 const store = new Store(initial);
@@ -101,6 +112,7 @@ function render(): void {
   renderPanels();
   ($('tg-names') as HTMLInputElement).checked = store.project.view.showNames;
   ($('tg-dims') as HTMLInputElement).checked = store.project.view.showDimensions;
+  ($('tg-holes') as HTMLInputElement).checked = store.project.view.showHoles;
   const nameInput = $<HTMLInputElement>('project-name');
   if (document.activeElement !== nameInput) nameInput.value = store.project.name;
   $<HTMLButtonElement>('btn-undo').disabled = !store.canUndo;
@@ -205,14 +217,22 @@ function updateLlmStatus(): void {
     : `<span class="dot"></span>Claude kapalı — yalnızca yerel Türkçe ayrıştırıcı. Etkinleştirmek için README → “Claude modu”.`;
 }
 updateLlmStatus();
-void fetchLlmStatus().then((s) => {
-  llm = s;
-  updateLlmStatus();
-  if (s.bridge) startBridge();
-});
+// Sunucu o an yeniden başlıyorsa durum birkaç kez yeniden sorulur (aksi hâlde köprü hiç bağlanmaz).
+function loadStatus(attempt = 0): void {
+  void fetchLlmStatus().then((s) => {
+    if (!s) {
+      if (attempt < 30) window.setTimeout(() => loadStatus(attempt + 1), 2000);
+      return;
+    }
+    llm = s;
+    updateLlmStatus();
+    if (s.bridge) startBridge();
+  });
+}
+loadStatus();
 
 // Terminaldeki Claude Code oturumu sahneyi okuyup işlem gönderebilir (server/bridge.ts).
-const startBridge = () => connectBridge(store, {
+const startBridge = () => connectBridge(store, viewer, {
   onConnected: () => addLog('info', 'Claude Code köprüsü bağlı: terminalden gelen komutlar burada uygulanır.'),
   onApplied: (res, label) => {
     if (label) addLog('user', label, 'Claude Code');
@@ -235,6 +255,10 @@ const startBridge = () => connectBridge(store, {
   },
 });
 
+store.onWarning = (m) => addLog('warn', '⚠ ' + m);
+viewer.onWarning = (m) => addLog('warn', '⚠ ' + m);
+if (csgError) addLog('warn', `⚠ Delik (boolean) çekirdeği yüklenemedi; delik parçaları kesmeyecek. (${csgError})`);
+
 addLog(
   'info',
   firstRun
@@ -252,6 +276,9 @@ $('tg-names').addEventListener('change', (e) =>
 );
 $('tg-dims').addEventListener('change', (e) =>
   store.apply([{ op: 'view', show_dimensions: (e.target as HTMLInputElement).checked }]),
+);
+$('tg-holes').addEventListener('change', (e) =>
+  store.apply([{ op: 'view', show_holes: (e.target as HTMLInputElement).checked }]),
 );
 document.querySelectorAll<HTMLButtonElement>('[data-view]').forEach((b) =>
   b.addEventListener('click', () => viewer.setPreset(b.dataset.view as ViewPreset, store.project)),
@@ -295,11 +322,32 @@ fileInput.addEventListener('change', async () => {
   }
 });
 
+const meshInput = $<HTMLInputElement>('mesh-input');
+$('btn-import').addEventListener('click', () => meshInput.click());
+meshInput.addEventListener('change', async () => {
+  const file = meshInput.files?.[0];
+  meshInput.value = '';
+  if (!file) return;
+  if (!meshFormatOf(file.name)) return toast('Desteklenen biçimler: STL, OBJ, 3MF.', true);
+  try {
+    addLog('info', `“${file.name}” okunuyor…`);
+    const imp = await meshAssetFromSoup(file.name.replace(/\.[^.]+$/, ''), parseMeshFile(file.name, await file.arrayBuffer()));
+    logResult(store.apply([{ op: 'import_mesh', asset: imp.asset }]));
+    if (imp.asset.triangles < imp.originalTriangles) {
+      addLog('info', `Ağ ${imp.originalTriangles.toLocaleString('tr-TR')} → ${imp.asset.triangles.toLocaleString('tr-TR')} üçgene sadeleştirildi.`);
+    }
+    addLog('info', `Boyut ${imp.size.x} × ${imp.size.y} × ${imp.size.z} mm. Panelden rolünü Referans ya da Delik yapabilirsiniz.`);
+    viewer.fit(store.project);
+  } catch (e) {
+    toast(`İçe aktarılamadı: ${(e as Error).message}`, true);
+  }
+});
+
 const exportMenu = $('export-menu');
 $('btn-export').addEventListener('click', (e) => {
   e.stopPropagation();
   exportMenu.hidden = !exportMenu.hidden;
-  exportMenu.querySelector<HTMLButtonElement>('[data-export="selected-obj"]')!.disabled = !store.selectedId;
+  for (const k of ['selected-obj', 'selected-stl']) exportMenu.querySelector<HTMLButtonElement>(`[data-export="${k}"]`)!.disabled = !store.selectedId;
 });
 document.addEventListener('click', () => (exportMenu.hidden = true));
 exportMenu.addEventListener('click', (e) => {

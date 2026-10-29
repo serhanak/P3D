@@ -1,6 +1,8 @@
 import * as THREE from 'three';
-import type { Axis, Op, ParamChange, SceneSummary, Side, Vec3 } from '../shared/ops';
+import { ROLES, isGeomShape, type Axis, type Op, type ParamChange, type Role, type SceneSummary, type Side, type Vec3 } from '../shared/ops';
+import { getAsset, registerAsset } from './assets';
 import { resolveColor } from './colors';
+import { GeomError, defaultGeom, describeGeom, geometryVolume, sanitizeGeom } from './geom';
 import { PALETTE, SHAPE_DEFS, buildGeometry, defaultParams, fmt, sanitizeParams, type DimWord, type Params } from './shapes';
 import { fold } from './text';
 import type { Part, Project } from './types';
@@ -11,14 +13,14 @@ import type { Part, Project } from './types';
 const positionCache = new Map<string, Float32Array>();
 
 function geometryKey(part: Part, seg: number): string {
-  return `${part.shape}|${JSON.stringify(part.params)}|${seg}`;
+  return `${part.shape}|${JSON.stringify(part.params)}|${part.geom ? JSON.stringify(part.geom) : ''}|${seg}`;
 }
 
 function positionsFor(part: Part, seg: number): Float32Array {
   const key = geometryKey(part, seg);
   let arr = positionCache.get(key);
   if (!arr) {
-    const g = buildGeometry(part.shape, part.params, seg);
+    const g = buildGeometry(part.shape, part.params, seg, part.geom);
     arr = (g.getAttribute('position').array as Float32Array).slice();
     g.dispose();
     if (positionCache.size > 300) positionCache.clear();
@@ -56,8 +58,22 @@ export function partsBox(parts: Part[], seg: number): THREE.Box3 {
   return box;
 }
 
-export function partVolume(part: Part): number {
-  return SHAPE_DEFS[part.shape].volume(part.params);
+const volumeCache = new Map<string, number>();
+
+/** Parçanın kendi hacmi (mm³, delikler hariç): analitik ya da ağdan. Delikli son hacim için model.ts → solidVolume. */
+export function partVolume(part: Part, seg = 96): number {
+  const def = SHAPE_DEFS[part.shape];
+  if (def.volume) return def.volume(part.params);
+  const key = geometryKey(part, seg);
+  let v = volumeCache.get(key);
+  if (v === undefined) {
+    const g = buildGeometry(part.shape, part.params, seg, part.geom);
+    v = Math.abs(geometryVolume(g));
+    g.dispose();
+    if (volumeCache.size > 300) volumeCache.clear();
+    volumeCache.set(key, v);
+  }
+  return v;
 }
 
 // ---------------------------------------------------------------------------
@@ -274,7 +290,42 @@ function autoPlace(project: Project, part: Part): void {
 }
 
 function describeParams(part: Part): string {
-  return SHAPE_DEFS[part.shape].params.map((d) => `${paramLabel(d.key)} ${fmt(part.params[d.key])}${unitOf(d.key)}`).join(', ');
+  const params = SHAPE_DEFS[part.shape].params
+    .filter((d) => !(d.key === 'scale' && part.params.scale === 1))
+    .map((d) => `${paramLabel(d.key)} ${fmt(part.params[d.key])}${unitOf(d.key)}`);
+  if (part.geom) params.unshift(describeGeom(part.geom));
+  return params.join(', ');
+}
+
+const ROLE_LABEL: Record<Role, string> = { solid: 'katı', hole: 'delik', reference: 'referans' };
+
+function roleValue(r: string | undefined): Role | null {
+  if (!r) return null;
+  if (!(ROLES as readonly string[]).includes(r)) throw new OpError(`Geçersiz rol: '${r}' (solid, hole, reference).`);
+  return r as Role;
+}
+
+function setRole(part: Part, role: Role): void {
+  if (role === 'solid') delete part.role;
+  else part.role = role;
+}
+
+/** Delik hedeflerini (ad ya da id) parça kimliklerine çevirir. */
+function cutsFor(part: Part, refs: string[], find: (ref: string) => Part): string[] | undefined {
+  if (part.role !== 'hole') throw new OpError(`'${part.name}' delik değil; hedef (cuts) yalnızca delik parçalarına verilir.`);
+  if (refs.includes('*')) return undefined;
+  return [...new Set(refs.map((r) => find(r).id))];
+}
+
+/** geom doğrulama hatalarını işlem hatasına çevirir. */
+function geomFor(part: Part, raw: unknown): void {
+  if (!isGeomShape(part.shape)) throw new OpError(`${SHAPE_DEFS[part.shape].label} şekli geom almaz; ölçüleri params ile verin.`);
+  try {
+    part.geom = sanitizeGeom(part.shape, raw);
+  } catch (e) {
+    if (e instanceof GeomError) throw new OpError(`'${part.name}': ${e.message}`);
+    throw e;
+  }
 }
 
 export function applyOps(project: Project, ops: Op[], selectedId: string | null): ApplyResult {
@@ -301,6 +352,8 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
         case 'create': {
           const def = SHAPE_DEFS[op.shape];
           if (!def) throw new OpError(`Bilinmeyen şekil: ${String(op.shape)}`);
+          if (op.shape === 'mesh') throw new OpError('Mesh parçası dosyadan içe aktarılarak eklenir (İçe aktar… ya da npm run p3d -- import).');
+          const role = roleValue(op.role);
           const part: Part = {
             id: newId(),
             name: op.name?.trim() ? uniqueName(project, op.name) : defaultName(project, def.label),
@@ -311,6 +364,15 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
             color: colorOf(op.color) ?? PALETTE[project.parts.length % PALETTE.length],
             visible: true,
           };
+          if (isGeomShape(op.shape)) {
+            if (op.geom) geomFor(part, op.geom);
+            else part.geom = defaultGeom(op.shape);
+          } else if (op.geom) geomFor(part, op.geom);
+          if (role) setRole(part, role);
+          if (op.cuts?.length) {
+            const cuts = cutsFor(part, op.cuts, must);
+            if (cuts) part.cuts = cuts;
+          }
           if (op.params?.length) applyParamChanges(part, op.params);
           const pos = checkVec(op.position, 'konum');
           if (pos) part.position = pos;
@@ -323,7 +385,36 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
             project.parts.push(part);
           }
           touch(part);
-          res.messages.push(`'${part.name}' ${def.label.toLocaleLowerCase('tr')} oluşturuldu (${describeParams(part)}).`);
+          const roleNote = part.role ? `, ${ROLE_LABEL[part.role]}` : '';
+          res.messages.push(`'${part.name}' ${def.label.toLocaleLowerCase('tr')} oluşturuldu (${describeParams(part)}${roleNote}).`);
+          break;
+        }
+        case 'import_mesh': {
+          let asset;
+          try {
+            asset = registerAsset(op.asset);
+          } catch (e) {
+            throw new OpError(`Ağ verisi geçersiz: ${(e as Error).message}`);
+          }
+          const role = roleValue(op.role);
+          const part: Part = {
+            id: newId(),
+            name: uniqueName(project, op.name?.trim() || asset.name || 'Mesh'),
+            shape: 'mesh',
+            params: defaultParams('mesh'),
+            position: { x: 0, y: 0, z: 0 },
+            rotation: { x: 0, y: 0, z: 0 },
+            color: colorOf(op.color) ?? PALETTE[project.parts.length % PALETTE.length],
+            visible: true,
+            geom: { kind: 'mesh', asset: asset.id },
+          };
+          if (role) setRole(part, role);
+          const pos = checkVec(op.position, 'konum');
+          if (pos) part.position = pos;
+          else autoPlace(project, part);
+          project.parts.push(part);
+          touch(part);
+          res.messages.push(`'${part.name}' içe aktarıldı (${asset.triangles.toLocaleString('tr-TR')} üçgen${part.role ? `, ${ROLE_LABEL[part.role]}` : ''}).`);
           break;
         }
         case 'update': {
@@ -343,8 +434,25 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
             part.visible = op.visible;
             notes.push(op.visible ? 'gösterildi' : 'gizlendi');
           }
+          const role = roleValue(op.role);
+          if (role && role !== (part.role ?? 'solid')) {
+            setRole(part, role);
+            notes.push(`rol: ${ROLE_LABEL[role]}`);
+            if (role !== 'hole') delete part.cuts;
+          }
+          if (op.cuts?.length) {
+            const cuts = cutsFor(part, op.cuts, must);
+            if (cuts) part.cuts = cuts;
+            else delete part.cuts;
+            notes.push(`keser: ${cuts ? cuts.map((id) => project.parts.find((p) => p.id === id)?.name ?? id).join(', ') : 'kesiştiği tüm katılar'}`);
+          }
           const pos = checkVec(op.position, 'konum');
           const rot = checkVec(op.rotation, 'döndürme');
+          if (op.geom) {
+            // Geometri mutlak koordinatlarla verilir; konum korunur (taban sabitleme yok).
+            geomFor(part, op.geom);
+            notes.push(`geometri: ${describeGeom(part.geom)}`);
+          }
           if (op.params?.length || rot) {
             const mutate = () => {
               if (op.params?.length) notes.push(...applyParamChanges(part, op.params));
@@ -402,9 +510,11 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           const part = must(op.part);
           const f = Number(op.factor);
           if (!(f > 0)) throw new OpError('Ölçek katsayısı pozitif olmalı.');
-          const changes: ParamChange[] = SHAPE_DEFS[part.shape].params
-            .filter((d) => d.key !== 'sides')
-            .map((d) => ({ name: d.key, value: f, mode: 'mul' }));
+          const defs = SHAPE_DEFS[part.shape].params;
+          // Ölçek parametresi olan şekillerde (extrude/revolve/loft/mesh) tüm geometri onunla büyür.
+          const changes: ParamChange[] = defs.some((d) => d.key === 'scale')
+            ? [{ name: 'scale', value: f, mode: 'mul' }]
+            : defs.filter((d) => d.key !== 'sides').map((d) => ({ name: d.key, value: f, mode: 'mul' }));
           anchored(part, seg, () => applyParamChanges(part, changes));
           touch(part);
           res.messages.push(`'${part.name}' ${fmt(f)} kat ölçeklendi (${describeParams(part)}).`);
@@ -426,6 +536,27 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           placeBeside(part, target, op.side, Number(op.gap) || 0, seg);
           touch(part);
           res.messages.push(`'${part.name}', '${target.name}' yanına (${op.side}) yerleştirildi.`);
+          break;
+        }
+        case 'place_on_surface': {
+          const part = must(op.part);
+          const target = must(op.target);
+          if (part.id === target.id) throw new OpError('Parça kendi yüzeyine yerleştirilemez.');
+          const near = checkVec(op.near, 'yakın nokta (near)');
+          if (!near) throw new OpError('Yüzeye yerleştirme için hedefe yakın bir nokta (near) gerekli.');
+          const hit = closestOnSurface(target, seg, new THREE.Vector3(near.x, near.y, near.z));
+          const off = Number(op.offset) || 0;
+          const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), hit.normal);
+          const e = new THREE.Euler().setFromQuaternion(q, 'XYZ');
+          part.rotation = { x: normAngle(e.x / DEG), y: normAngle(e.y / DEG), z: normAngle(e.z / DEG) };
+          const at = hit.point.clone().addScaledVector(hit.normal, off);
+          part.position = { x: round(at.x), y: round(at.y), z: round(at.z) };
+          touch(part);
+          const nv = hit.normal;
+          res.messages.push(
+            `'${part.name}', '${target.name}' yüzeyine yerleştirildi (nokta ${fmt(hit.point.x)}, ${fmt(hit.point.y)}, ${fmt(hit.point.z)}; ` +
+              `normal ${fmt(nv.x)}, ${fmt(nv.y)}, ${fmt(nv.z)}).`,
+          );
           break;
         }
         case 'drop_to_bed': {
@@ -478,6 +609,10 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
             project.view.showDimensions = op.show_dimensions;
             res.messages.push(op.show_dimensions ? 'Ölçüler gösteriliyor.' : 'Ölçüler gizlendi.');
           }
+          if (typeof op.show_holes === 'boolean') {
+            project.view.showHoles = op.show_holes;
+            res.messages.push(op.show_holes ? 'Delikler gösteriliyor.' : 'Delikler gizlendi (kesmeye devam ederler).');
+          }
           break;
         }
         default:
@@ -488,6 +623,42 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
     }
   }
   return res;
+}
+
+/** Hedefin (deliksiz) yüzeyinde noktaya en yakın nokta ve oradaki dışa bakan, yumuşak ara değerli normal (dünya). */
+export function closestOnSurface(target: Part, seg: number, near: THREE.Vector3): { point: THREE.Vector3; normal: THREE.Vector3 } {
+  const g = buildGeometry(target.shape, target.params, seg, target.geom);
+  const m = partMatrix(target);
+  const nm = new THREE.Matrix3().getNormalMatrix(m);
+  const pos = g.getAttribute('position');
+  const nor = g.getAttribute('normal');
+  const index = g.getIndex();
+  const count = index ? index.count : pos.count;
+  const vi = (i: number) => (index ? index.getX(i) : i);
+  const tri = new THREE.Triangle();
+  const p = new THREE.Vector3();
+  let best = Infinity;
+  const point = new THREE.Vector3();
+  const normal = new THREE.Vector3(0, 0, 1);
+  const n = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+  for (let i = 0; i < count; i += 3) {
+    const [a, b, c] = [vi(i), vi(i + 1), vi(i + 2)];
+    tri.a.fromBufferAttribute(pos, a).applyMatrix4(m);
+    tri.b.fromBufferAttribute(pos, b).applyMatrix4(m);
+    tri.c.fromBufferAttribute(pos, c).applyMatrix4(m);
+    tri.closestPointToPoint(near, p);
+    const d = p.distanceToSquared(near);
+    if (d >= best) continue;
+    best = d;
+    point.copy(p);
+    if (nor) {
+      [a, b, c].forEach((v, k) => n[k].fromBufferAttribute(nor, v).applyMatrix3(nm).normalize());
+      THREE.Triangle.getInterpolation(p, tri.a, tri.b, tri.c, n[0], n[1], n[2], normal);
+    } else tri.getNormal(normal);
+  }
+  g.dispose();
+  if (!Number.isFinite(best)) throw new OpError(`'${target.name}' yüzeyi bulunamadı.`);
+  return { point, normal: normal.normalize() };
 }
 
 function placeOn(part: Part, target: Part, seg: number): void {
@@ -537,6 +708,9 @@ export function sceneSummary(project: Project, selectedId: string | null): Scene
         color: p.color,
         visible: p.visible,
         bbox: { min: v2(b.min), max: v2(b.max) },
+        role: p.role ?? 'solid',
+        ...(p.cuts ? { cuts: p.cuts.map((id) => project.parts.find((q) => q.id === id)?.name ?? id) } : {}),
+        ...(p.geom ? { geom: p.geom.kind === 'mesh' ? { ...p.geom, triangles: getAsset(p.geom.asset)?.triangles ?? 0 } : p.geom } : {}),
       };
     }),
   };

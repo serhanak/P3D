@@ -1,7 +1,17 @@
 // Claude Code köprüsü: terminaldeki bir ajan (ya da `npm run cli`) açık tarayıcı sayfasının sahnesini okur
 // ve ona işlem (Op) listesi gönderir. Sunucu durumsuzdur: sahneyi tarayıcı bildirir, işlemleri tarayıcı uygular.
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { BridgeAction, BridgeCommand, BridgeResult, Op, SceneSummary } from '../shared/ops.ts';
+import {
+  SNAPSHOT_VIEWS,
+  type BridgeAction,
+  type BridgeCommand,
+  type BridgeResult,
+  type MeshAsset,
+  type Op,
+  type SceneSummary,
+  type SnapshotOptions,
+  type SnapshotView,
+} from '../shared/ops.ts';
 
 interface SceneState {
   summary: SceneSummary;
@@ -10,12 +20,47 @@ interface SceneState {
 }
 
 const RESULT_TIMEOUT_MS = 10_000;
+const SNAPSHOT_TIMEOUT_MS = 30_000;
+const MB = 1024 * 1024;
 
-let scene: SceneState | null = null;
-/** Bağlı sayfalar; komut yalnızca en son bağlanana gider (birden çok sekme aynı işlemi iki kez uygulamasın). */
-const clients: ServerResponse[] = [];
-const pending = new Map<string, (r: BridgeResult) => void>();
-let seq = 0;
+/**
+ * Köprü durumu globalThis'te tutulur: geliştirme sunucusu bu modülü değişiklikte yeniden yüklediğinde
+ * (ssrLoadModule) bağlı sekmeler, sahne ve bekleyen istekler kaybolmasın.
+ */
+interface BridgeState {
+  scene: SceneState | null;
+  assets: Map<string, MeshAsset>;
+  clients: ServerResponse[];
+  pending: Map<string, (r: BridgeResult) => void>;
+  seq: number;
+}
+const G = globalThis as typeof globalThis & { __p3dBridge?: BridgeState };
+const state: BridgeState = (G.__p3dBridge ??= { scene: null, assets: new Map(), clients: [], pending: new Map(), seq: 0 });
+
+
+function keepAssets(list: unknown[]): void {
+  for (const a of list) {
+    const m = a as Partial<MeshAsset> | null;
+    if (m && typeof m.id === 'string' && typeof m.positions === 'string' && typeof m.indices === 'string') state.assets.set(m.id, m as MeshAsset);
+  }
+}
+
+function sceneAssets(project: unknown): Record<string, MeshAsset> {
+  const out: Record<string, MeshAsset> = {};
+  const parts = (project as { parts?: { geom?: { kind?: string; asset?: string } }[] }).parts ?? [];
+  for (const p of parts) {
+    const a = p.geom?.kind === 'mesh' && p.geom.asset ? state.assets.get(p.geom.asset) : undefined;
+    if (a) out[a.id] = a;
+  }
+  return out;
+}
+
+function snapshotOptions(raw: unknown): SnapshotOptions {
+  const o = (raw ?? {}) as Partial<SnapshotOptions>;
+  const views = Array.isArray(o.views) ? o.views.filter((v): v is SnapshotView => (SNAPSHOT_VIEWS as readonly string[]).includes(v)) : [];
+  const size = (v: unknown, d: number) => (Number.isFinite(Number(v)) ? Math.min(2400, Math.max(200, Math.round(Number(v)))) : d);
+  return { views: views.length ? views : ['iso', 'front', 'right', 'top'], width: size(o.width, 1000), height: size(o.height, 750), dims: o.dims === true };
+}
 
 export class BridgeError extends Error {
   constructor(
@@ -54,27 +99,28 @@ async function readJson(req: IncomingMessage, limit: number): Promise<Record<str
 function openEvents(req: IncomingMessage, res: ServerResponse): void {
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
   res.write(': p3d\n\n');
-  clients.push(res);
+  state.clients.push(res);
   const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
   req.on('close', () => {
     clearInterval(ping);
-    const i = clients.indexOf(res);
-    if (i >= 0) clients.splice(i, 1);
+    const i = state.clients.indexOf(res);
+    if (i >= 0) state.clients.splice(i, 1);
   });
 }
 
-function dispatch(cmd: Omit<BridgeCommand, 'id'>): Promise<BridgeResult> {
-  const target = clients.at(-1);
+function dispatch(cmd: Omit<BridgeCommand, 'id'>, timeoutMs = RESULT_TIMEOUT_MS): Promise<BridgeResult> {
+  // Komut yalnızca en son bağlanan sekmeye gider (birden çok sekme aynı işlemi iki kez uygulamasın).
+  const target = state.clients.at(-1);
   if (!target) throw new BridgeError(409, 'Bağlı tarayıcı sayfası yok. Uygulamayı tarayıcıda açın.');
-  const id = `c${++seq}`;
+  const id = `c${++state.seq}`;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      pending.delete(id);
+      state.pending.delete(id);
       reject(new BridgeError(504, 'Tarayıcı yanıt vermedi.'));
-    }, RESULT_TIMEOUT_MS);
-    pending.set(id, (r) => {
+    }, timeoutMs);
+    state.pending.set(id, (r) => {
       clearTimeout(timer);
-      pending.delete(id);
+      state.pending.delete(id);
       resolve(r);
     });
     target.write(`data: ${JSON.stringify({ ...cmd, id } satisfies BridgeCommand)}\n\n`);
@@ -92,28 +138,35 @@ export async function handleBridge(req: IncomingMessage, res: ServerResponse, pa
         openEvents(req, res);
         return true;
       case 'PUT /scene': {
-        const b = await readJson(req, 5_000_000);
+        const b = await readJson(req, 80 * MB);
         if (!b.summary || !b.project) throw new BridgeError(400, 'Sahne eksik.');
-        scene = { summary: b.summary as SceneSummary, project: b.project, at: new Date().toISOString() };
+        if (b.assets && typeof b.assets === 'object') keepAssets(Object.values(b.assets));
+        state.scene = { summary: b.summary as SceneSummary, project: b.project, at: new Date().toISOString() };
         send(res, 204, null);
         return true;
       }
       case 'POST /result': {
-        const b = (await readJson(req, 5_000_000)) as unknown as BridgeResult;
-        pending.get(b.id)?.(b);
+        const b = (await readJson(req, 60 * MB)) as unknown as BridgeResult;
+        state.pending.get(b.id)?.(b);
         send(res, 204, null);
         return true;
       }
       // Ajan / CLI tarafı
       case 'GET /scene': {
+        const scene = state.scene;
         if (!scene) throw new BridgeError(409, 'Henüz sahne bildirilmedi. Uygulamayı tarayıcıda açın.');
         const full = new URL(req.url ?? '/', 'http://localhost').searchParams.has('full');
-        send(res, 200, { connected: clients.length > 0, at: scene.at, scene: full ? scene.project : scene.summary });
+        const body = full ? { ...(scene.project as object), assets: sceneAssets(scene.project) } : scene.summary;
+        send(res, 200, { connected: state.clients.length > 0, at: scene.at, scene: body });
         return true;
       }
       case 'POST /ops': {
-        const b = await readJson(req, 2_000_000);
+        const b = await readJson(req, 80 * MB);
         const label = typeof b.label === 'string' ? b.label.slice(0, 500) : undefined;
+        if (b.action === 'snapshot') {
+          send(res, 200, await dispatch({ action: 'snapshot', snapshot: snapshotOptions(b.snapshot), label }, SNAPSHOT_TIMEOUT_MS));
+          return true;
+        }
         if (b.action !== undefined) {
           if (!['undo', 'redo', 'fit'].includes(b.action as string)) throw new BridgeError(400, 'Geçersiz eylem.');
           send(res, 200, await dispatch({ action: b.action as BridgeAction, label }));
@@ -122,7 +175,8 @@ export async function handleBridge(req: IncomingMessage, res: ServerResponse, pa
         if (!Array.isArray(b.ops) || !b.ops.every((o) => o && typeof o === 'object' && typeof o.op === 'string')) {
           throw new BridgeError(400, '"ops" bir işlem dizisi olmalı.');
         }
-        send(res, 200, await dispatch({ ops: b.ops as Op[], label }));
+        keepAssets((b.ops as Op[]).flatMap((o) => (o.op === 'import_mesh' ? [o.asset] : [])));
+        send(res, 200, await dispatch({ ops: b.ops as Op[], label }, 30_000));
         return true;
       }
       default:

@@ -1,9 +1,12 @@
 import * as THREE from 'three';
-import type { Op } from '../shared/ops';
-import { partBox, partVolume, partsBox } from './engine';
+import type { Op, Role } from '../shared/ops';
+import { getAsset } from './assets';
+import { partBox, partsBox } from './engine';
+import { describeGeom } from './geom';
+import { exportableParts, roleOf, solidVolume } from './model';
 import { SHAPE_DEFS, fmt } from './shapes';
 import type { Store } from './store';
-import type { Part } from './types';
+import type { Part, Project } from './types';
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -12,6 +15,15 @@ const esc = (s: string) =>
 const num = (n: number) => String(Number(n.toFixed(3)));
 
 const PLA_DENSITY = 1.24; // g/cm³
+
+const ROLE_LABEL: Record<Role, string> = { solid: 'Katı', hole: 'Delik', reference: 'Referans' };
+
+/** Geometri JSON'u: her nokta tek satırda, okunur ve düzenlenebilir. */
+function geomJson(g: Part['geom']): string {
+  return JSON.stringify(g, null, 1)
+    .replace(/\[\s*(-?[\d.e+-]+),\s*(-?[\d.e+-]+)\s*\]/g, '[$1, $2]')
+    .replace(/\n\s*/g, '\n  ');
+}
 
 function statsHtml(box: THREE.Box3, volumeMm3: number): string {
   const s = box.getSize(new THREE.Vector3());
@@ -32,6 +44,7 @@ export function mountPanels(store: Store, apply: (ops: Op[]) => void): () => voi
   const addRow = document.getElementById('add-row')!;
 
   addRow.innerHTML = Object.values(SHAPE_DEFS)
+    .filter((d) => d.type !== 'mesh')
     .map((d) => `<button data-add="${d.type}" title="Varsayılan ölçülerle ${d.label.toLocaleLowerCase('tr')} ekle">+ ${d.label}</button>`)
     .join('');
   addRow.addEventListener('click', (e) => {
@@ -69,6 +82,23 @@ export function mountPanels(store: Store, apply: (ops: Op[]) => void): () => voi
       return;
     }
     if (field === 'color') return apply([{ op: 'update', part: part.id, color: t.value }]);
+    if (field === 'role') return apply([{ op: 'update', part: part.id, role: t.value as Role }]);
+    if (field === 'cuts') {
+      const names = t.value.split(',').map((x) => x.trim()).filter(Boolean);
+      return apply([{ op: 'update', part: part.id, cuts: names.length ? names : ['*'] }]);
+    }
+    if (field === 'geom') {
+      let geom: unknown;
+      try {
+        geom = JSON.parse(t.value);
+      } catch (err) {
+        t.setCustomValidity('Geçersiz JSON');
+        t.reportValidity();
+        return;
+      }
+      t.setCustomValidity('');
+      return apply([{ op: 'update', part: part.id, geom: geom as Part['geom'] }]);
+    }
     const v = parseFloat(t.value.replace(',', '.'));
     if (!Number.isFinite(v)) return;
     const [kind, key] = field.split(':');
@@ -104,7 +134,7 @@ export function mountPanels(store: Store, apply: (ops: Op[]) => void): () => voi
         <li data-id="${p.id}" class="${p.id === selectedId ? 'selected' : ''} ${p.visible ? '' : 'hidden-part'}">
           <input type="color" value="${p.color}" title="Renk" />
           <span class="pl-name" title="${esc(p.name)}">${esc(p.name)}</span>
-          <span class="pl-shape">${SHAPE_DEFS[p.shape].label}</span>
+          <span class="pl-shape">${p.role ? `<span class="role-badge ${p.role}">${ROLE_LABEL[p.role]}</span>` : ''}${SHAPE_DEFS[p.shape].label}</span>
           <button class="pl-btn" data-act="vis" title="${p.visible ? 'Gizle' : 'Göster'}">${p.visible ? '◉' : '○'}</button>
           <button class="pl-btn" data-act="del" title="Sil">✕</button>
         </li>`,
@@ -113,7 +143,8 @@ export function mountPanels(store: Store, apply: (ops: Op[]) => void): () => voi
       : `<div class="empty">Henüz parça yok.<br>Yukarıdan bir şekil ekleyin ya da aşağıya komut yazın:<br><i>“50x30x10 kutu oluştur adı taban olsun”</i></div>`;
 
     const part = selectedId ? project.parts.find((p) => p.id === selectedId) : undefined;
-    const sig = part ? JSON.stringify(part) + seg : `none|${JSON.stringify(project.parts)}|${seg}`;
+    // Delikler komşu parçaların hacmini değiştirdiği için seçili parçada da tüm parçalar imzaya girer.
+    const sig = `${selectedId}|${JSON.stringify(project.parts)}|${seg}`;
     if (sig === propsSig) return;
     propsSig = sig;
 
@@ -121,7 +152,7 @@ export function mountPanels(store: Store, apply: (ops: Op[]) => void): () => voi
     const active = document.activeElement as HTMLInputElement | null;
     const focusField = active && props.contains(active) ? active.dataset.field : undefined;
 
-    props.innerHTML = part ? partProps(part, seg) : projectProps(store);
+    props.innerHTML = part ? partProps(part, project) : projectProps(store);
 
     if (focusField) {
       const el = props.querySelector<HTMLInputElement>(`[data-field="${focusField}"]`);
@@ -131,9 +162,33 @@ export function mountPanels(store: Store, apply: (ops: Op[]) => void): () => voi
   };
 }
 
-function partProps(part: Part, seg: number): string {
+function partProps(part: Part, project: Project): string {
+  const seg = project.settings.resolution;
   const def = SHAPE_DEFS[part.shape];
   const box = partBox(part, seg);
+  const role = roleOf(part);
+  const roleSelect = `
+      <div class="field"><label for="f-role">Rol</label>
+        <select id="f-role" data-field="role" title="Delik: kesiştiği katılardan çıkarılır. Referans: yalnızca görsel, dışa aktarılmaz.">
+          ${(['solid', 'hole', 'reference'] as Role[]).map((r) => `<option value="${r}" ${r === role ? 'selected' : ''}>${ROLE_LABEL[r]}</option>`).join('')}
+        </select>
+      </div>`;
+  let geomBlock = '';
+  if (part.geom?.kind === 'mesh') {
+    const a = getAsset(part.geom.asset);
+    geomBlock = `<div class="section">Ağ</div><div class="muted small">${a ? `${esc(a.name)} · ${a.triangles.toLocaleString('tr-TR')} üçgen` : 'Ağ verisi yok (yer tutucu küp)'}</div>`;
+  } else if (part.geom) {
+    geomBlock = `
+      <div class="section">Geometri <span class="muted small">(${esc(describeGeom(part.geom))})</span></div>
+      <textarea class="geom-input" data-field="geom" spellcheck="false" rows="8" title="Noktalar mm; değiştirip alanın dışına tıklayın">${esc(geomJson(part.geom))}</textarea>`;
+  }
+  const note = role === 'solid' ? '' : `<div class="muted small">${role === 'hole' ? 'Delik: kesiştiği katılardan çıkarılır, dışa aktarılmaz.' : 'Referans: yalnızca görsel, dışa aktarılmaz.'}</div>`;
+  const cutNames = (part.cuts ?? []).map((id) => project.parts.find((p) => p.id === id)?.name ?? id).join(', ');
+  const cutsField =
+    role === 'hole'
+      ? `<div class="field"><label for="f-cuts" title="Virgülle ayrılmış parça adları; boş = kesiştiği tüm katılar">Keser</label>
+          <input id="f-cuts" data-field="cuts" value="${esc(cutNames)}" placeholder="tümü" /></div>`
+      : '';
   const params = def.params
     .map(
       (d) => `
@@ -158,13 +213,17 @@ function partProps(part: Part, seg: number): string {
       <input class="name-input" data-field="name" value="${esc(part.name)}" spellcheck="false" aria-label="Parça adı" />
       <div class="sub">${def.label}</div>
       <div class="field"><label>Renk</label><input type="color" data-field="color" value="${part.color}" /></div>
+      ${roleSelect}
+      ${cutsField}
+      ${note}
       <div class="section">Ölçüler</div>
       ${params}
+      ${geomBlock}
       <div class="section">Konum (mm)</div>
       ${vec('pos', ['X (merkez)', 'Y (merkez)', 'Z (taban)'], [part.position.x, part.position.y, box.min.z], 1)}
       <div class="section">Döndürme (°)</div>
       ${vec('rot', ['X', 'Y', 'Z'], [part.rotation.x, part.rotation.y, part.rotation.z], 15)}
-      <div class="stats">${statsHtml(box, partVolume(part))}</div>
+      <div class="stats">${statsHtml(box, solidVolume(project, part))}</div>
       <div class="actions">
         <button data-act="drop" title="Parçayı tablaya oturt">Tablaya indir</button>
         <button data-act="dup">Kopyala</button>
@@ -176,11 +235,11 @@ function partProps(part: Part, seg: number): string {
 
 function projectProps(store: Store): string {
   const { project } = store;
-  const visible = project.parts.filter((p) => p.visible);
+  const visible = exportableParts(project.parts);
   const stats = visible.length
     ? `<div class="stats">
-        <div class="muted">Görünür ${visible.length} parça</div>
-        ${statsHtml(partsBox(visible, project.settings.resolution), visible.reduce((s, p) => s + partVolume(p), 0))}
+        <div class="muted">Görünür ${visible.length} katı parça</div>
+        ${statsHtml(partsBox(visible, project.settings.resolution), visible.reduce((s, p) => s + solidVolume(project, p), 0))}
       </div>`
     : '';
   return `

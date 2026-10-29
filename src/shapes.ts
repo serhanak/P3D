@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import type { ParamKey, ShapeType } from '../shared/ops';
+import type { ParamKey, PartGeom, ShapeType } from '../shared/ops';
+import { buildGeomDisplay } from './geom';
 
 export type Params = Record<string, number>;
 
@@ -42,11 +43,12 @@ export interface ShapeDef {
   params: ParamDef[];
   /** Genel ölçü kelimesi -> bu şekildeki parametre. */
   aliases: Partial<Record<DimWord, ParamKey | 'wall'>>;
-  /** Merkezi orijinde, Z ekseni yukarı bakan geometri üretir. */
-  build(p: Params, seg: number): THREE.BufferGeometry;
-  dims(p: Params): DimLine[];
-  /** mm³ cinsinden gerçek (analitik) hacim. */
-  volume(p: Params): number;
+  /** Merkezi orijinde, Z ekseni yukarı bakan geometri üretir (geom şekillerinde profil koordinatlarında). */
+  build(p: Params, seg: number, geom?: PartGeom): THREE.BufferGeometry;
+  /** Yoksa ölçü çizgileri ağın sınırlayıcı kutusundan çizilir. */
+  dims?(p: Params): DimLine[];
+  /** mm³ cinsinden gerçek (analitik) hacim; yoksa ağdan hesaplanır. */
+  volume?(p: Params): number;
   /** Parametreler arası kısıtları uygular (ör. iç çap < dış çap). */
   fix?(p: Params): void;
 }
@@ -246,7 +248,45 @@ const prism: ShapeDef = {
   },
 };
 
-export const SHAPE_DEFS: Record<ShapeType, ShapeDef> = { box, cylinder, tube, cone, sphere, torus, prism };
+const scaleParam: ParamDef = { key: 'scale', label: 'Ölçek', def: 1, min: 0.001, max: 1000, unit: 'kat' };
+
+function geomShape(type: ShapeType, label: string, params: ParamDef[], aliases: ShapeDef['aliases']): ShapeDef {
+  return {
+    type,
+    label,
+    params,
+    aliases,
+    build(p, seg, geom) {
+      if (!geom || geom.kind !== type) throw new Error(`${label} için geom eksik.`);
+      return buildGeomDisplay(geom, p, seg);
+    },
+  };
+}
+
+const extrudeShape = geomShape('extrude', 'Ekstrüzyon', [len('height', 'Uzunluk (eksen boyunca)', 10), scaleParam], {
+  height: 'height',
+  length: 'height',
+  thickness: 'height',
+});
+const revolveShape = geomShape('revolve', 'Döndürme', [scaleParam], {});
+const loftShape = geomShape('loft', 'Loft', [scaleParam], {});
+const hullShape = geomShape('hull', 'Tekne', [scaleParam], {});
+const meshShape = geomShape('mesh', 'Mesh', [scaleParam], {});
+
+export const SHAPE_DEFS: Record<ShapeType, ShapeDef> = {
+  box,
+  cylinder,
+  tube,
+  cone,
+  sphere,
+  torus,
+  prism,
+  extrude: extrudeShape,
+  revolve: revolveShape,
+  loft: loftShape,
+  hull: hullShape,
+  mesh: meshShape,
+};
 
 export function defaultParams(shape: ShapeType): Params {
   const p: Params = {};
@@ -269,8 +309,27 @@ export function sanitizeParams(shape: ShapeType, p: Params): void {
   def.fix?.(p);
 }
 
-export function buildGeometry(shape: ShapeType, p: Params, seg: number): THREE.BufferGeometry {
-  return SHAPE_DEFS[shape].build(p, seg);
+/** Geometri üretilemezse (ör. çerçeve için boolean çekirdeği yüklenmedi) bunun yerine çizilen küçük küp. */
+export const PLACEHOLDER_SIZE = 5;
+
+export function buildGeometry(shape: ShapeType, p: Params, seg: number, geom?: PartGeom): THREE.BufferGeometry {
+  try {
+    return SHAPE_DEFS[shape].build(p, seg, geom);
+  } catch (e) {
+    console.warn(`[p3d] ${SHAPE_DEFS[shape].label} geometrisi üretilemedi:`, (e as Error).message);
+    return new THREE.BoxGeometry(PLACEHOLDER_SIZE, PLACEHOLDER_SIZE, PLACEHOLDER_SIZE);
+  }
+}
+
+/** Sınırlayıcı kutudan genişlik / derinlik / yükseklik ölçü çizgileri (geom şekilleri için). */
+export function bboxDims(b: THREE.Box3): DimLine[] {
+  const { min, max } = b;
+  const g = gap(max.x - min.x, max.y - min.y, max.z - min.z);
+  return [
+    { a: [min.x, min.y - g, min.z], b: [max.x, min.y - g, min.z], text: fmt(max.x - min.x) },
+    { a: [max.x + g, min.y, min.z], b: [max.x + g, max.y, min.z], text: fmt(max.y - min.y) },
+    { a: [max.x + g, min.y - g, min.z], b: [max.x + g, min.y - g, max.z], text: fmt(max.z - min.z) },
+  ];
 }
 
 export const PALETTE = ['#4f8ef7', '#f2994a', '#27ae60', '#eb5757', '#9b51e0', '#f2c94c', '#2d9cdb', '#e0609a', '#6fcf97', '#bb6bd9'];

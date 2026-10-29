@@ -19,12 +19,18 @@
           <button id="btn-new" title="Yeni proje">Yeni</button>
           <button id="btn-open" title="Proje dosyası aç (.p3d.json)">Aç…</button>
           <button id="btn-save" title="Projeyi dosyaya kaydet (Ctrl+S)">Kaydet</button>
+          <button id="btn-import" title="STL / OBJ / 3MF ağını parça olarak ekle (katı, delik ya da referans)">İçe aktar…</button>
           <div class="menu">
             <button id="btn-export" class="primary" aria-haspopup="true">Dışa aktar ▾</button>
             <div id="export-menu" class="menu-pop" hidden>
+              <button data-export="all-3mf">Tüm görünür parçalar → 3MF (renkli, parça başına nesne)</button>
+              <button data-export="all-stl">Tüm görünür parçalar → tek STL</button>
+              <button data-export="merged-stl" title="Örtüşen parçalar birleşir; dilimleyiciye tek gövde gider">Birleştir → tek gövde STL</button>
+              <button data-export="merged-3mf" title="Örtüşen parçalar birleşir; tek nesne, ilk parçanın rengi">Birleştir → tek gövde 3MF</button>
               <button data-export="all-obj">Tüm görünür parçalar → tek OBJ</button>
               <button data-export="all-zip">Tüm görünür parçalar → OBJ + MTL (renkli, ZIP)</button>
               <button data-export="each-zip">Her parça ayrı OBJ (çok renkli baskı, ZIP)</button>
+              <button data-export="selected-stl">Yalnızca seçili parça → STL</button>
               <button data-export="selected-obj">Yalnızca seçili parça → OBJ</button>
             </div>
           </div>
@@ -38,6 +44,7 @@
         <div class="tb-group">
           <label class="switch" title="Parça isimlerini göster/gizle"><input type="checkbox" id="tg-names" /><span>İsimler</span></label>
           <label class="switch" title="Ölçüleri göster/gizle"><input type="checkbox" id="tg-dims" /><span>Ölçüler</span></label>
+          <label class="switch" title="Delik parçalarının yarı saydam görüntüsü (gizliyken de keserler)"><input type="checkbox" id="tg-holes" /><span>Delikler</span></label>
         </div>
 
         <div class="tb-group views">
@@ -51,6 +58,7 @@
         <div class="spacer"></div>
         <button id="btn-settings" title="Tabla boyutu ve çözünürlük">Ayarlar</button>
         <input type="file" id="file-input" accept=".json,.p3d" hidden />
+        <input type="file" id="mesh-input" accept=".stl,.obj,.3mf" hidden />
       </header>
 
       <aside class="panel left">

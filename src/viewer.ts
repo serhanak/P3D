@@ -1,8 +1,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
+import type { SnapshotOptions, SnapshotView } from '../shared/ops';
 import { partBox, partsBox } from './engine';
-import { SHAPE_DEFS, buildGeometry } from './shapes';
+import { isScanLike } from './geom';
+import { roleOf, solidGeometry, solidKey } from './model';
+import { SHAPE_DEFS, bboxDims } from './shapes';
 import type { Part, Project } from './types';
 
 interface Entry {
@@ -14,6 +17,8 @@ interface Entry {
   geomKey: string;
 }
 
+const HOLE_COLOR = 0xff4d4d;
+
 export type ViewPreset = 'iso' | 'top' | 'front' | 'right';
 
 const DEG = Math.PI / 180;
@@ -21,6 +26,9 @@ const DIM_COLOR = 0xffc94d;
 
 export class Viewer {
   onSelect: (id: string | null) => void = () => {};
+  /** Boolean (delik) uygulanamadığında; aynı mesaj tekrar tekrar bildirilmez. */
+  onWarning: (msg: string) => void = () => {};
+  private lastWarning = '';
 
   private renderer: THREE.WebGLRenderer;
   private labelRenderer: CSS2DRenderer;
@@ -116,6 +124,7 @@ export class Viewer {
     this.syncBed(project.settings.bedX, project.settings.bedY);
 
     const seen = new Set<string>();
+    const boxes = new Map(project.parts.map((p) => [p.id, partBox(p, seg)]));
     for (const part of project.parts) {
       seen.add(part.id);
       let e = this.entries.get(part.id);
@@ -123,22 +132,32 @@ export class Viewer {
         e = this.createEntry(part);
         this.entries.set(part.id, e);
       }
-      const key = `${part.shape}|${JSON.stringify(part.params)}|${seg}`;
-      if (e.geomKey !== key) this.rebuildGeometry(e, part, seg, key);
+      const key = solidKey(project, part, boxes);
+      if (e.geomKey !== key) this.rebuildGeometry(e, part, project, boxes, key);
 
       e.group.position.set(part.position.x, part.position.y, part.position.z);
       e.group.rotation.set(part.rotation.x * DEG, part.rotation.y * DEG, part.rotation.z * DEG, 'XYZ');
-      e.group.visible = part.visible;
-      e.mesh.material.color.set(part.color);
+      const role = roleOf(part);
+      e.group.visible = part.visible && (role !== 'hole' || project.view.showHoles);
+      const mat = e.mesh.material;
+      const ghost = role !== 'solid';
+      if (mat.transparent !== ghost) {
+        mat.transparent = ghost;
+        mat.depthWrite = !ghost;
+        mat.needsUpdate = true;
+      }
+      mat.opacity = role === 'hole' ? 0.3 : role === 'reference' ? 0.35 : 1;
+      mat.color.set(role === 'hole' ? HOLE_COLOR : part.color);
+      (e.edges.material as THREE.LineBasicMaterial).opacity = ghost ? 0.15 : 0.35;
       const selected = part.id === selectedId;
-      e.mesh.material.emissive.set(selected ? part.color : 0x000000);
-      e.mesh.material.emissiveIntensity = selected ? 0.18 : 0;
+      mat.emissive.set(selected ? mat.color : 0x000000);
+      mat.emissiveIntensity = selected ? 0.18 : 0;
       e.dims.visible = project.view.showDimensions;
 
-      const box = partBox(part, seg);
+      const box = boxes.get(part.id)!;
       // Ön-üst kenar: üst üste dizilen parçaların etiketleri birbirini örtmesin.
       e.label.position.set((box.min.x + box.max.x) / 2, box.min.y, box.max.z + 2);
-      e.label.visible = part.visible;
+      e.label.visible = e.group.visible;
       e.label.element.textContent = part.name;
       e.label.element.style.setProperty('--part-color', part.color);
       e.label.element.classList.toggle('selected', selected);
@@ -184,19 +203,27 @@ export class Viewer {
     return { group, mesh, edges, dims, label, geomKey: '' };
   }
 
-  private rebuildGeometry(e: Entry, part: Part, seg: number, key: string): void {
+  private rebuildGeometry(e: Entry, part: Part, project: Project, boxes: Map<string, THREE.Box3>, key: string): void {
+    const solid = solidGeometry(project, part, boxes);
+    if (solid.error && solid.error !== this.lastWarning) {
+      this.lastWarning = solid.error;
+      this.onWarning(`'${part.name}': ${solid.error}`);
+    }
     e.mesh.geometry.dispose();
-    e.mesh.geometry = buildGeometry(part.shape, part.params, seg);
+    e.mesh.geometry = solid.geometry;
     e.edges.geometry.dispose();
-    e.edges.geometry = new THREE.EdgesGeometry(e.mesh.geometry, 25);
+    // Kenar çizgileri yalnızca gerçek kırılımlarda; mesh parçalarında üçgen gürültüsü çizgi olmasın.
+    e.edges.geometry = new THREE.EdgesGeometry(e.mesh.geometry, isScanLike(part.shape) ? 50 : 25);
     this.clearDims(e.dims);
-    this.buildDims(e.dims, part);
+    this.buildDims(e.dims, part, e.mesh.geometry);
     e.geomKey = key;
   }
 
-  private buildDims(group: THREE.Group, part: Part): void {
-    const lines = SHAPE_DEFS[part.shape].dims(part.params);
-    const size = Math.max(...SHAPE_DEFS[part.shape].params.filter((d) => d.unit === 'mm').map((d) => part.params[d.key]));
+  private buildDims(group: THREE.Group, part: Part, geometry: THREE.BufferGeometry): void {
+    const def = SHAPE_DEFS[part.shape];
+    if (!geometry.boundingBox) geometry.computeBoundingBox();
+    const lines = def.dims ? def.dims(part.params) : bboxDims(geometry.boundingBox!);
+    const size = Math.max(...lines.map((d) => Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1], d.b[2] - d.a[2])));
     const tick = Math.min(3, Math.max(0.8, size * 0.04));
     const pts: number[] = [];
     for (const d of lines) {
@@ -309,7 +336,8 @@ export class Viewer {
   // Kamera
 
   fit(project: Project): void {
-    const visible = project.parts.filter((p) => p.visible);
+    // Delik parçaları kadraja girmez (tabla altı / ayna kesimi gibi yardımcı kutular çerçeveyi büyütmesin).
+    const visible = project.parts.filter((p) => p.visible && roleOf(p) !== 'hole');
     const box = visible.length
       ? partsBox(visible, project.settings.resolution)
       : new THREE.Box3(
@@ -334,5 +362,88 @@ export class Viewer {
     const dist = this.camera.position.distanceTo(this.controls.target);
     this.camera.position.copy(this.controls.target).addScaledVector(dirs[preset].normalize(), dist);
     this.fit(project);
+  }
+
+  // -------------------------------------------------------------------------
+  // Görüntü alma (yapay zekâ doğrulama döngüsü için)
+
+  /**
+   * Görünür parçaların dik izdüşüm (ön/arka/sol/sağ/üst/alt) ve izometrik görüntüleri, PNG data URL.
+   * Kullanıcının kamerası değişmez; yalnızca tuval boyutu bir anlığına değişir. CSS etiketleri (isimler,
+   * ölçü yazıları) görüntüye girmez.
+   */
+  snapshot(project: Project, opts: SnapshotOptions): { view: SnapshotView; png: string }[] {
+    const visible = project.parts.filter((p) => p.visible && roleOf(p) !== 'hole');
+    const box = visible.length
+      ? partsBox(visible, project.settings.resolution)
+      : new THREE.Box3(new THREE.Vector3(-50, -50, 0), new THREE.Vector3(50, 50, 10));
+    const prevSize = this.renderer.getSize(new THREE.Vector2());
+    const prevRatio = this.renderer.getPixelRatio();
+    const prevSel = this.selBox.visible;
+    const prevDims = [...this.entries.values()].map((e) => e.dims.visible);
+    this.selBox.visible = false;
+    if (!opts.dims) for (const e of this.entries.values()) e.dims.visible = false;
+    this.renderer.setPixelRatio(1);
+    this.renderer.setSize(opts.width, opts.height, false);
+    const out: { view: SnapshotView; png: string }[] = [];
+    try {
+      for (const view of opts.views) {
+        this.renderer.render(this.scene, this.snapshotCamera(view, box, opts.width / opts.height));
+        out.push({ view, png: this.renderer.domElement.toDataURL('image/png') });
+      }
+    } finally {
+      this.renderer.setPixelRatio(prevRatio);
+      this.renderer.setSize(prevSize.x, prevSize.y, false);
+      this.selBox.visible = prevSel;
+      [...this.entries.values()].forEach((e, i) => (e.dims.visible = prevDims[i]));
+    }
+    return out;
+  }
+
+  private snapshotCamera(view: SnapshotView, box: THREE.Box3, aspect: number): THREE.Camera {
+    const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+    // [merkezden kameraya yön, kameranın yukarısı]
+    const dirs: Record<SnapshotView, [THREE.Vector3, THREE.Vector3]> = {
+      iso: [V(1, -1.2, 0.95), V(0, 0, 1)],
+      front: [V(0, -1, 0), V(0, 0, 1)],
+      back: [V(0, 1, 0), V(0, 0, 1)],
+      left: [V(-1, 0, 0), V(0, 0, 1)],
+      right: [V(1, 0, 0), V(0, 0, 1)],
+      top: [V(0, 0, 1), V(0, 1, 0)],
+      bottom: [V(0, 0, -1), V(0, 1, 0)],
+    };
+    const [dir, up] = dirs[view];
+    dir.normalize();
+    const center = box.getCenter(new THREE.Vector3());
+    const radius = Math.max(box.getBoundingSphere(new THREE.Sphere()).radius, 5);
+    if (view === 'iso') {
+      const cam = new THREE.PerspectiveCamera(30, aspect, 0.1, radius * 100);
+      cam.up.copy(up);
+      cam.position.copy(center).addScaledVector(dir, (radius / Math.sin(15 * DEG)) * 1.05);
+      cam.lookAt(center);
+      cam.updateMatrixWorld();
+      return cam;
+    }
+    // Dik izdüşüm: kutunun köşelerini kamera düzlemine izdüşürüp çerçevele (%6 pay).
+    const cam = new THREE.OrthographicCamera();
+    cam.up.copy(up);
+    cam.position.copy(center).addScaledVector(dir, radius * 4);
+    cam.lookAt(center);
+    cam.updateMatrixWorld();
+    let [x0, x1, y0, y1] = [Infinity, -Infinity, Infinity, -Infinity];
+    for (const cx of [box.min.x, box.max.x])
+      for (const cy of [box.min.y, box.max.y])
+        for (const cz of [box.min.z, box.max.z]) {
+          const p = V(cx, cy, cz).applyMatrix4(cam.matrixWorldInverse);
+          [x0, x1, y0, y1] = [Math.min(x0, p.x), Math.max(x1, p.x), Math.min(y0, p.y), Math.max(y1, p.y)];
+        }
+    let w = (x1 - x0) * 1.06;
+    let h = (y1 - y0) * 1.06;
+    if (w / h > aspect) h = w / aspect;
+    else w = h * aspect;
+    const [mx, my] = [(x0 + x1) / 2, (y0 + y1) / 2];
+    Object.assign(cam, { left: mx - w / 2, right: mx + w / 2, top: my + h / 2, bottom: my - h / 2, near: 0.1, far: radius * 10 });
+    cam.updateProjectionMatrix();
+    return cam;
   }
 }

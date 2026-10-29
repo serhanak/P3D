@@ -240,3 +240,46 @@ describe('diğer komutlar', () => {
     expect(parseCommand('dört ayaklı bir masa tasarla', p, null).unrecognized.length).toBe(1);
   });
 });
+
+describe('delik ve roller', () => {
+  it('"tabana 5 mm çaplı delik aç" parçanın ortasından geçen delik oluşturur', () => {
+    const p = newProject();
+    run(p, '60x40x5 kutu oluştur adı taban olsun');
+    run(p, 'tabana 5 mm çaplı delik aç');
+    const hole = p.parts[1];
+    expect(hole.role).toBe('hole');
+    expect(hole.params.diameter).toBe(5);
+    const tb = partBox(p.parts[0], 96);
+    const hb = partBox(hole, 96);
+    expect(hb.min.z).toBeLessThan(tb.min.z);
+    expect(hb.max.z).toBeGreaterThan(tb.max.z);
+    expect((hb.min.x + hb.max.x) / 2).toBeCloseTo((tb.min.x + tb.max.x) / 2, 3);
+  });
+
+  it('derinlik verilirse üst yüzeyden kör delik', () => {
+    const p = newProject();
+    run(p, '20 mm çaplı 30 mm yüksekliğinde silindir ekle adı mil');
+    run(p, 'milin üstüne 3 mm çaplı 8 mm derinliğinde delik aç');
+    const hb = partBox(p.parts[1], 96);
+    expect(hb.max.z).toBeCloseTo(31, 3);
+    expect(hb.min.z).toBeCloseTo(22, 3);
+  });
+
+  it('rol değiştirme ve delik görünürlüğü', () => {
+    const p = newProject();
+    run(p, '10x10x10 kutu oluştur adı k');
+    run(p, 'k parçasını delik yap');
+    expect(p.parts[0].role).toBe('hole');
+    run(p, 'k parçasını katı yap');
+    expect(p.parts[0].role).toBeUndefined();
+    run(p, 'delikleri gizle');
+    expect(p.view.showHoles).toBe(false);
+  });
+
+  it('çapsız delik komutu sorar', () => {
+    const p = newProject();
+    run(p, '10x10x10 kutu oluştur adı k');
+    const r = parseCommand('k parçasına delik aç', p, null);
+    expect(r.errors.join(' ')).toMatch(/çapı kaç mm/);
+  });
+});

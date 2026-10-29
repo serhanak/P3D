@@ -1,5 +1,4 @@
 import { defineConfig, loadEnv } from 'vite';
-import { handleApi } from './server/api.ts';
 
 export default defineConfig(({ mode }) => {
   // .env içeriğini sunucu tarafı için process.env'e aktar (istemci paketine girmez).
@@ -16,9 +15,14 @@ export default defineConfig(({ mode }) => {
       {
         name: 'p3d-api',
         configureServer(server) {
+          // API modülü istek anında yüklenir (ssrLoadModule): server/ ya da shared/ değişince geliştirme sunucusu
+          // yeniden başlamaz (yeniden başlama sırasında yenilenen sekme bağlantısız kalıyordu), modül tazelenir.
           server.middlewares.use((req, res, next) => {
             if (!req.url?.startsWith('/api/')) return next();
-            handleApi(req, res).catch(next);
+            server
+              .ssrLoadModule('/server/api.ts')
+              .then((m) => (m as typeof import('./server/api.ts')).handleApi(req, res))
+              .catch(next);
           });
         },
       },

@@ -16,5 +16,11 @@ haritası `docs/STATUS.md`'dedir. İkisini de içe aktarıyoruz:
 - Kullanıcı bu oturumda bir parça/model tarif ederse ("tabana 4 ayak ekle") kodu değiştirmeyin; AGENTS.md →
   "Kullanıcıyla terminalden tasarlamak" bölümündeki köprüyle (`npm run -s p3d -- scene` / `ops`) açık sekmeye
   işlem gönderin. Önce sahneyi okuyun, ölçüleri bbox'tan hesaplayın, sonucu kısaca Türkçe özetleyin.
+- Kör çizmeyin: anlamlı her adımdan sonra `npm run -s p3d -- snapshot --out <scratchpad>` ile görüntü alıp Read
+  ile bakın, gerekirse `measure` / `section` ile ölçün. Bir nesneyi orijinaline yakın çizmeniz istenirse referans
+  ağı `import --role reference --keep-position` ile alıp `section --file` ile ölçerek çizin (bkz. examples/README.md).
+- Eğri/eğik yüzeyleri ilkel şekillerle basamaklamayın; `extrude` / `revolve` / `loft` ve `role: "hole"` kullanın.
+- Bir model bittiğinde `npm run -s p3d -- check` çalıştırın; çakışan yüzey (z-fighting) kalmasın. Delikleri `cuts` ile
+  hedef parçaya bağlayın.
 - Windows'ta `TaskStop` arka plandaki `npm run dev`'in alt node sürecini kapatmayabilir; port meşgul kalırsa
   `Get-NetTCPConnection -LocalPort 5173` ile süreci bulup kapatın.

@@ -3,6 +3,7 @@
 
 import type { Axis, Op, ParamChange, ParamKey, ShapeType, Side } from '../../shared/ops';
 import { COLOR_NAMES, normalizeHex, resolveColor } from '../colors';
+import { partBox } from '../engine';
 import { SHAPE_DEFS, type DimWord } from '../shapes';
 import { fold } from '../text';
 import type { Project } from '../types';
@@ -131,6 +132,8 @@ const HELP_LINES = [
   '• mili x yönünde 20 mm taşı · mili 15 mm yukarı taşı · mili x=10 y=20 konumuna taşı',
   '• mili x ekseninde 90 derece döndür · mili yatır · mili yere indir',
   '• tabanı mavi yap · milin adını şaft yap · mili kopyala · mili sil',
+  '• tabana 5 mm çaplı delik aç · milin üstüne 3 mm çaplı 8 mm derinliğinde delik aç',
+  '• kutuyu delik yap · kutuyu katı yap · modeli referans yap · delikleri gizle',
   '• isimleri gizle · ölçüleri göster · mili gizle · tümünü göster',
   '• geri al · yinele',
 ];
@@ -443,6 +446,53 @@ function parseClause(c: Clause, st: State): boolean {
   const words = plain.split(/[^a-z']+/).filter(Boolean);
   const nums = () => findNumbers(preprocessNumbers(plain));
 
+  // 1b) Delik ve roller: "tabana 5 mm çaplı delik aç", "8 mm derinliğinde", "X'i delik yap", "delikleri gizle"
+  const roleWord = /\b(?:delik|kati|referans)\b(?!ler)/.exec(plain)?.[0];
+  if (/\bdelik(?:ler|leri|lerini)\b/.test(plain) && (showRe.test(plain) || hideRe.test(plain))) {
+    emit({ op: 'view', show_holes: !hideRe.test(plain) });
+    return true;
+  }
+  const holeNums = nums().filter((n) => n.kind === 'len' || n.kind === 'plain');
+  if (/\bdelik/.test(plain) && (/\b(?:ac|acin|del|delin)\b/.test(plain) || holeNums.length)) {
+    const t = needTargets(false)?.[0];
+    if (!t) return true;
+    const part = st.project.parts.find((p) => p.id === t.ref);
+    if (!part) {
+      st.errors.push(`"${c.orig.trim()}": delik açılacak parça henüz oluşmadı; deliği ayrı bir komutla açın.`);
+      return true;
+    }
+    if (!holeNums.length) {
+      st.errors.push(`"${c.orig.trim()}": delik çapı kaç mm? Örn. "${part.name} parçasına 5 mm çaplı delik aç".`);
+      return true;
+    }
+    const d = holeNums[0].value;
+    const depthNum = /\bderin/.test(plain) ? holeNums[1] : undefined;
+    const b = partBox(part, st.project.settings.resolution);
+    const cx = Math.round(((b.min.x + b.max.x) / 2) * 1000) / 1000;
+    const cy = Math.round(((b.min.y + b.max.y) / 2) * 1000) / 1000;
+    // Delik varsayılan olarak boydan boya (1 mm taşar); derinlik verilirse üst yüzeyden aşağı.
+    const h = depthNum ? depthNum.value + 1 : b.max.z - b.min.z + 2;
+    const zc = depthNum ? b.max.z + 1 - h / 2 : (b.min.z + b.max.z) / 2;
+    emit({
+      op: 'create',
+      shape: 'cylinder',
+      name: `${part.name} delik`,
+      role: 'hole',
+      params: [
+        { name: 'diameter', value: d },
+        { name: 'height', value: Math.round(h * 1000) / 1000 },
+      ],
+      position: { x: cx, y: cy, z: Math.round(zc * 1000) / 1000 },
+    });
+    return true;
+  }
+  if (roleWord && /\b(?:yap|olsun|olarak|cevir|donustur)/.test(plain) && !holeNums.length) {
+    const role = roleWord === 'delik' ? 'hole' : roleWord === 'kati' ? 'solid' : 'reference';
+    const ts = needTargets(false);
+    if (ts) for (const t of ts) emit({ op: 'update', part: t.ref, role }, t);
+    return true;
+  }
+
   // 2) Silme
   const hasDirection = /\b(?:yukari|asagi|saga|sola|ileri|geri)\b/.test(plain);
   if (words.some((w) => w === 'sil' || w === 'silin') || (words.includes('kaldir') && !hasDirection)) {
@@ -738,7 +788,7 @@ function parseCreate(c: Clause, st: State, refs: Ref[], hit: ShapeHit): boolean 
   // Etiketsiz sayılar şeklin ölçü sırasına göre atanır: kutu G×D×Y, silindir Ç×Y...
   const free = ns.filter((n) => !n.used && (n.kind === 'len' || n.kind === 'plain'));
   if (free.length) {
-    const order: Record<ShapeType, ParamKey[]> = {
+    const order: Partial<Record<ShapeType, ParamKey[]>> = {
       box: ['width', 'depth', 'height'],
       cylinder: ['diameter', 'height'],
       tube: ['outerDiameter', 'innerDiameter', 'height'],
@@ -747,7 +797,7 @@ function parseCreate(c: Clause, st: State, refs: Ref[], hit: ShapeHit): boolean 
       torus: ['diameter', 'thickness'],
       prism: ['diameter', 'height'],
     };
-    const keys = order[shape].filter((k) => !params.some((p) => p.name === k));
+    const keys = (order[shape] ?? []).filter((k) => !params.some((p) => p.name === k));
     if (shape === 'box' && free.length === 1 && keys.length === 3) {
       for (const k of keys) setParam(k, free[0].value);
     } else {

@@ -1,8 +1,11 @@
 import type { Op } from '../shared/ops';
+import { registerAsset, usedAssets } from './assets';
 import { applyOps, type ApplyResult } from './engine';
 import type { Project } from './types';
 
 const AUTOSAVE_KEY = 'p3d.autosave.v1';
+/** Mesh ağ verisi ayrı anahtarda: proje her değiştiğinde yeniden yazılmasın. */
+const ASSETS_KEY = 'p3d.autosave.assets.v1';
 const HISTORY_LIMIT = 200;
 
 type Listener = () => void;
@@ -15,6 +18,9 @@ export class Store {
   private redoStack: string[] = [];
   private listeners = new Set<Listener>();
   private saveTimer: number | undefined;
+  private savedAssets = '';
+  /** Otomatik kayıt sorunları (ör. ağ verisi tarayıcı depolamasına sığmadı). */
+  onWarning: (msg: string) => void = () => {};
 
   constructor(initial: Project) {
     this.project = initial;
@@ -112,10 +118,26 @@ export class Store {
       } catch {
         // Depolama kapalı/dolu olabilir; otomatik kayıt isteğe bağlıdır.
       }
+      const assets = usedAssets(this.project);
+      const key = Object.keys(assets).sort().join(',');
+      if (key === this.savedAssets) return;
+      try {
+        localStorage.setItem(ASSETS_KEY, JSON.stringify(assets));
+        this.savedAssets = key;
+      } catch {
+        this.savedAssets = key;
+        this.onWarning('İçe aktarılan ağ tarayıcının otomatik kaydına sığmadı; sayfa yenilenirse kaybolur. Projeyi Kaydet ile dosyaya kaydedin.');
+      }
     }, 400);
   }
 
   static restore(): Project | null {
+    try {
+      const assets = JSON.parse(localStorage.getItem(ASSETS_KEY) ?? '{}') as Record<string, unknown>;
+      for (const a of Object.values(assets)) registerAsset(a);
+    } catch {
+      // Bozuk ağ kaydı: mesh parçaları yer tutucu olarak görünür.
+    }
     try {
       const raw = localStorage.getItem(AUTOSAVE_KEY);
       return raw ? JSON.parse(raw) : null;

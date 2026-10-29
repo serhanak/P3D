@@ -4,13 +4,14 @@ export type { LlmStatus };
 
 const OFF: LlmStatus = { llm: false, backend: null, model: '', bridge: false };
 
-export async function fetchLlmStatus(): Promise<LlmStatus> {
+/** Sunucu yanıt vermezse (ör. geliştirme sunucusu yeniden başlıyor) null. */
+export async function fetchLlmStatus(): Promise<LlmStatus | null> {
   try {
     const r = await fetch('/api/status');
-    if (!r.ok) return OFF;
+    if (!r.ok) return r.status === 404 ? OFF : null;
     return { ...OFF, ...((await r.json()) as Partial<LlmStatus>) };
   } catch {
-    return OFF;
+    return null;
   }
 }
 

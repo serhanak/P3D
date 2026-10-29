@@ -1,9 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { SHAPES } from '../shared/ops';
+import { getAsset } from '../src/assets';
+import { initCsg } from '../src/csg';
 import { applyOps, partVolume } from '../src/engine';
 import { buildObj, parseProject, projectToJson } from '../src/io';
 import { newProject } from '../src/types';
+
+beforeAll(() => initCsg()); // örnekler çerçeve ve delik kullanır
 
 /** OBJ metnini nesnelere ayırır: her nesnenin köşe ve üçgen listesi. */
 function parseObj(text: string) {
@@ -42,11 +46,12 @@ describe('OBJ dışa aktarımı', () => {
   it('her şekil kapalı, doğru yönlü ve hacmi analitik değere yakın', () => {
     const p = newProject();
     p.settings.resolution = 128;
-    applyOps(p, SHAPES.map((shape) => ({ op: 'create' as const, shape })), null);
+    const shapes = SHAPES.filter((x) => x !== 'mesh'); // mesh yalnızca içe aktarmayla eklenir
+    applyOps(p, shapes.map((shape) => ({ op: 'create' as const, shape })), null);
     applyOps(p, [{ op: 'rotate', part: 'Silindir 1', axis: 'x', degrees: 37 }], null);
     const { obj, mtl } = buildObj(p.parts, p, 'model.mtl');
     const { verts, objects } = parseObj(obj);
-    expect(objects).toHaveLength(SHAPES.length);
+    expect(objects).toHaveLength(shapes.length);
     for (const [i, o] of objects.entries()) {
       const part = p.parts[i];
       const { bad, vol } = checkSolid(verts, o.faces);
@@ -55,7 +60,7 @@ describe('OBJ dışa aktarımı', () => {
       expect(vol / partVolume(part), `${part.shape}: hacim`).toBeLessThan(1.001);
     }
     expect(obj).toContain('mtllib model.mtl');
-    expect(mtl.match(/newmtl/g)).toHaveLength(SHAPES.length);
+    expect(mtl.match(/newmtl/g)).toHaveLength(shapes.length);
   });
 
   it('Türkçe isimler ASCII nesne adına çevrilir, MTL olmadan renk satırı yazılmaz', () => {
@@ -110,9 +115,10 @@ describe('örnek projeler (examples/)', () => {
   it('en az bir örnek var', () => expect(files.length).toBeGreaterThan(0));
 
   it.each(files)('%s onarım gerekmeden yüklenir ve her parçası kapalı ağ olarak dışa aktarılır', (file) => {
-    const raw = JSON.parse(readFileSync(new URL(file, dir), 'utf8'));
-    const p = parseProject(raw);
-    expect(p).toEqual(raw);
+    const { assets, ...raw } = JSON.parse(readFileSync(new URL(file, dir), 'utf8'));
+    const p = parseProject({ ...raw, assets });
+    expect(p).toEqual(raw); // ağ verisi (assets) projeye değil depoya alınır
+    for (const id of Object.keys(assets ?? {})) expect(getAsset(id)?.triangles).toBeGreaterThan(0);
     const { verts, objects } = parseObj(buildObj(p.parts, p, null).obj);
     expect(objects).toHaveLength(p.parts.filter((x) => x.visible).length);
     for (const o of objects) expect(checkSolid(verts, o.faces).bad, o.name).toBe(0);
