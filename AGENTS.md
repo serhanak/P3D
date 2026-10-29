@@ -20,19 +20,50 @@ sonuç OBJ (+MTL) olarak dışa aktarılır.
 
 ```bash
 npm install
-npm run dev        # Vite geliştirme sunucusu, http://localhost:5173 (/api uçları dahil)
+npm run dev        # Vite geliştirme sunucusu, http://localhost:5173 (/api uçları + köprü dahil)
+npm run dev:claude # aynısı, serbest komutlar bu makinedeki Claude Code hesabıyla (--llm=claude-cli)
 npm test           # vitest run — tüm testler
 npm run typecheck  # tsc --noEmit
 npm run build      # typecheck + vite build → dist/
-npm start          # üretim: tsx server/index.ts → http://127.0.0.1:8080 (dist/ + /api)
+npm start          # üretim: dist/ + /api → http://127.0.0.1:8080 (köprü kapalı)
+npm run -s p3d -- scene | ops | undo | redo | fit   # Claude Code köprüsü (aşağıya bakın)
 ```
+
+`dev` ve `start` `scripts/launch.ts` üzerinden çalışır; açılış parametreleri ortam değişkenlerine çevrilir
+(parametre > ortam > `.env`): `--llm=auto|api|claude-cli|off` (`P3D_LLM`), `--bridge` / `--no-bridge`
+(`P3D_BRIDGE`), `--port`, `--host`, `--model`, `--effort`, `--claude-bin`. Ör. `npm start -- --llm=api`.
 
 Bir değişikliği bitirmeden önce **`npm run typecheck` ve `npm test` temiz olmalı.** Arayüz değişikliklerini
 mümkünse tarayıcıda da kontrol edin (geliştirme sunucusu HMR ile yeniden yükler; proje localStorage'dan
 geri gelir ama geri-al geçmişi ve seçim sıfırlanır).
 
-Claude modu için `.env` (bkz. `.env.example`): `ANTHROPIC_API_KEY`, opsiyonel `P3D_MODEL`, `P3D_EFFORT`, `PORT`, `HOST`.
+Claude modu için `.env` (bkz. `.env.example`): `P3D_LLM`, `ANTHROPIC_API_KEY`, opsiyonel `P3D_MODEL`,
+`P3D_EFFORT`, `P3D_BRIDGE`, `P3D_CLAUDE_BIN`, `PORT`, `HOST`.
 `.env` git'e girmez; anahtarı asla istemci koduna, loglara ya da commit'lere koymayın.
+
+## Kullanıcıyla terminalden tasarlamak (Claude Code köprüsü)
+
+Kullanıcı bu terminalde "4 ayaklı masa yap" gibi istekler yazarsa, açık tarayıcı sekmesindeki sahneyi
+**doğrudan** değiştirebilirsiniz (API anahtarı gerekmez; işlemleri siz üretirsiniz):
+
+1. Geliştirme sunucusu çalışıyor olmalı (`npm run dev`, arka planda) ve uygulama tarayıcıda açık olmalı.
+2. `npm run -s p3d -- scene` → sahne özeti (parça adı, şekil, parametreler, merkez, bbox, renk; `*` seçili).
+   `--full` tüm proje JSON'unu verir.
+3. İşlemleri `shared/ops.ts`'teki `Op` tipine göre JSON olarak stdin'den gönderin; yanıt mesajları,
+   hataları ve güncel sahneyi döner (hata varsa çıkış kodu 1):
+   ```bash
+   npm run -s p3d -- ops --label "kullanıcının isteği" <<'EOF'
+   [{"op":"create","shape":"cylinder","name":"ayak1","params":[{"name":"diameter","value":6},{"name":"height","value":20}],"position":{"x":27,"y":17,"z":10}}]
+   EOF
+   ```
+   `params` her zaman dizidir: `{name, value, mode?: 'set'|'add'|'mul'}` (`name` bir `ParamKey` ya da `wall`).
+   `position` merkezdir (taban değil); `set_position` yalnızca burada/yerelde vardır ve `z`'si tabandır.
+4. `npm run -s p3d -- undo | redo | fit`. Her `ops` çağrısı tarayıcıda tek geri-al adımıdır ve günlükte
+   "Claude Code" etiketiyle görünür.
+
+Komutlar **en son bağlanan** sekmeye gider. Test için kullanıcının sekmesine işlem göndermeyin; gerekirse
+önce sorun ya da sonradan `undo` ile geri alın. Köprü `server/bridge.ts` (sunucu) ↔ `src/bridge.ts`
+(tarayıcı, SSE + PUT sahne) ↔ `scripts/p3d.ts` (CLI) üçlüsüdür.
 
 ## Dizin yapısı
 
@@ -51,7 +82,13 @@ src/io.ts            Proje dosyası doğrulama (parseProject), OBJ/MTL üretimi,
 src/ui.ts            Sol parça listesi + sağ özellik paneli (olay delegasyonu, HTML string render)
 src/main.ts          Uygulama kurulumu: araç çubuğu, komut konsolu, kısayollar, ilk açılış örneği
 src/style.css        Koyu tema; tüm stiller burada
-server/api.ts        handleApi(): /api/status, /api/nl → Claude (Vite ara katmanı ve üretim sunucusu ortak)
+server/api.ts        handleApi(): /api/status, /api/nl → Claude (API ya da claude -p), /api/bridge (Vite ara katmanı ve üretim sunucusu ortak)
+server/config.ts     P3D_LLM / P3D_BRIDGE / model / effort okuma, etkin arka uç seçimi
+server/claude-cli.ts claude-cli arka ucu: `claude -p --json-schema …` alt süreci
+server/bridge.ts     Claude Code köprüsü sunucu tarafı (SSE, sahne deposu, sonuç bekleme)
+src/bridge.ts        Köprünün tarayıcı tarafı (sahneyi bildirir, gelen işlemleri store.apply ile uygular)
+scripts/launch.ts    npm run dev / npm start başlatıcısı: açılış parametreleri → ortam değişkenleri
+scripts/p3d.ts       Köprü CLI'si (npm run p3d)
 server/prompt.ts     Claude sistem talimatı (sabit metin — önbelleklenir)
 server/index.ts      Üretim HTTP sunucusu (dist/ statik + /api)
 vite.config.ts       .env → process.env aktarımı, /api ara katmanı
@@ -117,12 +154,25 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
 - `stop_reason` `refusal` / `max_tokens` içerik okunmadan önce kontrol edilir; SDK hata sınıfları
   (`Anthropic.AuthenticationError`, `RateLimitError`, …) en özelden genele yakalanır.
 - `SYSTEM_PROMPT` sabit tutulur (önbellek için `cache_control`); değişken veri (sahne, geçmiş) kullanıcı mesajındadır.
+- Arka uç `server/config.ts` → `llmBackend()` ile seçilir. `auto` **asla** `claude-cli` seçmez: Claude.ai/Claude Code
+  girişi başka kullanıcılara sunulan bir hizmette kullanılamaz, `claude-cli` yalnızca kullanıcının kendi
+  makinesinde, kendi hesabıyla açıkça seçilir. Sunucu kurulumu `api` kullanır. Hesabın OAuth jetonunu alıp
+  API'yi doğrudan çağıran kod yazmayın.
+- `claude-cli` (`server/claude-cli.ts`): `claude -p --output-format json --json-schema <RESPONSE_SCHEMA>
+  --system-prompt <SYSTEM_PROMPT> --tools "" --strict-mcp-config --no-session-persistence --model --effort`,
+  geçici dizinde çalışır (proje CLAUDE.md'si karışmasın), komut stdin'den gider, sonuç `structured_output`'tan
+  okunur. `--bare` kullanılamaz (yalnızca API anahtarı kabul eder). Tipik süre ~10 sn.
 
 **Sunucu / yapılandırma**
 - `vite.config.ts` → `server/api.ts` → `shared/ops.ts` zincirindeki importlar **`.ts` uzantılı** yazılır
   (Vite'nin yerel config yükleyicisi uyarısı; `tsconfig` `allowImportingTsExtensions: true`).
   `src/` içindeki importlar uzantısızdır (bundler çözümlemesi).
 - Üretim sunucusu varsayılan olarak `127.0.0.1`'e bağlanır (API anahtarı harcamasını ağa açmamak için).
+- Köprü yazma uçları (`/api/bridge/*` POST/PUT) yalnızca `Content-Type: application/json` kabul eder; böylece
+  başka bir sitenin tarayıcıdan gönderdiği "basit istek" CORS ön kontrolüne takılır. Köprüde kimlik doğrulama
+  yoktur; ağa açık bir sunucuda `--bridge` açmayın.
+- `scripts/launch.ts` → vite / `server/index.ts`; `vite.config.ts` `.env` değerlerini yalnızca ortamda yoksa
+  yazar (açılış parametresi kazanır).
 
 **Görünüm**
 - `CSS2DObject` DOM öğeleri, nesnenin ebeveyni sahneden çıkarılınca kendiliğinden silinmez;
@@ -169,7 +219,8 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
   (ayrıştır → `applyOps` → seçimi güncelle). `partBox(...).min.z` ile taban yüksekliği kontrol edilir.
 - three.js geometri kodu Node'da çalışır; DOM gerektiren kod (`viewer.ts`, `ui.ts`, `main.ts`, `download`) test edilmez.
 - Claude yolu birim testlerinde çağrılmaz (gerçek API çağrısı para harcar). İstek biçimini doğrulamak için
-  `ANTHROPIC_BASE_URL`'i yerel bir sahte sunucuya yönlendirip `interpret()` çağrılabilir.
+  `ANTHROPIC_BASE_URL`'i yerel bir sahte sunucuya yönlendirip `interpret()` çağrılabilir. `claude-cli` yolu
+  `P3D_CLAUDE_BIN` ile sahte bir programa yönlendirilebilir.
 
 ## Git
 - Ana dal `main`. Commit mesajları kısa, emir kipinde; Türkçe ya da İngilizce olabilir.

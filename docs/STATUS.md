@@ -1,6 +1,6 @@
 # Proje durumu
 
-> Son güncelleme: **2026-10-15** — MVP (v0.1). Bir işi bitiren ajan/geliştirici bu dosyayı güncellemelidir.
+> Son güncelleme: **2026-10-29** — MVP (v0.1) + Claude arka uç seçimi ve Claude Code köprüsü. Bir işi bitiren ajan/geliştirici bu dosyayı güncellemelidir.
 
 ## Tamamlananlar (MVP)
 
@@ -11,8 +11,14 @@
   tablaya indir, kopyala (adetli), sil, yeniden adlandır, renk (açık/koyu, hex), gizle/göster, seç,
   isim/ölçü görünürlüğü, geri al/yinele, "yardım". Türkçe hâl ekleri ve aksansız yazım desteklenir;
   "ve"/"sonra" ile birleşik komutlar ve önceki komuttan bağlam.
-- **Doğal dil — Claude modu** (opsiyonel, `.env`'de `ANTHROPIC_API_KEY`): yapılandırılmış JSON çıktı ile
-  aynı işlem listesini üretir. Otomatik modda yalnızca yerel ayrıştırıcının anlamadığı komutlar gider.
+- **Doğal dil — Claude modu** (opsiyonel): yapılandırılmış JSON çıktı ile aynı işlem listesini üretir.
+  Otomatik modda yalnızca yerel ayrıştırıcının anlamadığı komutlar gider. Arka uç açılışta seçilir
+  (`--llm` / `P3D_LLM`): `api` (ANTHROPIC_API_KEY, sunucu kurulumu), `claude-cli` (makinedeki `claude -p`,
+  kullanıcının kendi Claude Code hesabı; yalnızca kişisel kullanım), `off`, `auto` (anahtar varsa api).
+- **Claude Code köprüsü** (`/api/bridge`, `npm run p3d`): terminaldeki Claude Code oturumu açık sekmenin
+  sahnesini okur ve işlem gönderir; sekmede canlı uygulanır, geri alınabilir, günlükte "Claude Code" etiketi.
+  `npm run dev`'de açık, `npm start`'ta kapalı (`--bridge`).
+- **Başlatıcı** (`scripts/launch.ts`): `npm run dev|start -- --llm --bridge --port --host --model --effort --claude-bin`.
 - **Görünüm:** Z-yukarı tabla ızgarası (10/50 mm), eksen göstergesi, renkli parçalar, kenar çizgileri,
   isim etiketleri (aç/kapa), ölçü çizgileri + etiketleri (aç/kapa), tıklayarak seçim, görünüm ön ayarları
   (İzo/Üst/Ön/Sağ), sığdır.
@@ -32,7 +38,10 @@
 | OBJ çıktısı | ✅ Her şekil için kapalı/doğru yönlü ağ ve hacim ≈ analitik değer (`tests/io.test.ts`) |
 | Proje kaydet/yükle | ✅ Gidiş-dönüş ve bozuk dosya onarımı testleri |
 | Arayüz | ✅ Chrome'da elle denendi: komutlar, panelden düzenleme, geri al, isim/ölçü anahtarları, dışa aktarma menüsü, otomatik kayıttan geri yükleme; konsolda hata yok |
-| Claude isteği | ⚠️ Yalnızca **sahte (mock) API** ile doğrulandı: istek biçimi (model, `fallbacks`, beta başlığı, `output_config`, şema) ve yanıt işleme. **Gerçek API ile hiç denenmedi.** |
+| Claude isteği — `api` | ⚠️ Yalnızca **sahte (mock) API** ile doğrulandı: istek biçimi (model, `fallbacks`, beta başlığı, `output_config`, şema) ve yanıt işleme. **Gerçek API anahtarıyla hiç denenmedi.** |
+| Claude isteği — `claude-cli` | ✅ Gerçek `claude -p` (Claude Code 2.1.312, Windows) ile `/api/nl` uçtan uca: "tabanın dört köşesine … ayaklar koy" → doğru 5 işlem, ~9,4 sn. Tarayıcı arayüzünden (Claude modu seçiciyle) denenmedi; giriş yapılmamış/`claude` bulunamadı hata mesajları denenmedi |
+| Claude Code köprüsü | ✅ Gerçek tarayıcı sekmesiyle: `ops` (oluşturma, üstüne koyma, renk), hatalı işlem → çıkış kodu 1, `undo`, `scene`; `text/plain` ile yazma reddi; geçersiz girdi. Birden çok sekme davranışı denenmedi |
+| Başlatıcı / ayarlar | ✅ `start --llm=api` anahtarsız → uyarı + Claude kapalı, köprü 404; `start --llm=claude-cli --bridge`; bilinmeyen parametre → kullanım metni; `dev:claude` |
 | Dışa aktarılan dosyalar | ⚠️ İçerik testlerle doğrulandı; tarayıcıdan gerçek indirme ve dilimleyicide (PrusaSlicer/Cura/Bambu/Orca) açma **denenmedi** |
 | Diğer tarayıcılar | ❔ Yalnızca Chrome denendi |
 | Üretim sunucusu | ✅ `npm start` ile statik dosyalar, `/api/status`, dizin dışına çıkma engeli denendi |
@@ -59,8 +68,17 @@
 
 **Claude modu**
 - Akış (streaming) yok; yanıt gelene kadar konsolda "Claude düşünüyor…" görünür.
+- `claude-cli` her komutta yeni bir `claude` süreci açar (~10 sn); istek iptali yok, zaman aşımı 180 sn.
+  Kullanıcının Claude Code kullanım sınırlarını paylaşır.
 - Bağlam yalnızca son 6 komut metni + güncel sahne; çok turlu konuşma geçmişi tutulmaz.
 - Maliyet/gecikme ayarı (effort) ölçülmedi; varsayılan `medium`.
+
+**Claude Code köprüsü**
+- Komutlar yalnızca **en son bağlanan** sekmeye gider; sahne de son bildiren sekmenindir. Kimlik doğrulama yok
+  (yalnızca `application/json` zorunluluğu); ağa açık sunucuda açmayın.
+- Sunucu yeniden başlayınca sekme otomatik yeniden bağlanır (EventSource), ama sahne bir değişiklik olana ya da
+  bağlantı açılana kadar sunucuda yoktur (`scene` → 409).
+- Windows'ta arka planda başlatılan `npm run dev` durdurulunca alt node süreci açık kalabilir (port meşgul).
 
 **Uygulama**
 - Geri-al geçmişi ve seçim sayfa yenilenince sıfırlanır (proje otomatik kayıttan gelir).
@@ -76,7 +94,8 @@
 2. **Sürükleme gizmosu** (`TransformControls`), 1 mm / 15° yakalama; sürükleme bitince tek `Op`.
 3. **STL ve 3MF dışa aktarım** (3MF çok renkli/çok parçalı baskı için Bambu/Prusa'da daha iyi).
 4. **Gruplama / ebeveyn-çocuk** (üstteki parça alttakini takip etsin).
-5. **Claude:** gerçek API ile uçtan uca test, akış + ilerleme göstergesi, değerlendirme seti, effort/maliyet ayarı.
+5. **Claude:** gerçek API anahtarıyla uçtan uca test, akış + ilerleme göstergesi, değerlendirme seti, effort/maliyet ayarı;
+   `claude-cli` için kalıcı süreç (`--input-format stream-json`) ile gecikmeyi düşürme.
 6. Yeni şekiller: yuvarlatılmış kutu, pah, kama, metin; CSG sonrası somun/flanş gibi hazır parçalar.
 7. Hizala/dağıt, ayna, dizi işlemleri ("4 köşeye yerleştir").
 8. Geri-al geçmişini kalıcı tutma; birden çok proje listesi.

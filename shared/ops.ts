@@ -200,3 +200,35 @@ export interface NlResponse {
   reply: string;
   operations: Op[];
 }
+
+// Claude Code köprüsü (server/bridge.ts ↔ src/bridge.ts)
+
+export type BridgeAction = 'undo' | 'redo' | 'fit';
+
+/** Sunucudan tarayıcıya giden komut. */
+export interface BridgeCommand {
+  id: string;
+  ops?: Op[];
+  action?: BridgeAction;
+  /** Günlükte gösterilecek açıklama (ör. kullanıcının komutu). */
+  label?: string;
+}
+
+/** Tarayıcının uygulama sonucu. */
+export interface BridgeResult {
+  id: string;
+  messages: string[];
+  errors: string[];
+  scene: SceneSummary;
+}
+
+/** GET /api/status yanıtı. */
+export interface LlmStatus {
+  /** Claude kullanılabilir mi. */
+  llm: boolean;
+  /** `api`: Anthropic API anahtarı; `claude-cli`: makinedeki Claude Code hesabı (`claude -p`). */
+  backend: 'api' | 'claude-cli' | null;
+  model: string;
+  /** Claude Code köprüsü (/api/bridge) açık mı. */
+  bridge: boolean;
+}

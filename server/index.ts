@@ -3,7 +3,8 @@ import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { handleApi, llmConfigured } from './api.ts';
+import { handleApi } from './api.ts';
+import { configWarning, describeConfig } from './config.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 const port = Number(process.env.PORT) || 8080;
@@ -45,5 +46,7 @@ createServer(async (req, res) => {
   res.setHeader('Content-Type', file.type);
   res.end(file.body);
 }).listen(port, host, () => {
-  console.log(`P3D: http://${host}:${port}  (Claude: ${llmConfigured() ? 'açık' : 'kapalı - .env içinde ANTHROPIC_API_KEY yok'})`);
+  const warn = configWarning();
+  if (warn) console.warn(`Uyarı: ${warn}`);
+  console.log(`P3D: http://${host}:${port}  (${describeConfig()})`);
 });

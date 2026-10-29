@@ -1,19 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { RESPONSE_SCHEMA, normalizeLlmOp, type NlRequest, type NlResponse } from '../shared/ops.ts';
+import { RESPONSE_SCHEMA, normalizeLlmOp, type LlmStatus, type NlRequest, type NlResponse } from '../shared/ops.ts';
+import { handleBridge } from './bridge.ts';
+import { ClaudeCliError, runClaudeCli } from './claude-cli.ts';
+import { bridgeEnabled, claudeBin, effort, llmBackend, model } from './config.ts';
 import { SYSTEM_PROMPT } from './prompt.ts';
-
-type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-
-const model = () => process.env.P3D_MODEL || 'claude-opus-5-5';
-const effort = (): Effort => {
-  const e = process.env.P3D_EFFORT as Effort | undefined;
-  return e && ['low', 'medium', 'high', 'xhigh', 'max'].includes(e) ? e : 'medium';
-};
-
-export function llmConfigured(): boolean {
-  return Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
-}
 
 let client: Anthropic | null = null;
 
@@ -26,17 +17,38 @@ class HttpError extends Error {
   }
 }
 
-/** Doğal dil komutunu Claude ile sahne işlemlerine çevirir. */
-export async function interpret(req: NlRequest): Promise<NlResponse> {
-  client ??= new Anthropic();
-  const content = [
+function userContent(req: NlRequest): string {
+  return [
     `Sahne (JSON):\n${JSON.stringify(req.scene)}`,
     req.history.length ? `Önceki komutlar (eskiden yeniye):\n${req.history.map((h) => `- ${h}`).join('\n')}` : '',
     `Komut: ${req.text}`,
   ]
     .filter(Boolean)
     .join('\n\n');
+}
 
+/** Doğal dil komutunu Claude ile sahne işlemlerine çevirir (etkin arka uca göre API ya da `claude -p`). */
+export async function interpret(req: NlRequest): Promise<NlResponse> {
+  const backend = llmBackend();
+  if (!backend) throw new HttpError(503, 'Claude kapalı: ANTHROPIC_API_KEY yok ya da P3D_LLM=off. Bkz. README → Claude modu.');
+  const parsed =
+    backend === 'claude-cli'
+      ? await runClaudeCli(userContent(req), { bin: claudeBin(), model: model(), effort: effort(), system: SYSTEM_PROMPT, schema: RESPONSE_SCHEMA })
+      : await interpretWithApi(req);
+  const out = parsed as { reply?: unknown; operations?: unknown } | null;
+  if (!out || typeof out.reply !== 'string' || !Array.isArray(out.operations)) {
+    throw new HttpError(502, 'Claude yanıtı beklenen biçimde değil.');
+  }
+  return {
+    reply: out.reply,
+    operations: out.operations
+      .filter((o): o is Record<string, unknown> => !!o && typeof o === 'object')
+      .map(normalizeLlmOp),
+  };
+}
+
+async function interpretWithApi(req: NlRequest): Promise<unknown> {
+  client ??= new Anthropic();
   const response = await client.beta.messages.create({
     model: model(),
     max_tokens: 16000,
@@ -45,7 +57,7 @@ export async function interpret(req: NlRequest): Promise<NlResponse> {
     fallbacks: 'default',
     system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
     output_config: { effort: effort(), format: { type: 'json_schema', schema: RESPONSE_SCHEMA } },
-    messages: [{ role: 'user', content }],
+    messages: [{ role: 'user', content: userContent(req) }],
   });
 
   if (response.stop_reason === 'refusal') {
@@ -58,22 +70,11 @@ export async function interpret(req: NlRequest): Promise<NlResponse> {
     .filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === 'text')
     .map((b) => b.text)
     .join('');
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    return JSON.parse(text);
   } catch {
     throw new HttpError(502, 'Claude yanıtı çözümlenemedi.');
   }
-  const out = parsed as { reply?: unknown; operations?: unknown };
-  if (typeof out.reply !== 'string' || !Array.isArray(out.operations)) {
-    throw new HttpError(502, 'Claude yanıtı beklenen biçimde değil.');
-  }
-  return {
-    reply: out.reply,
-    operations: out.operations
-      .filter((o): o is Record<string, unknown> => !!o && typeof o === 'object')
-      .map(normalizeLlmOp),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -112,19 +113,19 @@ function validate(body: unknown): NlRequest {
 export async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   try {
+    if (bridgeEnabled() && (await handleBridge(req, res, url.pathname))) return;
     if (req.method === 'GET' && url.pathname === '/api/status') {
-      return send(res, 200, { llm: llmConfigured(), model: model() });
+      const backend = llmBackend();
+      const status: LlmStatus = { llm: backend !== null, backend, model: model(), bridge: bridgeEnabled() };
+      return send(res, 200, status);
     }
     if (req.method === 'POST' && url.pathname === '/api/nl') {
-      if (!llmConfigured()) {
-        throw new HttpError(503, 'Claude kullanılamıyor: .env dosyasında ANTHROPIC_API_KEY ayarlı değil.');
-      }
       const out = await interpret(validate(await readJson(req, 2_000_000)));
       return send(res, 200, out);
     }
     throw new HttpError(404, 'Bulunamadı.');
   } catch (e) {
-    if (e instanceof HttpError) return send(res, e.status, { error: e.message });
+    if (e instanceof HttpError || e instanceof ClaudeCliError) return send(res, e.status, { error: e.message });
     console.error('[p3d] Claude isteği başarısız:', e);
     if (e instanceof Anthropic.AuthenticationError) return send(res, 401, { error: 'API anahtarı geçersiz.' });
     if (e instanceof Anthropic.PermissionDeniedError) return send(res, 403, { error: 'API anahtarının bu modele erişimi yok.' });

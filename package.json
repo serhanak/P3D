@@ -3,9 +3,11 @@
   "version": "1.0.0",
   "description": "Doğal dille 3D yazıcı parçası modelleme (MVP)",
   "scripts": {
-    "dev": "vite",
+    "dev": "tsx scripts/launch.ts dev",
+    "dev:claude": "tsx scripts/launch.ts dev --llm=claude-cli",
     "build": "tsc --noEmit && vite build",
-    "start": "tsx --env-file-if-exists=.env server/index.ts",
+    "start": "tsx --env-file-if-exists=.env scripts/launch.ts start",
+    "p3d": "tsx scripts/p3d.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

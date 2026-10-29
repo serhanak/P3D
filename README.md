@@ -22,17 +22,34 @@ npm test             # ayrıştırıcı, işlem motoru, OBJ ve proje dosyası te
 ### Claude modu (opsiyonel)
 
 Yerel ayrıştırıcı internet ve API anahtarı olmadan çalışır. Serbest anlatımlı komutlar
-(“4 ayaklı küçük bir masa yap”) için Claude'u açın:
+(“4 ayaklı küçük bir masa yap”) için Claude'u üç yoldan biriyle kullanabilirsiniz:
+
+| Yol | Ne zaman | Nasıl açılır |
+|---|---|---|
+| **API anahtarı** (`api`) | Sunucu kurulumu; uygulamayı başkalarına açıyorsanız tek seçenek | `.env` → `ANTHROPIC_API_KEY=...` ya da `npm start -- --llm=api` |
+| **Claude Code hesabı** (`claude-cli`) | Kendi bilgisayarınızda, kendi Claude Code hesabınızla denemeler | `npm run dev:claude` ya da `npm run dev -- --llm=claude-cli` |
+| **Terminalden Claude Code ile** (köprü) | Tasarımı Claude Code oturumunda sohbet ederek yapmak | `npm run dev` + Claude Code'a terminalde ne istediğinizi yazın |
+
+- **`claude-cli`**: sunucu her serbest komut için makinedeki `claude -p`'yi araçsız çalıştırır; istek o makinede
+  `claude` ile giriş yapmış kullanıcının hesabından gider (yanıt ~10 sn). Claude Code kurulu ve giriş yapılmış
+  olmalı. **Yalnızca kişisel kullanım içindir**: Claude.ai/Claude Code hesabı başkalarına sunulan bir hizmette
+  kullanılamaz; sunucu kurulumunda API anahtarı kullanın. `auto` modu bu yolu asla kendiliğinden seçmez.
+- **Köprü**: açık sekme sahnesini sunucuya bildirir; terminaldeki Claude Code `npm run -s p3d -- scene` ile
+  sahneyi okur, `npm run -s p3d -- ops` ile işlem gönderir. Değişiklikler sekmede canlı görünür, günlükte
+  “Claude Code” etiketiyle yazılır ve Ctrl+Z ile geri alınabilir. `npm run dev`'de açık, `npm start`'ta kapalıdır
+  (`--bridge` / `--no-bridge`).
+- API anahtarı yalnızca sunucuda kullanılır, tarayıcıya gönderilmez. İstekler `fallbacks: "default"` ile gider
+  (güvenlik sınıflandırıcısı reddederse önerilen yedek modelle tekrar denenir).
+- Komut kutusunun solundaki seçici: **Otomatik** (önce yerel, anlaşılmazsa Claude), **Yerel**, **Claude**.
+
+Açılış parametreleri (`.env`'deki değerlerin önüne geçer; `npm run dev -- --help`):
 
 ```bash
-cp .env.example .env     # ANTHROPIC_API_KEY=... yazın, sunucuyu yeniden başlatın
+npm run dev -- --llm=claude-cli          # auto | api | claude-cli | off
+npm run dev -- --no-bridge --port=5180
+npm start   -- --llm=api --host=127.0.0.1 --port=8080
+npm start   -- --model=claude-opus-5-5 --effort=low
 ```
-
-- Anahtar yalnızca sunucuda (Vite geliştirme sunucusu / `server/index.ts`) kullanılır, tarayıcıya gönderilmez.
-- Varsayılan model `claude-opus-5-5`, `P3D_MODEL` ve `P3D_EFFORT` (`low`…`max`) ile değiştirilebilir.
-- İstekler, güvenlik sınıflandırıcısı bir isteği reddederse sunucu tarafında önerilen yedek modelle
-  tekrar denensin diye `fallbacks: "default"` ile gönderilir.
-- Komut kutusunun solundaki seçici: **Otomatik** (önce yerel, anlaşılmazsa Claude), **Yerel**, **Claude**.
 
 ## Özellikler
 
@@ -83,7 +100,9 @@ src/shapes.ts        Şekil tanımları: parametreler, geometri, ölçü çizgil
 src/viewer.ts        three.js görünümü (etiketler CSS2DRenderer ile)
 src/io.ts            Proje dosyası doğrulama, OBJ/MTL ve ZIP dışa aktarım
 src/ui.ts, main.ts   Paneller, araç çubuğu, komut konsolu
-server/api.ts        /api/status, /api/nl → Claude (yapılandırılmış JSON çıktı)
+server/api.ts        /api/status, /api/nl → Claude (API ya da claude -p; yapılandırılmış JSON çıktı)
+server/bridge.ts     Claude Code köprüsü (/api/bridge) · scripts/p3d.ts köprü CLI'si
+scripts/launch.ts    npm run dev / npm start açılış parametreleri
 ```
 
 ## Bilinen sınırlamalar
@@ -91,7 +110,7 @@ server/api.ts        /api/status, /api/nl → Claude (yapılandırılmış JSON 
 - Boolean işlemler (delik açma, kesme) yok; basit delikler için boru şekli kullanılabilir.
 - Görünümde sürükleyerek taşıma (gizmo) yok; konum komutla ya da panelden girilir.
 - Pah/yuvarlatma, metin ve vida dişi yok; dışa aktarım yalnızca OBJ.
-- Claude modu gerçek API ile henüz uçtan uca denenmedi.
+- Claude modu API anahtarıyla henüz uçtan uca denenmedi (`claude-cli` yolu ve köprü denendi).
 
 Tam liste, doğrulama durumu ve yol haritası: [`docs/STATUS.md`](docs/STATUS.md).
 

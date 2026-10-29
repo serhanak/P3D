@@ -2,6 +2,7 @@ import './style.css';
 import type { Op } from '../shared/ops';
 import { sceneSummary, type ApplyResult } from './engine';
 import { exportModel, parseProject, projectToJson, download, safeFileName, type ExportKind } from './io';
+import { connectBridge } from './bridge';
 import { askClaude, fetchLlmStatus, type LlmStatus } from './nlp/llm';
 import { HELP_TEXT, parseCommand } from './nlp/parser';
 import { Store } from './store';
@@ -53,12 +54,15 @@ if (firstRun) {
 
 const log = $('log');
 
-function addLog(kind: 'user' | 'ok' | 'warn' | 'err' | 'info' | 'ai', text: string, badge?: 'Yerel' | 'Claude'): void {
+type Badge = 'Yerel' | 'Claude' | 'Claude Code';
+const BADGE_CLASS: Record<Badge, string> = { Yerel: 'local', Claude: '', 'Claude Code': 'cc' };
+
+function addLog(kind: 'user' | 'ok' | 'warn' | 'err' | 'info' | 'ai', text: string, badge?: Badge): void {
   const div = document.createElement('div');
   div.className = `entry ${kind}`;
   if (badge) {
     const b = document.createElement('span');
-    b.className = `badge ${badge === 'Yerel' ? 'local' : ''}`;
+    b.className = `badge ${BADGE_CLASS[badge]}`;
     b.textContent = badge;
     div.appendChild(b);
   }
@@ -78,7 +82,7 @@ function toast(text: string, error = false): void {
   toastTimer = window.setTimeout(() => t.classList.remove('show'), error ? 4000 : 2500);
 }
 
-function logResult(res: ApplyResult, badge?: 'Yerel' | 'Claude'): void {
+function logResult(res: ApplyResult, badge?: Badge): void {
   res.messages.forEach((m, i) => addLog('ok', '✓ ' + m, i === 0 ? badge : undefined));
   res.errors.forEach((m) => addLog('err', '✕ ' + m));
 }
@@ -111,7 +115,8 @@ viewer.fit(store.project);
 // ---------------------------------------------------------------------------
 // Komutlar
 
-let llm: LlmStatus = { llm: false, model: '' };
+let llm: LlmStatus = { llm: false, backend: null, model: '', bridge: false };
+const LLM_HINT = 'Serbest anlatımlı komutlar için Claude modunu açın: .env dosyasına ANTHROPIC_API_KEY ekleyin ya da sunucuyu "npm run dev -- --llm=claude-cli" ile başlatın (Claude Code hesabınızla).';
 const history: string[] = [];
 let historyPos = -1;
 const modeSelect = $<HTMLSelectElement>('cmd-mode');
@@ -140,14 +145,14 @@ async function runCommand(text: string): Promise<void> {
       parsed.errors.forEach((m) => addLog('warn', '⚠ ' + m));
       if (!fullyUnderstood) {
         addLog('warn', `⚠ Anlaşılamadı: “${parsed.unrecognized.join('”, “')}”. Örnekler için “yardım” yazın.`);
-        if (!llm.llm) addLog('info', 'Serbest anlatımlı komutlar için Claude modunu açın: .env dosyasına ANTHROPIC_API_KEY ekleyip sunucuyu yeniden başlatın.');
+        if (!llm.llm) addLog('info', LLM_HINT);
       }
       return;
     }
   }
 
   if (!llm.llm) {
-    addLog('err', '✕ Claude kullanılamıyor: .env dosyasında ANTHROPIC_API_KEY ayarlı değil.');
+    addLog('err', '✕ Claude kullanılamıyor. ' + LLM_HINT);
     return;
   }
   form.classList.add('busy');
@@ -194,14 +199,40 @@ function updateLlmStatus(): void {
   const claudeOpt = modeSelect.querySelector<HTMLOptionElement>('option[value="claude"]')!;
   claudeOpt.disabled = !llm.llm;
   if (!llm.llm && modeSelect.value === 'claude') modeSelect.value = 'auto';
+  const via = llm.backend === 'claude-cli' ? 'Claude Code hesabı' : 'API';
   el.innerHTML = llm.llm
-    ? `<span class="dot on"></span>Claude hazır (${llm.model}). Otomatik mod: yerel ayrıştırıcının anlamadığı komutlar Claude'a gider.`
-    : `<span class="dot"></span>Claude kapalı — yalnızca yerel Türkçe ayrıştırıcı. Etkinleştirmek için .env'ye ANTHROPIC_API_KEY ekleyin.`;
+    ? `<span class="dot on"></span>Claude hazır (${via}, ${llm.model}). Otomatik mod: yerel ayrıştırıcının anlamadığı komutlar Claude'a gider.`
+    : `<span class="dot"></span>Claude kapalı — yalnızca yerel Türkçe ayrıştırıcı. Etkinleştirmek için README → “Claude modu”.`;
 }
 updateLlmStatus();
 void fetchLlmStatus().then((s) => {
   llm = s;
   updateLlmStatus();
+  if (s.bridge) startBridge();
+});
+
+// Terminaldeki Claude Code oturumu sahneyi okuyup işlem gönderebilir (server/bridge.ts).
+const startBridge = () => connectBridge(store, {
+  onConnected: () => addLog('info', 'Claude Code köprüsü bağlı: terminalden gelen komutlar burada uygulanır.'),
+  onApplied: (res, label) => {
+    if (label) addLog('user', label, 'Claude Code');
+    logResult(res, label ? undefined : 'Claude Code');
+    if (!res.messages.length && !res.errors.length) addLog('info', 'Değişiklik yok.');
+  },
+  onAction: (action, label) => {
+    if (label) addLog('user', label, 'Claude Code');
+    const res: ApplyResult = { messages: [], errors: [], lastPartId: null, clearSelection: false };
+    if (action === 'fit') {
+      viewer.fit(store.project);
+      res.messages.push('Görünüm sığdırıldı.');
+    } else if (action === 'undo' ? store.undo() : store.redo()) {
+      res.messages.push(action === 'undo' ? 'Geri alındı.' : 'Yinelendi.');
+    } else {
+      res.errors.push(action === 'undo' ? 'Geri alınacak bir şey yok.' : 'Yinelenecek bir şey yok.');
+    }
+    logResult(res);
+    return res;
+  },
 });
 
 addLog(

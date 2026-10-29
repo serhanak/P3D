@@ -1,17 +1,16 @@
-import type { NlRequest, NlResponse } from '../../shared/ops';
+import type { LlmStatus, NlRequest, NlResponse } from '../../shared/ops';
 
-export interface LlmStatus {
-  llm: boolean;
-  model: string;
-}
+export type { LlmStatus };
+
+const OFF: LlmStatus = { llm: false, backend: null, model: '', bridge: false };
 
 export async function fetchLlmStatus(): Promise<LlmStatus> {
   try {
     const r = await fetch('/api/status');
-    if (!r.ok) return { llm: false, model: '' };
-    return (await r.json()) as LlmStatus;
+    if (!r.ok) return OFF;
+    return { ...OFF, ...((await r.json()) as Partial<LlmStatus>) };
   } catch {
-    return { llm: false, model: '' };
+    return OFF;
   }
 }
 
