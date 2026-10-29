@@ -8,7 +8,8 @@ Parçalar renkli ve isimlidir, ölçüler 3B görünümde gösterilir, proje kay
 
 ```bash
 npm install
-npm run dev          # http://localhost:5173
+npm run dev          # http://localhost:5173 (yalnızca yerel ayrıştırıcı; API anahtarı varsa Claude da açık)
+npm run dev:claude   # aynısı, serbest komutlar bu bilgisayardaki Claude Code hesabınızla (bkz. Claude modu)
 ```
 
 Üretim derlemesi:
@@ -26,7 +27,7 @@ Yerel ayrıştırıcı internet ve API anahtarı olmadan çalışır. Serbest an
 
 | Yol | Ne zaman | Nasıl açılır |
 |---|---|---|
-| **API anahtarı** (`api`) | Sunucu kurulumu; uygulamayı başkalarına açıyorsanız tek seçenek | `.env` → `ANTHROPIC_API_KEY=...` ya da `npm start -- --llm=api` |
+| **API anahtarı** (`api`) | Sunucu kurulumu; uygulamayı başkalarına açıyorsanız tek seçenek | `cp .env.example .env`, içine `ANTHROPIC_API_KEY=...` yazın, sunucuyu yeniden başlatın (`npm start -- --llm=api` anahtar yoksa uyarır) |
 | **Claude Code hesabı** (`claude-cli`) | Kendi bilgisayarınızda, kendi Claude Code hesabınızla denemeler | `npm run dev:claude` ya da `npm run dev -- --llm=claude-cli` |
 | **Terminalden Claude Code ile** (köprü) | Tasarımı Claude Code oturumunda sohbet ederek yapmak | `npm run dev` + Claude Code'a terminalde ne istediğinizi yazın |
 
