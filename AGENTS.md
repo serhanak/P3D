@@ -30,7 +30,11 @@ npm run build      # typecheck + vite build → dist/
 npm start          # üretim: dist/ + /api → http://127.0.0.1:8080 (köprü kapalı)
 npm run -s p3d -- scene | ops | undo | redo | fit   # Claude Code köprüsü (aşağıya bakın)
 npm run -s p3d -- snapshot | measure | section | import   # görüntü, ölçüm, kesit, ağ içe aktarma
+npm link           # bir kez: global `p3d` komutu; başka klasörlerden `p3d scene` …, göreli yollar o klasöre göre
 ```
+
+Başka projelerden kullanım (çalışma alanları, tarayıcısız çekirdek, skill, oyun) tasarımı ve adımları:
+[`docs/EXTERNAL-USE.md`](docs/EXTERNAL-USE.md). Tüketiciler P3D'ye yalnızca `p3d` komutu ve `p3d` paket adıyla erişir.
 
 `dev` ve `start` `scripts/launch.ts` üzerinden çalışır; açılış parametreleri ortam değişkenlerine çevrilir
 (parametre > ortam > `.env`): `--llm=auto|api|claude-cli|off` (`P3D_LLM`), `--bridge` / `--no-bridge`
@@ -146,14 +150,17 @@ server/bridge.ts     Claude Code köprüsü sunucu tarafı (SSE, sahne deposu, s
 src/bridge.ts        Köprünün tarayıcı tarafı (sahneyi bildirir, gelen işlemleri store.apply ile uygular)
 scripts/launch.ts    npm run dev / npm start başlatıcısı: açılış parametreleri → ortam değişkenleri
 scripts/p3d.ts       Köprü CLI'si (npm run p3d)
+bin/p3d.mjs          Global `p3d` komutu (npm link): scripts/p3d.ts'yi çağıranın klasöründe tsx ile çalıştırır
 server/prompt.ts     Claude sistem talimatı (sabit metin — önbelleklenir)
 server/index.ts      Üretim HTTP sunucusu (dist/ statik + /api)
 vite.config.ts       .env → process.env aktarımı, /api ara katmanı
 tests/               parser.test.ts (ayrıştırıcı+motor), io.test.ts (OBJ manifold, proje dosyası, examples/),
-                     geom.test.ts (extrude/revolve/loft, delik, roller, kesit, STL/3MF/OBJ içe-dışa aktarma)
+                     geom.test.ts (extrude/revolve/loft, delik, roller, kesit, STL/3MF/OBJ içe-dışa aktarma),
+                     cli.test.ts (global `p3d` komutu başka klasörden, göreli yollar)
 examples/            Örnek .p3d.json projeleri (Aç… ile yüklenir); io.test.ts hepsinin onarımsız yüklendiğini doğrular
 examples/tools/      Örnek üreteçleri (tsx ile çalışır, tsconfig dışı): build-3dbenchy.ts referans STL'den Benchy'yi kurar
 docs/STATUS.md       Güncel durum, doğrulama durumu, bilinen sorunlar, yol haritası
+docs/EXTERNAL-USE.md P3D'yi başka projelerden kullanma tasarımı: kararlar, belirsizlik protokolü, oyun, adımlar
 .claude/agents/      Claude Code alt ajanları (ölçüm, uygulama, doğrulama, inceleme); kullanım: CLAUDE.md
 ```
 

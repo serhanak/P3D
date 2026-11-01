@@ -1,11 +1,12 @@
 # Proje durumu
 
-> Son güncelleme: **2026-10-29** — v0.3: tekne (`hull`) şekli, çerçeve, yüzeye oturtma, delik hedefi, birleştirme, `check`,
-> indisli dışa aktarım; 3DBenchy örneği yalnızca uygulamanın kendi şekilleriyle.
+> Son güncelleme: **2026-11-01** — başka projelerden kullanım planı ([`EXTERNAL-USE.md`](EXTERNAL-USE.md)); adım 1:
+> global `p3d` komutu. Önceki: v0.3 (2026-10-29) tekne (`hull`) şekli, çerçeve, yüzeye oturtma, delik hedefi,
+> birleştirme, `check`, indisli dışa aktarım; 3DBenchy örneği yalnızca uygulamanın kendi şekilleriyle.
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (67 test, ~10 sn) — hepsi temiz olmalı.
+1. `npm install` · `npm run typecheck` · `npm test` (69 test, ~10 sn) — hepsi temiz olmalı.
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `npm run -s p3d -- scene` ile bağlantıyı doğrulayın (409 = sekme bağlı
    değil → kullanıcıdan F5 isteyin). Kullanıcı sahnede değişiklik yapılmasına izin verdi ve ilerlemeyi orada izlemeyi seviyor.
@@ -57,6 +58,9 @@
   sadeleştirme), `sliceMany` (bir ağda çok kesit, tek dönüşüm). İçe aktarma sadeleştirmesi `Regularize` ile.
   Testler her örneğin onarımsız yüklendiğini ve kapalı ağ olarak dışa aktarıldığını doğrular.
 - **Başlatıcı** (`scripts/launch.ts`): `npm run dev|start -- --llm --bridge --port --host --model --effort --claude-bin`.
+- **Global `p3d` komutu** (`bin/p3d.mjs`, depoda bir kez `npm link`): başka klasörlerdeki oturumlar `p3d scene` …
+  çalıştırır; göreli yollar (`import`, `--out`, `--file`) komutun yazıldığı klasöre göre (`npm run p3d` altında `INIT_CWD`).
+  `tsx` artık çalışma zamanı bağımlılığı. Başka projelerden kullanım planının 1. adımı ([`EXTERNAL-USE.md`](EXTERNAL-USE.md)).
 - **Görünüm:** Z-yukarı tabla ızgarası (10/50 mm), eksen göstergesi, renkli parçalar, kenar çizgileri,
   isim etiketleri (aç/kapa), ölçü çizgileri + etiketleri (aç/kapa), tıklayarak seçim, görünüm ön ayarları
   (İzo/Üst/Ön/Sağ), sığdır.
@@ -83,6 +87,7 @@
 | Arayüz | ✅ Chrome'da elle denendi: komutlar, panelden düzenleme, geri al, isim/ölçü anahtarları, dışa aktarma menüsü, otomatik kayıttan geri yükleme; konsolda hata yok |
 | Claude isteği — `api` | ⚠️ Yalnızca **sahte (mock) API** ile doğrulandı: istek biçimi (model, `fallbacks`, beta başlığı, `output_config`, şema) ve yanıt işleme. **Gerçek API anahtarıyla hiç denenmedi.** |
 | Claude isteği — `claude-cli` | ✅ Gerçek `claude -p` (Claude Code 2.1.312, Windows) ile `/api/nl` uçtan uca: "tabanın dört köşesine … ayaklar koy" → doğru 5 işlem, ~9,4 sn. Tarayıcı arayüzünden (Claude modu seçiciyle) denenmedi; giriş yapılmamış/`claude` bulunamadı hata mesajları denenmedi |
+| Global `p3d` komutu | ✅ 2 test (`tests/cli.test.ts`: başka klasörden göreli `--file`, `npm run p3d` altında `INIT_CWD`). Elle: `npm link` sonrası Git Bash ve PowerShell'de başka klasörden `section --file` ve çalışan sunucuya `scene`; ayrı bir klasörde `npm link p3d` ile `p3d/src/*.ts` içe aktarılıp (P3D'nin tsx'iyle) `applyOps` + `initCsg` + `checkProject` çalıştı |
 | Claude Code köprüsü | ✅ Gerçek tarayıcı sekmesiyle: `ops` (oluşturma, üstüne koyma, renk), hatalı işlem → çıkış kodu 1, `undo`, `scene`; `text/plain` ile yazma reddi; geçersiz girdi. Birden çok sekme davranışı denenmedi |
 | Başlatıcı / ayarlar | ✅ `start --llm=api` anahtarsız → uyarı + Claude kapalı, köprü 404; `start --llm=claude-cli --bridge`; bilinmeyen parametre → kullanım metni; `dev:claude` |
 | Dışa aktarılan dosyalar | ⚠️ İçerik testlerle doğrulandı (STL/3MF/OBJ okunup aynı üçgen sayısı); tarayıcıdan gerçek indirme ve dilimleyicide (PrusaSlicer/Cura/Bambu/Orca) açma **denenmedi** — özellikle 3MF renkleri |
@@ -145,6 +150,10 @@
 - İçe aktarılan büyük ağ (≈1–2 MB base64) sahneyle birlikte sunucuya bir kez gönderilir; çok sayıda büyük ağda
   yavaşlayabilir.
 - Windows'ta arka planda başlatılan `npm run dev` durdurulunca alt node süreci açık kalabilir (port meşgul).
+- Global `p3d` komutu `npm link` ile **geliştirme klasörünü** gösterir: P3D'de yarım kalan bir değişiklik başka
+  projelerdeki oturumları da etkiler (kararlı kurulum ayrımı ertelendi; tetikleyici: EXTERNAL-USE.md → Kararlar).
+- Başka projelerin betikleri P3D'yi henüz iç modül yollarıyla (`p3d/src/*.ts`) alıyor ve çalıştırmak için P3D'nin
+  tsx'ini kullanmalı; kararlı `src/api.ts` + `exports` 3. adımda. Sahnenin eski/başka sekmeden gelmesi tuzağı 2. adımda.
 
 **Uygulama**
 - Geri-al geçmişi ve seçim sayfa yenilenince sıfırlanır (proje otomatik kayıttan gelir).
@@ -155,6 +164,9 @@
 
 ## Yol haritası (öncelik sırasıyla)
 
+0. **Başka projelerden kullanım** (VibroBal, yarış oyunu): [`EXTERNAL-USE.md`](EXTERNAL-USE.md) → Adımlar. Sıradaki:
+   2. adım (sahne revizyonu, bağlı sekme yokken hata), sonra tarayıcısız çekirdek (`src/api.ts`, `--file` komutları).
+   Oyun için gruplama/pivot (2) ve ayna/dizi (7) öne çekilecek.
 1. **Dışa aktarım ve arayüz doğrulaması:** 3MF/STL'yi Bambu/Prusa/Orca'da açıp renk ve ölçek kontrolü;
    v0.2 arayüz öğelerini tarayıcıda elle deneme.
 2. **Gruplama ve ekranda birleşim:** ebeveyn-çocuk (üstteki parça alttakini takip etsin); grup içi union'ı ekranda da

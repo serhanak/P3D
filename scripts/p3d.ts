@@ -1,18 +1,19 @@
 // Claude Code köprüsü için komut satırı aracı (bkz. server/bridge.ts). Açık tarayıcı sayfasının sahnesini
 // okur, ona işlem gönderir, görüntüsünü alır; ölçüm ve kesitleri uygulamanın aynı motoruyla Node'da hesaplar.
 // Geliştirme sunucusu (npm run dev) ve uygulama sekmesi açık olmalıdır (section --file hariç).
+// Depo içinde `npm run -s p3d -- <komut>`, başka klasörlerde global `p3d <komut>` (depoda bir kez `npm link`).
 //
-//   npm run -s p3d -- scene [--full]                 sahne özeti (--full: tüm proje JSON'u)
-//   npm run -s p3d -- ops [--label "metin"]          stdin'den Op[] JSON'u (ya da {"ops": [...]}) uygular
-//   npm run -s p3d -- undo | redo | fit
-//   npm run -s p3d -- snapshot [--views iso,front,right,top] [--size 1000x750] [--dims] [--out klasör]
-//   npm run -s p3d -- import <dosya.stl|obj|3mf> [--name ad] [--role solid|hole|reference] [--color #hex]
-//                           [--max-tris 60000] [--keep-position]
-//   npm run -s p3d -- measure [--parts a,b]
-//   npm run -s p3d -- check                         z-fighting, boolean hataları, ince parça, tabla teması
-//   npm run -s p3d -- section --axis x|y|z --at v1,v2,… [--parts a,b] [--file dosya.stl] [--tol 0.1]
+//   p3d scene [--full]                 sahne özeti (--full: tüm proje JSON'u)
+//   p3d ops [--label "metin"]          stdin'den Op[] JSON'u (ya da {"ops": [...]}) uygular
+//   p3d undo | redo | fit
+//   p3d snapshot [--views iso,front,right,top] [--size 1000x750] [--dims] [--out klasör]
+//   p3d import <dosya.stl|obj|3mf> [--name ad] [--role solid|hole|reference] [--color #hex]
+//              [--max-tris 60000] [--keep-position]
+//   p3d measure [--parts a,b]
+//   p3d check                         z-fighting, boolean hataları, ince parça, tabla teması
+//   p3d section --axis x|y|z --at v1,v2,… [--parts a,b] [--file dosya.stl] [--tol 0.1]
 //
-// Adres: P3D_URL (varsayılan http://localhost:5173).
+// Adres: P3D_URL (varsayılan http://localhost:5173). Göreli dosya yolları komutun yazıldığı klasöre göre çözülür.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -20,6 +21,11 @@ import type { BridgeResult, Op, Pt2, SceneSummary, SceneSummaryPart, SnapshotVie
 
 const base = (process.env.P3D_URL || 'http://localhost:5173').replace(/\/$/, '');
 const [cmd, ...rest] = process.argv.slice(2);
+
+// `npm run p3d` çalışma klasörünü depo köküne çevirir; komutun yazıldığı klasör INIT_CWD'dedir.
+// Global `p3d` komutu (bin/p3d.mjs) zaten çağıranın klasöründe çalışır.
+const callerDir = process.env.npm_lifecycle_event === 'p3d' && process.env.INIT_CWD ? process.env.INIT_CWD : process.cwd();
+const fromCaller = (file: string) => path.resolve(callerDir, file);
 
 function flag(name: string): string | undefined {
   const i = rest.indexOf(name);
@@ -149,7 +155,7 @@ async function main(): Promise<void> {
       const [w, h] = (flag('--size') ?? '1000x750').split('x').map(Number);
       const views = (list('--views') ?? ['iso', 'front', 'right', 'top']) as SnapshotView[];
       const r = (await call('POST', '/api/bridge/ops', { action: 'snapshot', snapshot: { views, width: w, height: h, dims: has('--dims') } })) as BridgeResult;
-      const out = path.resolve(flag('--out') ?? path.join(tmpdir(), 'p3d-snapshots'));
+      const out = fromCaller(flag('--out') ?? path.join(tmpdir(), 'p3d-snapshots'));
       mkdirSync(out, { recursive: true });
       for (const img of r.images ?? []) {
         const file = path.join(out, `${img.view}.png`);
@@ -168,8 +174,8 @@ async function main(): Promise<void> {
       return;
     }
     case 'import': {
-      const file = rest[0];
-      if (!file || file.startsWith('--')) throw new Error('Dosya yolu gerekli: import <dosya.stl|obj|3mf>');
+      if (!rest[0] || rest[0].startsWith('--')) throw new Error('Dosya yolu gerekli: import <dosya.stl|obj|3mf>');
+      const file = fromCaller(rest[0]);
       const { meshAssetFromSoup, parseMeshFile } = await import('../src/meshio.ts');
       const buf = readFileSync(file);
       const name = flag('--name') ?? path.basename(file).replace(/\.[^.]+$/, '');
@@ -225,7 +231,7 @@ async function main(): Promise<void> {
           }
         }
       };
-      const fileArg = flag('--file');
+      const fileArg = flag('--file') && fromCaller(flag('--file')!);
       if (cmd === 'section' && fileArg) {
         const { parseMeshFile } = await import('../src/meshio.ts');
         const buf = readFileSync(fileArg);
@@ -291,7 +297,7 @@ async function main(): Promise<void> {
     default:
       console.log(
         [
-          'Kullanım: npm run -s p3d -- <komut>',
+          'Kullanım: p3d <komut>   (depo içinde: npm run -s p3d -- <komut>)',
           '  scene [--full] · ops [--label "metin"] < ops.json · undo · redo · fit',
           '  snapshot [--views iso,front,back,left,right,top,bottom] [--size 1000x750] [--dims] [--out klasör]',
           '  import <dosya.stl|obj|3mf> [--name ad] [--role solid|hole|reference] [--color #hex] [--max-tris N] [--keep-position]',
