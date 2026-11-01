@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { ROLES, isGeomShape, type Axis, type Op, type ParamChange, type Role, type SceneSummary, type Side, type Vec3 } from '../shared/ops';
-import { getAsset, registerAsset } from './assets';
+import { ROLES, isGeomShape, type Axis, type GroupDef, type Op, type ParamChange, type Pt2, type Role, type SceneSummary, type Side, type Vec3 } from '../shared/ops';
+import { decodedAsset, getAsset, makeAsset, newAssetId, registerAsset } from './assets';
 import { resolveColor } from './colors';
 import { GeomError, defaultGeom, describeGeom, geometryVolume, sanitizeGeom } from './geom';
 import { PALETTE, SHAPE_DEFS, buildGeometry, defaultParams, fmt, sanitizeParams, type DimWord, type Params } from './shapes';
@@ -84,7 +84,8 @@ export interface RefContext {
   lastPartId: string | null;
 }
 
-export function findPart(project: Project, ref: string | undefined, ctx: RefContext): Part | undefined {
+/** Kesin eşleşme: `$last` / `$selected`, kimlik ya da tam ad (büyük/küçük harf ve aksan duyarsız). */
+export function findPartExact(project: Project, ref: string | undefined, ctx: RefContext): Part | undefined {
   if (!ref) return undefined;
   const byId = (id: string | null) => (id ? project.parts.find((p) => p.id === id) : undefined);
   if (ref === '$last') return byId(ctx.lastPartId);
@@ -93,7 +94,14 @@ export function findPart(project: Project, ref: string | undefined, ctx: RefCont
   if (direct) return direct;
   const f = fold(ref).trim();
   const exact = project.parts.filter((p) => fold(p.name).trim() === f);
-  if (exact.length) return exact[exact.length - 1];
+  return exact.length ? exact[exact.length - 1] : undefined;
+}
+
+export function findPart(project: Project, ref: string | undefined, ctx: RefContext): Part | undefined {
+  if (!ref) return undefined;
+  const exact = findPartExact(project, ref, ctx);
+  if (exact || ref === '$last' || ref === '$selected') return exact;
+  const f = fold(ref).trim();
   const prefix = project.parts.filter((p) => fold(p.name).startsWith(f));
   if (prefix.length === 1) return prefix[0];
   const contains = project.parts.filter((p) => fold(p.name).includes(f));
@@ -124,6 +132,44 @@ function defaultName(project: Project, label: string): string {
 
 export function newId(): string {
   return 'p_' + Math.random().toString(36).slice(2, 10);
+}
+
+// ---------------------------------------------------------------------------
+// Gruplar
+
+/** Grubu adıyla bulur (büyük/küçük harf ve aksan duyarsız, tam ad). */
+export function findGroup(project: Project, ref: string | undefined): GroupDef | undefined {
+  if (!ref || !project.groups) return undefined;
+  const f = fold(ref).trim();
+  return project.groups.find((g) => fold(g.name).trim() === f);
+}
+
+export function groupMembers(project: Project, name: string): Part[] {
+  return project.parts.filter((p) => p.group === name);
+}
+
+/** Ne bir grubun ne de bir parçanın kullandığı ad. */
+function uniqueGroupName(project: Project, base: string): string {
+  const taken = (n: string) => !!findGroup(project, n) || nameTaken(project, n);
+  const clean = base.trim();
+  if (!taken(clean)) return clean;
+  for (let n = 2; ; n++) if (!taken(`${clean} ${n}`)) return `${clean} ${n}`;
+}
+
+/** Üyesi kalmayan grupları ve var olmayan gruba işaret eden üyelikleri temizler; grup kalmazsa alan silinir. */
+function pruneGroups(project: Project): void {
+  if (project.groups) {
+    project.groups = project.groups.filter((g) => project.parts.some((p) => p.group === g.name));
+    if (!project.groups.length) delete project.groups;
+  }
+  const names = new Set(project.groups?.map((g) => g.name));
+  for (const p of project.parts) if (p.group !== undefined && !names.has(p.group)) delete p.group;
+}
+
+/** Kopya/ayna grubunda üye adı: yeni grup adı açıkça verildiyse ve üye adı eski grup adıyla başlıyorsa önek değişir. */
+function memberName(name: string, oldGroup: string, newGroup: string, explicit: boolean, suffix: string): string {
+  if (explicit && name.startsWith(oldGroup) && newGroup !== oldGroup) return newGroup + name.slice(oldGroup.length);
+  return `${name} ${suffix}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -227,7 +273,132 @@ function anchored(part: Part, seg: number, mutate: () => void): void {
 }
 
 function round(n: number): number {
-  return Number(n.toFixed(3));
+  return Number(n.toFixed(3)) + 0; // + 0: -0 yerine 0
+}
+
+const roundVec = (v: Vec3 | THREE.Vector3): Vec3 => ({ x: round(v.x), y: round(v.y), z: round(v.z) });
+
+const AXIS_VEC: Record<Axis, THREE.Vector3> = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
+
+const eulerQuat = (r: Vec3) => new THREE.Quaternion().setFromEuler(new THREE.Euler(r.x * DEG, r.y * DEG, r.z * DEG, 'XYZ'));
+
+function setRotationFrom(part: Part, e: THREE.Euler): void {
+  part.rotation = { x: normAngle(e.x / DEG), y: normAngle(e.y / DEG), z: normAngle(e.z / DEG) };
+}
+
+/** Parçayı `pivot` etrafında `q` kadar döndürür: konum ve döndürme birlikte (grup döndürme). */
+function rotateAbout(part: Part, q: THREE.Quaternion, pivot: Vec3): void {
+  const pv = new THREE.Vector3(pivot.x, pivot.y, pivot.z);
+  const pos = new THREE.Vector3(part.position.x, part.position.y, part.position.z).sub(pv).applyQuaternion(q).add(pv);
+  setRotationFrom(part, new THREE.Euler().setFromQuaternion(q.clone().multiply(eulerQuat(part.rotation)), 'XYZ'));
+  part.position = roundVec(pos);
+}
+
+// ---------------------------------------------------------------------------
+// Ayna: dünya yansıması M, parça döndürmesi R, yerel yansıma L (det −1) → R' = M·R·L (öz döndürme), p' = M(p), G' = L·G.
+
+const neg = (v: number) => (v === 0 ? 0 : -v);
+const reflectMatrix = (a: Axis) => new THREE.Matrix4().makeScale(a === 'x' ? -1 : 1, a === 'y' ? -1 : 1, a === 'z' ? -1 : 1);
+
+export function mirrorVec(v: Vec3, plane: Axis, at: number): Vec3 {
+  return roundVec({ ...v, [plane]: 2 * at - v[plane] });
+}
+
+/** extrude/loft/revolve kanonik eksenlerinin yereldeki karşılığı: profil [u, v], eksen w (bkz. geom.ts → mapAxis). */
+const U_AXIS = (axis: Axis): Axis => (axis === 'x' ? 'y' : 'x');
+const V_AXIS = (axis: Axis): Axis => (axis === 'z' ? 'y' : 'z');
+
+/** Kapalı çokgeni u'da (k = 0) ya da v'de (k = 1) aynalar; sıra ters çevrilir ki yön (ve son→ilk kenar) korunsun. */
+const mirrorLoop = (pts: Pt2[], k: 0 | 1): Pt2[] => pts.map(([u, v]) => (k === 0 ? [neg(u), v] : [u, neg(v)]) as Pt2).reverse();
+
+/** Aynalanmış ağ varlığı (bir koordinat negatif, sarım ters). Aynanın aynası asıl ağdır; aynı ayna bir kez üretilir. */
+function mirroredAsset(id: string, axis: Axis): string {
+  const suffix = `_m${axis}`;
+  const back = id.endsWith(suffix) ? id.slice(0, -suffix.length) : '';
+  if (back && getAsset(back)) return back;
+  const mid = id.length + suffix.length <= 40 ? id + suffix : newAssetId();
+  if (getAsset(mid)) return mid;
+  const src = decodedAsset(id);
+  const meta = getAsset(id);
+  if (!src || !meta) throw new OpError('ağ verisi yüklü değil (yer tutucu küp); aynalanamaz.');
+  const k = { x: 0, y: 1, z: 2 }[axis];
+  const pos = src.positions.slice();
+  for (let i = k; i < pos.length; i += 3) pos[i] = -pos[i];
+  const idx = src.indices.slice();
+  for (let i = 0; i < idx.length; i += 3) [idx[i + 1], idx[i + 2]] = [idx[i + 2], idx[i + 1]];
+  registerAsset(makeAsset(`${meta.name} ayna`, pos, idx, mid));
+  return mid;
+}
+
+/**
+ * Yerel yansıma (L) adayları, tercih sırasıyla: geometrinin bu eksende simetrik olduğu (G' = G) ya da geometrisi
+ * aynalanabilen (extrude/loft profili, mesh ağı) eksenler. Yalnızca her çözünürlükte (tek segment sayısı dahil) geçerli
+ * simetriler: silindir/koni/prizma köşeleri x → −x'e göre simetrik (prizmada ilk kenar −Y'de düz), küre (kutuplar yerel
+ * y'de) ve torus y → −y ile z → −z'ye göre; x yansıması onlarda yalnızca çift segmentte geçerli olduğundan aday değil.
+ */
+function mirrorAxes(part: Part): Axis[] {
+  const g = part.geom;
+  switch (part.shape) {
+    case 'box':
+    case 'tube': // yay noktası sayısı her zaman çift
+      return ['x', 'y', 'z'];
+    case 'cylinder':
+    case 'prism':
+      return ['x', 'z'];
+    case 'cone':
+      return ['x'];
+    case 'sphere':
+    case 'torus':
+      return ['y', 'z'];
+    case 'hull':
+      return ['y'];
+    case 'mesh':
+      return ['x', 'y', 'z'];
+    case 'revolve': // döndürme ekseninin içinden geçen düzlem
+      return g?.kind === 'revolve' ? [V_AXIS(g.axis)] : [];
+    case 'extrude': // eksen boyunca merkezli (w simetrik) ya da profil aynalanır
+      return g?.kind === 'extrude' ? [g.axis, U_AXIS(g.axis), V_AXIS(g.axis)] : [];
+    case 'loft': // kesitler u'da aynalanır (alttan başlama düzeni v'ye bağlı olduğundan v değil)
+      return g?.kind === 'loft' ? [U_AXIS(g.axis)] : [];
+  }
+}
+
+/** Geometriyi yerel `axis` yansımasıyla değiştirir (G' = L·G); simetrik eksende değişiklik yok. */
+function mirrorGeom(part: Part, axis: Axis): void {
+  const g = part.geom;
+  if (g?.kind === 'extrude' && axis !== g.axis) {
+    const k = axis === U_AXIS(g.axis) ? 0 : 1;
+    g.profile = mirrorLoop(g.profile, k);
+    if (g.holes) g.holes = g.holes.map((h) => mirrorLoop(h, k));
+  } else if (g?.kind === 'loft') {
+    // Başlangıç noktası korunur (kesitler arası eşleşme ve "alttan başla" düzeni): [p0, p(n−1), …, p1].
+    g.sections = g.sections.map((s) => {
+      const m = s.points.map(([u, v]) => [neg(u), v] as Pt2);
+      return { ...s, points: m.length === 1 ? m : [m[0], ...m.slice(1).reverse()] };
+    });
+    if (g.sharp) {
+      const n = g.sections.find((s) => s.points.length > 1)!.points.length;
+      g.sharp = g.sharp.map((k) => (n - k) % n).sort((a, b) => a - b);
+    }
+  } else if (g?.kind === 'mesh') {
+    part.geom = { kind: 'mesh', asset: mirroredAsset(g.asset, axis) };
+  }
+}
+
+/**
+ * Parçayı (yerinde) dünya düzlemine göre aynalar: `plane` eksenine dik, `at` konumundaki düzlem. L, aday eksenlerden
+ * düzlem normaline (yerelde) en yakın olanıdır: döndürülmemiş parçada L = M ve döndürme değişmez.
+ */
+function mirrorPart(part: Part, plane: Axis, at: number): void {
+  const axes = mirrorAxes(part);
+  if (!axes.length) throw new OpError(`${SHAPE_DEFS[part.shape].label} '${part.name}' aynalanamaz (geometri eksik).`);
+  const R = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(part.rotation.x * DEG, part.rotation.y * DEG, part.rotation.z * DEG, 'XYZ'));
+  const nl = AXIS_VEC[plane].clone().transformDirection(R.clone().transpose());
+  const L = axes.reduce((best, a) => (Math.abs(nl[a]) > Math.abs(nl[best]) + 1e-9 ? a : best), axes[0]);
+  mirrorGeom(part, L);
+  const Rn = reflectMatrix(plane).multiply(R).multiply(reflectMatrix(L));
+  setRotationFrom(part, new THREE.Euler().setFromRotationMatrix(Rn, 'XYZ'));
+  part.position = mirrorVec(part.position, plane, at);
 }
 
 function translate(part: Part, dx: number, dy: number, dz: number): void {
@@ -334,16 +505,58 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
   const ctx: RefContext = { selectedId, lastPartId: null };
 
   const must = (ref: string | undefined): Part => {
-    const p = findPart(project, ref, ctx);
+    // Tam ad önce parçada, sonra grupta aranır; ancak ikisi de yoksa kısmi ad eşleşmesine bakılır.
+    const p = findPartExact(project, ref, ctx) ?? (findGroup(project, ref) ? undefined : findPart(project, ref, ctx));
     if (!p) {
       if (!ref || ref === '$selected') throw new OpError('Hangi parça? Bir parça adı yazın ya da listeden seçin.');
+      const g = findGroup(project, ref);
+      if (g) {
+        throw new OpError(
+          `'${g.name}' bir grup; bu işlem gruplara uygulanmaz (gruplarda: move, rotate, duplicate, mirror, delete, update ile renk/görünürlük).`,
+        );
+      }
       throw new OpError(`'${ref}' adında parça bulunamadı.`);
     }
     return p;
   };
-  const touch = (p: Part) => {
+  /** Parça ya da (o adda parça yoksa) grup. */
+  const target = (ref: string | undefined): { part: Part; group?: undefined; members?: undefined } | { part?: undefined; group: GroupDef; members: Part[] } => {
+    const exact = findPartExact(project, ref, ctx);
+    if (exact) return { part: exact };
+    const g = findGroup(project, ref);
+    if (g) return { group: g, members: groupMembers(project, g.name) };
+    return { part: must(ref) };
+  };
+  const touch = (p: Part | undefined) => {
+    if (!p) return;
     ctx.lastPartId = p.id;
     res.lastPartId = p.id;
+  };
+  const names = (parts: Part[]) => parts.map((p) => `'${p.name}'`).join(', ');
+  /**
+   * Grubu yeni adla kopyalar: üyeler klonlanır, `xform` her kopyaya uygulanır (hata verirse proje değişmez), delik
+   * hedefleri (cuts) grup içindeyse kopyalara yönlenir. Dönen: yeni grup.
+   */
+  const cloneGroup = (src: GroupDef, members: Part[], base: string, explicit: boolean, suffix: string, pivot: Vec3, xform: (c: Part) => void): GroupDef => {
+    const idMap = new Map<string, string>();
+    const copies = members.map((m) => {
+      const c: Part = structuredClone(m);
+      c.id = newId();
+      idMap.set(m.id, c.id);
+      xform(c);
+      return c;
+    });
+    const name = uniqueGroupName(project, base);
+    copies.forEach((c, i) => {
+      c.name = uniqueName(project, memberName(members[i].name, src.name, name, explicit, suffix));
+      c.group = name;
+      if (c.cuts) c.cuts = c.cuts.map((id) => idMap.get(id) ?? id);
+      project.parts.push(c);
+    });
+    const g: GroupDef = { name, pivot: roundVec(pivot) };
+    (project.groups ??= []).push(g);
+    touch(copies[copies.length - 1]);
+    return g;
   };
 
   for (const op of ops) {
@@ -418,7 +631,26 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           break;
         }
         case 'update': {
-          const part = must(op.part);
+          const t = target(op.part);
+          if (t.group) {
+            if (op.name?.trim() || op.params?.length || op.position || op.rotation || op.geom || op.role || op.cuts?.length) {
+              throw new OpError(
+                `'${t.group.name}' bir grup: grupta yalnızca renk ve görünürlük değiştirilebilir (taşımak/döndürmek için move/rotate; ölçü ve ad için üyeleri tek tek düzenleyin).`,
+              );
+            }
+            const color = colorOf(op.color);
+            const notes: string[] = [];
+            for (const m of t.members) {
+              if (color) m.color = color;
+              if (typeof op.visible === 'boolean') m.visible = op.visible;
+            }
+            if (color) notes.push(`renk ${color}`);
+            if (typeof op.visible === 'boolean') notes.push(op.visible ? 'gösterildi' : 'gizlendi');
+            touch(t.members[t.members.length - 1]);
+            res.messages.push(notes.length ? `'${t.group.name}' grubu (${t.members.length} parça): ${notes.join('; ')}.` : `'${t.group.name}' grubu değişmedi.`);
+            break;
+          }
+          const part = t.part;
           const notes: string[] = [];
           if (op.name?.trim()) {
             const nn = uniqueName(project, op.name, part.id);
@@ -473,8 +705,17 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           break;
         }
         case 'move': {
-          const part = must(op.part);
+          const t = target(op.part);
           const [dx, dy, dz] = [Number(op.dx) || 0, Number(op.dy) || 0, Number(op.dz) || 0];
+          if (t.group) {
+            for (const m of t.members) translate(m, dx, dy, dz);
+            const pv = t.group.pivot;
+            t.group.pivot = roundVec({ x: pv.x + dx, y: pv.y + dy, z: pv.z + dz });
+            touch(t.members[t.members.length - 1]);
+            res.messages.push(`'${t.group.name}' grubu taşındı (${t.members.length} parça; Δx ${fmt(dx)}, Δy ${fmt(dy)}, Δz ${fmt(dz)} mm).`);
+            break;
+          }
+          const part = t.part;
           translate(part, dx, dy, dz);
           touch(part);
           res.messages.push(`'${part.name}' taşındı (Δx ${fmt(dx)}, Δy ${fmt(dy)}, Δz ${fmt(dz)} mm).`);
@@ -494,11 +735,21 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           break;
         }
         case 'rotate': {
-          const part = must(op.part);
+          const t = target(op.part);
           const axis: Axis = op.axis;
           if (!['x', 'y', 'z'].includes(axis)) throw new OpError(`Geçersiz eksen: ${String(axis)}`);
           const deg = Number(op.degrees);
           if (!Number.isFinite(deg)) throw new OpError('Geçersiz açı.');
+          if (t.group) {
+            // Grup pivotu etrafında döner (taban sabitlenmez): teker göbeği gibi.
+            const q = new THREE.Quaternion().setFromAxisAngle(AXIS_VEC[axis], deg * DEG);
+            for (const m of t.members) rotateAbout(m, q, t.group.pivot);
+            touch(t.members[t.members.length - 1]);
+            const pv = t.group.pivot;
+            res.messages.push(`'${t.group.name}' grubu pivot (${fmt(pv.x)}, ${fmt(pv.y)}, ${fmt(pv.z)}) etrafında ${axis.toUpperCase()} ekseninde ${fmt(deg)}° döndürüldü.`);
+            break;
+          }
+          const part = t.part;
           anchored(part, seg, () => {
             part.rotation = { ...part.rotation, [axis]: normAngle(part.rotation[axis] + deg) };
           });
@@ -568,23 +819,145 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           break;
         }
         case 'duplicate': {
-          const part = must(op.part);
+          const t = target(op.part);
+          const count = countOf(op.count);
+          const off = checkVec(op.offset, 'kaydırma');
+          if (count > 1 && !off) throw new OpError(`${count} kopya için kaydırma (offset) gerekli: her kopya bir öncekinden bu kadar kayar.`);
+          const given = op.new_name?.trim() ?? '';
+          const nameFor = (base: string, i: number) => (given ? (count > 1 ? `${given} ${i}` : given) : base);
+          if (t.group) {
+            const box = partsBox(t.members, seg);
+            const step = off ?? { x: round(box.max.x - box.min.x + 5), y: 0, z: 0 };
+            const made: string[] = [];
+            for (let i = 1; i <= count; i++) {
+              const [dx, dy, dz] = [step.x * i, step.y * i, step.z * i];
+              const pv = t.group.pivot;
+              const g = cloneGroup(t.group, t.members, nameFor(`${t.group.name} kopya`, i), !!given, 'kopya', { x: pv.x + dx, y: pv.y + dy, z: pv.z + dz }, (c) =>
+                translate(c, dx, dy, dz),
+              );
+              made.push(`'${g.name}'`);
+            }
+            res.messages.push(`'${t.group.name}' grubu (${t.members.length} parça) kopyalandı → ${made.join(', ')}.`);
+            break;
+          }
+          const part = t.part;
+          const step = off ?? (() => {
+            const b = partBox(part, seg);
+            return { x: round(b.max.x - b.min.x + 5), y: 0, z: 0 };
+          })();
+          const copies: Part[] = [];
+          for (let i = 1; i <= count; i++) {
+            const copy: Part = structuredClone(part); // grup üyeliği korunur (kopya aynı grupta)
+            copy.id = newId();
+            copy.name = uniqueName(project, nameFor(`${part.name} kopya`, i));
+            translate(copy, step.x * i, step.y * i, step.z * i);
+            project.parts.push(copy);
+            copies.push(copy);
+            touch(copy);
+          }
+          res.messages.push(count > 1 ? `'${part.name}' ${count} kez kopyalandı → ${names(copies)}.` : `'${part.name}' kopyalandı → '${copies[0].name}'.`);
+          break;
+        }
+        case 'group': {
+          const name = (op.name ?? '').trim();
+          if (!name) throw new OpError('Grup adı (name) gerekli.');
+          if (nameTaken(project, name)) throw new OpError(`'${name}' adında bir parça var; gruba başka bir ad verin.`);
+          let g = findGroup(project, name);
+          const refs = (op.parts ?? []).filter((r) => typeof r === 'string' && r.trim());
+          if (!g && !refs.length) throw new OpError(`Yeni grup '${name}' için üye parçalar (parts) gerekli.`);
+          const gname = g?.name ?? name;
+          let members = g ? groupMembers(project, gname) : [];
+          const notes: string[] = [];
+          if (refs.length) {
+            const list: Part[] = [];
+            for (const r of refs) {
+              const p = must(r);
+              if (!list.includes(p)) list.push(p);
+            }
+            for (const p of members) if (!list.includes(p)) delete p.group;
+            for (const p of list) {
+              if (p.group && p.group !== gname) notes.push(`'${p.name}' '${p.group}' grubundan alındı`);
+              p.group = gname;
+            }
+            members = list;
+          }
+          const pivot = checkVec(op.pivot, 'pivot');
+          if (!g) {
+            g = { name, pivot: roundVec(pivot ?? partsBox(members, seg).getCenter(new THREE.Vector3())) };
+            (project.groups ??= []).push(g);
+          } else if (pivot) g.pivot = roundVec(pivot);
+          touch(members[members.length - 1]);
+          const pv = g.pivot;
+          res.messages.push(
+            `'${g.name}' grubu: ${names(members)}; pivot ${fmt(pv.x)}, ${fmt(pv.y)}, ${fmt(pv.z)}${notes.length ? ` (${notes.join(', ')})` : ''}.`,
+          );
+          break;
+        }
+        case 'ungroup': {
+          const g = findGroup(project, op.name);
+          if (!g) throw new OpError(`'${op.name ?? ''}' adında grup bulunamadı.`);
+          const members = groupMembers(project, g.name);
+          for (const p of members) delete p.group;
+          project.groups = project.groups!.filter((x) => x !== g);
+          touch(members[members.length - 1]);
+          res.messages.push(`'${g.name}' grubu çözüldü (${members.length} parça serbest).`);
+          break;
+        }
+        case 'set_pivot': {
+          const g = findGroup(project, op.group);
+          if (!g) throw new OpError(`'${op.group ?? ''}' adında grup bulunamadı.`);
+          const pv = checkVec(op.pivot, 'pivot');
+          if (!pv) throw new OpError('Pivot (x, y, z) gerekli.');
+          g.pivot = roundVec(pv);
+          touch(groupMembers(project, g.name).pop());
+          res.messages.push(`'${g.name}' grubunun pivotu: ${fmt(g.pivot.x)}, ${fmt(g.pivot.y)}, ${fmt(g.pivot.z)}.`);
+          break;
+        }
+        case 'mirror': {
+          const t = target(op.part);
+          const plane: Axis = op.plane;
+          if (!['x', 'y', 'z'].includes(plane)) throw new OpError(`Geçersiz ayna düzlemi: ${String(plane)} (x, y ya da z: düzlem bu eksene diktir).`);
+          const at = op.at === undefined || op.at === null ? 0 : Number(op.at);
+          if (!Number.isFinite(at)) throw new OpError('Geçersiz ayna düzlemi konumu (at).');
+          const where = `${plane.toUpperCase()} = ${fmt(at)} düzlemine göre`;
+          const given = op.name?.trim() ?? '';
+          if (t.group) {
+            const g = cloneGroup(t.group, t.members, given || `${t.group.name} ayna`, !!given, 'ayna', mirrorVec(t.group.pivot, plane, at), (c) => {
+              try {
+                mirrorPart(c, plane, at);
+              } catch (e) {
+                throw e instanceof OpError ? new OpError(`'${c.name}': ${e.message}`) : e;
+              }
+            });
+            res.messages.push(`'${t.group.name}' grubu ${where} aynalandı → '${g.name}' (${t.members.length} parça).`);
+            break;
+          }
+          const part = t.part;
           const copy: Part = structuredClone(part);
           copy.id = newId();
-          copy.name = uniqueName(project, op.new_name?.trim() || `${part.name} kopya`);
-          const off = checkVec(op.offset, 'kaydırma');
-          if (off) translate(copy, off.x, off.y, off.z);
-          else {
-            const b = partBox(part, seg);
-            translate(copy, round(b.max.x - b.min.x + 5), 0, 0);
-          }
+          delete copy.group; // aynalanan kopya (ör. sağ taraf) özgün grubun parçası değildir
+          mirrorPart(copy, plane, at);
+          copy.name = uniqueName(project, given || `${part.name} ayna`);
           project.parts.push(copy);
           touch(copy);
-          res.messages.push(`'${part.name}' kopyalandı → '${copy.name}'.`);
+          res.messages.push(`'${part.name}' ${where} aynalandı → '${copy.name}'.`);
           break;
         }
         case 'delete': {
-          const part = must(op.part);
+          const t = target(op.part);
+          if (t.group) {
+            const ids = new Set(t.members.map((m) => m.id));
+            project.parts = project.parts.filter((p) => !ids.has(p.id));
+            project.groups = project.groups!.filter((x) => x !== t.group);
+            if (ctx.selectedId && ids.has(ctx.selectedId)) {
+              ctx.selectedId = null;
+              res.clearSelection = true;
+            }
+            if (res.lastPartId && ids.has(res.lastPartId)) res.lastPartId = null;
+            res.messages.push(`'${t.group.name}' grubu ve ${t.members.length} parçası silindi.`);
+            break;
+          }
+          const part = t.part;
           project.parts = project.parts.filter((p) => p.id !== part.id);
           if (ctx.selectedId === part.id) {
             ctx.selectedId = null;
@@ -622,7 +995,18 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
       res.errors.push(e instanceof OpError ? e.message : `Hata: ${(e as Error).message}`);
     }
   }
+  // Silinen/başka gruba alınan üyeler: boş grup kalmaz, olmayan gruba üyelik kalmaz.
+  pruneGroups(project);
   return res;
+}
+
+/** Kopya sayısı: yok / 0 / 1 = tek kopya. */
+function countOf(v: unknown): number {
+  if (v === undefined || v === null) return 1;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0) throw new OpError(`Geçersiz kopya sayısı (count): ${String(v)}; 1 ya da daha büyük bir tam sayı olmalı.`);
+  if (n > 100) throw new OpError('En fazla 100 kopya (count).');
+  return Math.max(1, n);
 }
 
 /** Hedefin (deliksiz) yüzeyinde noktaya en yakın nokta ve oradaki dışa bakan, yumuşak ara değerli normal (dünya). */
@@ -710,9 +1094,11 @@ export function sceneSummary(project: Project, selectedId: string | null): Scene
         bbox: { min: v2(b.min), max: v2(b.max) },
         role: p.role ?? 'solid',
         ...(p.cuts ? { cuts: p.cuts.map((id) => project.parts.find((q) => q.id === id)?.name ?? id) } : {}),
+        ...(p.group ? { group: p.group } : {}),
         ...(p.geom ? { geom: p.geom.kind === 'mesh' ? { ...p.geom, triangles: getAsset(p.geom.asset)?.triangles ?? 0 } : p.geom } : {}),
       };
     }),
+    ...(project.groups?.length ? { groups: project.groups.map((g) => ({ name: g.name, pivot: v2(g.pivot) })) } : {}),
   };
 }
 

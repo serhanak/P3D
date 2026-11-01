@@ -627,6 +627,24 @@ dialog::backdrop {
   background: #2c3240;
   color: var(--muted);
 }
+.group-badge {
+  display: inline-block;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+  font-size: 10px;
+  padding: 0 4px;
+  margin-right: 4px;
+  border-radius: 3px;
+  background: #23364a;
+  color: #8cc4ff;
+}
+.group-info {
+  margin-bottom: 6px;
+  line-height: 1.5;
+}
 .field select {
   width: 100%;
 }

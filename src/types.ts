@@ -1,6 +1,6 @@
-import type { MeshAsset, PartGeom, Role, ShapeType, Vec3 } from '../shared/ops';
+import type { GroupDef, MeshAsset, PartGeom, Role, ShapeType, Vec3 } from '../shared/ops';
 
-export type { MeshAsset, PartGeom, Role, ShapeType, Vec3 };
+export type { GroupDef, MeshAsset, PartGeom, Role, ShapeType, Vec3 };
 
 export interface Part {
   id: string;
@@ -20,6 +20,8 @@ export interface Part {
   role?: Role;
   /** Delik parçası için: yalnızca bu parçaları (id) keser. Yoksa kutusu kesişen tüm katıları keser. */
   cuts?: string[];
+  /** Üyesi olduğu grubun adı (`Project.groups`); yoksa gruplanmamış. Bir parça yalnızca bir grupta olabilir. */
+  group?: string;
 }
 
 export interface Project {
@@ -27,6 +29,8 @@ export interface Project {
   version: 1;
   name: string;
   parts: Part[];
+  /** Parça grupları (ad + pivot). Yoksa grup yok; boş dizi tutulmaz. */
+  groups?: GroupDef[];
   /** Yalnızca dosyada: mesh parçalarının ağ verisi. Bellekte src/assets.ts deposunda tutulur (geri-al anlık görüntülerine girmez). */
   assets?: Record<string, MeshAsset>;
   view: {

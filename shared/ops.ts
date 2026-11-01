@@ -103,6 +103,12 @@ export interface Vec3 {
   z: number;
 }
 
+/** Parça grubu: üyeler birlikte taşınır/döner/kopyalanır; `pivot` dönme merkezi (dünya, mm). Üyelik `Part.group`'tadır. */
+export interface GroupDef {
+  name: string;
+  pivot: Vec3;
+}
+
 /**
  * Parametre değişikliği. `mode` yalnızca yerel ayrıştırıcı tarafından kullanılır:
  * set = mutlak değer, add = mevcut değere ekle, mul = mevcut değerle çarp.
@@ -156,8 +162,15 @@ export type Op =
   | { op: 'drop_to_bed'; part: string }
   /** Parçayı hedefin yüzeyinde `near`'a en yakın noktaya koyar; yerel +Z yüzey normaline döner, `offset` normal boyunca kaydırır. */
   | { op: 'place_on_surface'; part: string; target: string; near: Vec3; offset?: number }
-  | { op: 'duplicate'; part: string; new_name?: string; offset?: Vec3 | null }
+  /** `count` > 1: `offset` her kopyada birikerek uygulanır (1×, 2×, … count×); `part` bir grup adı olabilir. */
+  | { op: 'duplicate'; part: string; new_name?: string; offset?: Vec3 | null; count?: number }
   | { op: 'delete'; part: string }
+  /** Grup oluşturur ya da günceller; `parts` boş/yok = üyeler değişmez; `pivot` yok = yeni grupta üyelerin kutu merkezi. */
+  | { op: 'group'; name: string; parts?: string[] | null; pivot?: Vec3 | null }
+  | { op: 'ungroup'; name: string }
+  | { op: 'set_pivot'; group: string; pivot: Vec3 }
+  /** Parçanın (ya da grubun) `plane` eksenine dik, `at` konumundaki düzleme göre aynalanmış kopyasını oluşturur. */
+  | { op: 'mirror'; part: string; plane: Axis; at?: number | null; name?: string }
   | { op: 'select'; part: string }
   | { op: 'view'; show_names?: boolean | null; show_dimensions?: boolean | null; show_holes?: boolean | null }
   /** Yalnızca yerel kullanım (arayüz/köprü): ağ verisiyle birlikte mesh parçası ekler. `position` yoksa tablaya yerleşir. */
@@ -278,8 +291,12 @@ export const RESPONSE_SCHEMA = {
           }),
           opSchema('drop_to_bed', { part: str }),
           opSchema('place_on_surface', { part: str, target: str, near: vec3, offset: num }),
-          opSchema('duplicate', { part: str, new_name: str, offset: nullableVec3 }),
+          opSchema('duplicate', { part: str, new_name: str, offset: nullableVec3, count: num }),
           opSchema('delete', { part: str }),
+          opSchema('group', { name: str, parts: { type: 'array', items: str }, pivot: nullableVec3 }),
+          opSchema('ungroup', { name: str }),
+          opSchema('set_pivot', { group: str, pivot: vec3 }),
+          opSchema('mirror', { part: str, plane: axisEnum, at: { anyOf: [num, { type: 'null' }] }, name: str }),
           opSchema('select', { part: str }),
           opSchema('view', {
             show_names: { anyOf: [{ type: 'boolean' }, { type: 'null' }] },
@@ -301,6 +318,8 @@ export function normalizeLlmOp(raw: Record<string, unknown>): Op {
     if (v === '' || v === null) continue;
     out[k] = v;
   }
+  // duplicate.count şemada zorunlu: 0 ya da 1 = tek kopya (alan yokmuş gibi).
+  if (out.op === 'duplicate' && (out.count === 0 || out.count === 1)) delete out.count;
   return out as unknown as Op;
 }
 
@@ -320,6 +339,8 @@ export interface SceneSummaryPart {
   role: Role;
   /** Delik hedefleri (parça adları); yoksa kesiştiği tüm katılar. */
   cuts?: string[];
+  /** Üyesi olduğu grubun adı. */
+  group?: string;
   /** extrude/revolve/loft için tam geometri; mesh için yalnızca özet. */
   geom?: PartGeom | { kind: 'mesh'; asset: string; triangles: number };
 }
@@ -329,6 +350,8 @@ export interface SceneSummary {
   bed: { x: number; y: number };
   selected: string | null;
   parts: SceneSummaryPart[];
+  /** Gruplar ve pivotları (varsa). */
+  groups?: GroupDef[];
 }
 
 export interface NlRequest {
