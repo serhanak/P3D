@@ -28,3 +28,13 @@ export function fold(s: string): string {
   }
   return out;
 }
+
+const ASCII: Record<string, string> = { ç: 'c', Ç: 'C', ğ: 'g', Ğ: 'G', ı: 'i', İ: 'I', ö: 'o', Ö: 'O', ş: 's', Ş: 'S', ü: 'u', Ü: 'U' };
+
+/** Türkçe harfleri ASCII karşılığına çevirir, diğer aksanları atar ("Sağ Tekerlek" → "Sag Tekerlek"); büyük/küçük harf korunur. */
+export function toAscii(s: string): string {
+  return s
+    .replace(/[çÇğĞıİöÖşŞüÜ]/g, (c) => ASCII[c])
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '');
+}

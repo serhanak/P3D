@@ -2,9 +2,10 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { SHAPES } from '../shared/ops';
 import { getAsset } from '../src/assets';
-import { initCsg } from '../src/csg';
+import { initCsg, manifoldVolume } from '../src/csg';
 import { applyOps, partVolume } from '../src/engine';
 import { buildObj, parseProject, projectToJson } from '../src/io';
+import { exportGeometry } from '../src/model';
 import { newProject } from '../src/types';
 
 beforeAll(() => initCsg()); // örnekler çerçeve ve delik kullanır
@@ -61,6 +62,30 @@ describe('OBJ dışa aktarımı', () => {
     }
     expect(obj).toContain('mtllib model.mtl');
     expect(mtl.match(/newmtl/g)).toHaveLength(shapes.length);
+  });
+
+  it.each([6, 12])('düşük poligon (%i segment): her şekil kapalı, doğru yönlü ve manifold', (seg) => {
+    const p = newProject();
+    p.settings.resolution = seg;
+    const shapes = SHAPES.filter((x) => x !== 'mesh');
+    applyOps(p, shapes.map((shape) => ({ op: 'create' as const, shape })), null);
+    applyOps(p, [{ op: 'rotate', part: 'Torus 1', axis: 'y', degrees: 25 }], null);
+    const { verts, objects } = parseObj(buildObj(p.parts, p, null).obj);
+    expect(objects).toHaveLength(shapes.length);
+    for (const [i, o] of objects.entries()) {
+      const part = p.parts[i];
+      const { bad, vol } = checkSolid(verts, o.faces);
+      expect(bad, `${part.shape} @${seg}: açık/ters kenar`).toBe(0);
+      expect(vol, `${part.shape} @${seg}: hacim`).toBeGreaterThan(0);
+      const g = exportGeometry(p, part);
+      expect(manifoldVolume(g), `${part.shape} @${seg}: manifold`).not.toBeNull();
+      g.dispose();
+    }
+    // 6 segmentli silindir altıgen prizmadır
+    const cyl = p.parts.find((x) => x.shape === 'cylinder')!;
+    expect(objects[p.parts.indexOf(cyl)].faces).toHaveLength(seg === 6 ? 4 * 6 : 4 * 12);
+    // dosyada da 6'ya kadar iner
+    expect(parseProject(JSON.parse(projectToJson(p))).settings.resolution).toBe(seg);
   });
 
   it('Türkçe isimler ASCII nesne adına çevrilir, MTL olmadan renk satırı yazılmaz', () => {

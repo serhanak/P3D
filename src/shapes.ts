@@ -124,7 +124,8 @@ const tube: ShapeDef = {
     const hole = new THREE.Path();
     hole.absarc(0, 0, p.innerDiameter / 2, 0, Math.PI * 2, true);
     s.holes.push(hole);
-    return extrude(s, p.height, Math.max(8, Math.round(seg / 2)));
+    // Yay başına 2·curveSegments nokta: düşük çözünürlükte (6) silindirle aynı köşe sayısı; 16 ve üstünde değişmedi.
+    return extrude(s, p.height, Math.max(3, Math.round(seg / 2)));
   },
   dims(p) {
     const ro = p.outerDiameter / 2;
@@ -180,7 +181,7 @@ const sphere: ShapeDef = {
   label: 'Küre',
   params: [len('diameter', 'Çap', 20)],
   aliases: { diameter: 'diameter', outer: 'diameter' },
-  build: (p, seg) => new THREE.SphereGeometry(p.diameter / 2, seg, Math.max(8, Math.round(seg / 2))),
+  build: (p, seg) => new THREE.SphereGeometry(p.diameter / 2, seg, Math.max(4, Math.round(seg / 2))),
   dims: (p) => [{ a: [-p.diameter / 2, 0, 0], b: [p.diameter / 2, 0, 0], text: 'Ø' + fmt(p.diameter) }],
   volume: (p) => (4 / 3) * Math.PI * (p.diameter / 2) ** 3,
 };
@@ -192,7 +193,8 @@ const torus: ShapeDef = {
   aliases: { diameter: 'diameter', outer: 'diameter', thickness: 'thickness', wall: 'thickness' },
   build(p, seg) {
     const R = (p.diameter - p.thickness) / 2;
-    return new THREE.TorusGeometry(R, p.thickness / 2, Math.max(12, Math.round(seg / 3)), seg);
+    // Kesit segmenti: 16 ve üstünde eskisi gibi en az 12; düşük poligonda (6–15) daha az (en az 4).
+    return new THREE.TorusGeometry(R, p.thickness / 2, Math.max(4, Math.min(12, seg - 4), Math.round(seg / 3)), seg);
   },
   dims(p) {
     const R = (p.diameter - p.thickness) / 2;

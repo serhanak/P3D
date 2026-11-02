@@ -1,8 +1,10 @@
 // Model denetimi: ekranda titreşen çakışık yüzeyler (z-fighting), baskıyı zorlaştıran durumlar, boolean hataları.
 // Yapay zekâ doğrulama döngüsünde `npm run -s p3d -- check` ile çalışır; Node ve tarayıcıda aynı kod.
+// Profil: `print` (varsayılan; tabla teması, ince parça) ya da `game` (üçgen bütçesi, bozuk üçgen; baskı kuralları yok).
 import * as THREE from 'three';
 import { partBox } from './engine';
 import { worldMesh } from './io';
+import type { WorldMesh } from './meshio';
 import { exportableParts, holesFor, roleOf, solidGeometry } from './model';
 import type { Part, Project } from './types';
 
@@ -10,6 +12,19 @@ export interface CheckIssue {
   level: 'hata' | 'uyarı';
   message: string;
 }
+
+export interface CheckOptions {
+  /** print (varsayılan): 3D baskı. game: oyun motoru (düşük poligon). */
+  profile?: 'print' | 'game';
+  /** game: toplam üçgen bütçesi (varsayılan 20000). */
+  maxTris?: number;
+}
+
+/** Oyun profilinde varsayılan toplam üçgen bütçesi. */
+export const DEFAULT_MAX_TRIS = 20000;
+
+/** Bozuk üçgen: en uzun kenara göre yüksekliği bundan küçük (mm) — alanı ~0 (çakışık ya da doğrusal köşeler). */
+const DEGENERATE_HEIGHT = 1e-4;
 
 /** FDM için alt sınır (0.4 mm nozül ≈ iki çizgi). */
 const MIN_WALL = 0.8;
@@ -31,6 +46,13 @@ function trianglesOverlap(a: V2[], b: V2[]): boolean {
   return true;
 }
 
+/** İzdüşümde atılacak eksen (0 = x, 1 = y, 2 = z): mutlak değeri en büyük bileşen; eşitlikte z, sonra y. */
+function dropAxis(r: number[]): 0 | 1 | 2 {
+  const [x, y, z] = r.map(Math.abs);
+  if (z >= x && z >= y) return 2;
+  return y >= x ? 1 : 0;
+}
+
 interface PlaneTri {
   part: string;
   pts: V2[];
@@ -38,14 +60,14 @@ interface PlaneTri {
 }
 
 /** Aynı düzlemde, aynı yöne bakan, üst üste binen yüzeyler: farklı parçalar arasında z-fighting. */
-function coplanarOverlaps(project: Project, solids: Part[]): CheckIssue[] {
+function coplanarOverlaps(project: Project, solids: Part[], meshOf: (p: Part) => WorldMesh): CheckIssue[] {
   const buckets = new Map<string, PlaneTri[]>();
   const a = new THREE.Vector3();
   const b = new THREE.Vector3();
   const c = new THREE.Vector3();
   const n = new THREE.Vector3();
   for (const part of solids) {
-    const m = worldMesh(project, part);
+    const m = meshOf(part);
     for (let i = 0; i < m.tris.length; i += 3) {
       a.fromArray(m.pos, m.tris[i] * 3);
       b.fromArray(m.pos, m.tris[i + 1] * 3);
@@ -55,9 +77,12 @@ function coplanarOverlaps(project: Project, solids: Part[]): CheckIssue[] {
       if (area < 1e-3) continue;
       n.normalize();
       const d = n.dot(a);
-      const key = `${Math.round(n.x * 200)},${Math.round(n.y * 200)},${Math.round(n.z * 200)}|${Math.round(d * 50)}`;
-      // Düzleme izdüşüm: normalin en büyük bileşeni atılır.
-      const drop = Math.abs(n.x) > Math.abs(n.y) ? (Math.abs(n.x) > Math.abs(n.z) ? 0 : 2) : Math.abs(n.y) > Math.abs(n.z) ? 1 : 2;
+      const r = [Math.round(n.x * 200), Math.round(n.y * 200), Math.round(n.z * 200)];
+      const key = `${r[0]},${r[1]},${r[2]}|${Math.round(d * 50)}`;
+      // Düzleme izdüşüm: normalin en büyük bileşeni atılır. Kovadaki tüm üçgenler aynı düzleme izdüşsün diye kova
+      // anahtarındaki yuvarlanmış normalden seçilir (float normalden seçilirse |nx| ≈ |ny| iken aynı kovada iki ayrı
+      // izdüşüm olur, uzak yüzler çakışık görünür); eşitlikte sabit sıra z, y, x.
+      const drop = dropAxis(r);
       const to2 = (v: THREE.Vector3): V2 => (drop === 0 ? [v.y, v.z] : drop === 1 ? [v.x, v.z] : [v.x, v.y]);
       let list = buckets.get(key);
       if (!list) buckets.set(key, (list = []));
@@ -103,11 +128,56 @@ function coplanarOverlaps(project: Project, solids: Part[]): CheckIssue[] {
   });
 }
 
-export function checkProject(project: Project): CheckIssue[] {
+/** Bozuk (alanı ~0) üçgen sayısı. */
+function degenerateCount(m: WorldMesh): number {
+  let n = 0;
+  const { pos, tris } = m;
+  for (let i = 0; i < tris.length; i += 3) {
+    const [a, b, c] = [tris[i] * 3, tris[i + 1] * 3, tris[i + 2] * 3];
+    const e1 = [pos[b] - pos[a], pos[b + 1] - pos[a + 1], pos[b + 2] - pos[a + 2]];
+    const e2 = [pos[c] - pos[a], pos[c + 1] - pos[a + 1], pos[c + 2] - pos[a + 2]];
+    const e3 = [pos[c] - pos[b], pos[c + 1] - pos[b + 1], pos[c + 2] - pos[b + 2]];
+    const cross = Math.hypot(e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]);
+    const longest = Math.max(Math.hypot(...e1), Math.hypot(...e2), Math.hypot(...e3));
+    // yükseklik = 2·alan / taban = |e1 × e2| / en uzun kenar
+    if (longest < DEGENERATE_HEIGHT || cross / longest < DEGENERATE_HEIGHT) n++;
+  }
+  return n;
+}
+
+/** Oyun profili: toplam üçgen bütçesi (aşılırsa parça başına dağılım) ve bozuk üçgenler. */
+function gameChecks(solids: Part[], meshOf: (p: Part) => WorldMesh, maxTris: number): CheckIssue[] {
+  const out: CheckIssue[] = [];
+  const counts = solids.map((p) => ({ part: p, tris: meshOf(p).tris.length / 3 }));
+  const total = counts.reduce((s, c) => s + c.tris, 0);
+  if (total > maxTris) {
+    const list = counts
+      .sort((a, b) => b.tris - a.tris)
+      .map((c) => `${c.part.name} ${c.tris.toLocaleString('tr-TR')}`)
+      .join(', ');
+    out.push({
+      level: 'uyarı',
+      message:
+        `Toplam ${total.toLocaleString('tr-TR')} üçgen; bütçe ${maxTris.toLocaleString('tr-TR')} aşıldı. Parça başına: ${list}. ` +
+        'Yuvarlak yüzey çözünürlüğünü düşürün (6–16) ya da ayrıntıyı azaltın.',
+    });
+  }
+  for (const p of solids) {
+    const n = degenerateCount(meshOf(p));
+    if (n) out.push({ level: 'uyarı', message: `'${p.name}': ${n} bozuk (alanı ~0) üçgen; oyun motoru normal/gölge hatası verebilir.` });
+  }
+  return out;
+}
+
+export function checkProject(project: Project, opts: CheckOptions = {}): CheckIssue[] {
   const seg = project.settings.resolution;
+  const game = opts.profile === 'game';
   const out: CheckIssue[] = [];
   const solids = exportableParts(project.parts);
   if (!solids.length) return [{ level: 'uyarı', message: 'Görünür katı parça yok.' }];
+  // Son (delikli) ağ parça başına bir kez üretilir: boolean pahalıdır.
+  const meshes = new Map<string, WorldMesh>();
+  const meshOf = (p: Part) => meshes.get(p.id) ?? meshes.set(p.id, worldMesh(project, p)).get(p.id)!;
 
   for (const p of solids) {
     const r = solidGeometry(project, p);
@@ -117,17 +187,20 @@ export function checkProject(project: Project): CheckIssue[] {
   for (const h of project.parts.filter((p) => p.visible && roleOf(p) === 'hole')) {
     if (!solids.some((s) => holesFor(project, s).includes(h))) out.push({ level: 'uyarı', message: `Delik '${h.name}' hiçbir katıyı kesmiyor.` });
   }
-  for (const p of solids) {
-    const s = partBox(p, seg).getSize(new THREE.Vector3());
-    const min = Math.min(s.x, s.y, s.z);
-    if (min < MIN_WALL) out.push({ level: 'uyarı', message: `'${p.name}' ${min.toFixed(2)} mm kalınlığında; ${MIN_WALL} mm altı FDM'de basılmayabilir (başka parçaya gömülüyse sorun değil).` });
+  if (game) out.push(...gameChecks(solids, meshOf, opts.maxTris ?? DEFAULT_MAX_TRIS));
+  else {
+    for (const p of solids) {
+      const s = partBox(p, seg).getSize(new THREE.Vector3());
+      const min = Math.min(s.x, s.y, s.z);
+      if (min < MIN_WALL) out.push({ level: 'uyarı', message: `'${p.name}' ${min.toFixed(2)} mm kalınlığında; ${MIN_WALL} mm altı FDM'de basılmayabilir (başka parçaya gömülüyse sorun değil).` });
+    }
+    // Tabla teması son (delikler uygulanmış) geometriye göre: tabla altı bilerek kesilmiş parçalar yanlış uyarı vermesin.
+    const box = new THREE.Box3();
+    for (const p of solids) box.union(new THREE.Box3().setFromArray(meshOf(p).pos));
+    if (box.min.z < -0.01) out.push({ level: 'uyarı', message: `Model tablanın ${(-box.min.z).toFixed(2)} mm altına taşıyor.` });
+    else if (box.min.z > 0.01) out.push({ level: 'uyarı', message: `Model tablaya değmiyor (en alt nokta z = ${box.min.z.toFixed(2)} mm).` });
   }
-  // Tabla teması son (delikler uygulanmış) geometriye göre: tabla altı bilerek kesilmiş parçalar yanlış uyarı vermesin.
-  const box = new THREE.Box3();
-  for (const p of solids) box.union(new THREE.Box3().setFromArray(worldMesh(project, p).pos));
-  if (box.min.z < -0.01) out.push({ level: 'uyarı', message: `Model tablanın ${(-box.min.z).toFixed(2)} mm altına taşıyor.` });
-  else if (box.min.z > 0.01) out.push({ level: 'uyarı', message: `Model tablaya değmiyor (en alt nokta z = ${box.min.z.toFixed(2)} mm).` });
 
-  out.push(...coplanarOverlaps(project, solids));
+  out.push(...coplanarOverlaps(project, solids, meshOf));
   return out;
 }

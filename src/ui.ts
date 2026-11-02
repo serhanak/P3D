@@ -134,7 +134,7 @@ export function mountPanels(store: Store, apply: (ops: Op[]) => void): () => voi
         <li data-id="${p.id}" class="${p.id === selectedId ? 'selected' : ''} ${p.visible ? '' : 'hidden-part'}">
           <input type="color" value="${p.color}" title="Renk" />
           <span class="pl-name" title="${esc(p.name)}">${esc(p.name)}</span>
-          <span class="pl-shape">${p.role ? `<span class="role-badge ${p.role}">${ROLE_LABEL[p.role]}</span>` : ''}${SHAPE_DEFS[p.shape].label}</span>
+          <span class="pl-shape">${p.group ? `<span class="group-badge" title="Grup: ${esc(p.group)}">${esc(p.group)}</span>` : ''}${p.role ? `<span class="role-badge ${p.role}">${ROLE_LABEL[p.role]}</span>` : ''}${SHAPE_DEFS[p.shape].label}</span>
           <button class="pl-btn" data-act="vis" title="${p.visible ? 'Gizle' : 'Göster'}">${p.visible ? '◉' : '○'}</button>
           <button class="pl-btn" data-act="del" title="Sil">✕</button>
         </li>`,
@@ -143,8 +143,8 @@ export function mountPanels(store: Store, apply: (ops: Op[]) => void): () => voi
       : `<div class="empty">Henüz parça yok.<br>Yukarıdan bir şekil ekleyin ya da aşağıya komut yazın:<br><i>“50x30x10 kutu oluştur adı taban olsun”</i></div>`;
 
     const part = selectedId ? project.parts.find((p) => p.id === selectedId) : undefined;
-    // Delikler komşu parçaların hacmini değiştirdiği için seçili parçada da tüm parçalar imzaya girer.
-    const sig = `${selectedId}|${JSON.stringify(project.parts)}|${seg}`;
+    // Delikler komşu parçaların hacmini değiştirdiği için seçili parçada da tüm parçalar imzaya girer (gruplar: pivot).
+    const sig = `${selectedId}|${JSON.stringify(project.parts)}|${JSON.stringify(project.groups ?? [])}|${seg}`;
     if (sig === propsSig) return;
     propsSig = sig;
 
@@ -182,6 +182,12 @@ function partProps(part: Part, project: Project): string {
       <div class="section">Geometri <span class="muted small">(${esc(describeGeom(part.geom))})</span></div>
       <textarea class="geom-input" data-field="geom" spellcheck="false" rows="8" title="Noktalar mm; değiştirip alanın dışına tıklayın">${esc(geomJson(part.geom))}</textarea>`;
   }
+  const group = part.group ? project.groups?.find((g) => g.name === part.group) : undefined;
+  const groupInfo = group
+    ? `<div class="group-info" title="Grup üyeleri birlikte taşınır, döner ve kopyalanır; pivot dönme merkezidir (salt okunur)">
+        <span class="muted">Grup</span> <b>${esc(group.name)}</b><br>
+        <span class="muted small">pivot ${fmt(group.pivot.x)}, ${fmt(group.pivot.y)}, ${fmt(group.pivot.z)} mm</span></div>`
+    : '';
   const note = role === 'solid' ? '' : `<div class="muted small">${role === 'hole' ? 'Delik: kesiştiği katılardan çıkarılır, dışa aktarılmaz.' : 'Referans: yalnızca görsel, dışa aktarılmaz.'}</div>`;
   const cutNames = (part.cuts ?? []).map((id) => project.parts.find((p) => p.id === id)?.name ?? id).join(', ');
   const cutsField =
@@ -214,6 +220,7 @@ function partProps(part: Part, project: Project): string {
       <div class="sub">${def.label}</div>
       <div class="field"><label>Renk</label><input type="color" data-field="color" value="${part.color}" /></div>
       ${roleSelect}
+      ${groupInfo}
       ${cutsField}
       ${note}
       <div class="section">Ölçüler</div>

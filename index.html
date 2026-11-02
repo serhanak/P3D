@@ -33,6 +33,8 @@
               <button data-export="each-zip">Her parça ayrı OBJ (çok renkli baskı, ZIP)</button>
               <button data-export="selected-stl">Yalnızca seçili parça → STL</button>
               <button data-export="selected-obj">Yalnızca seçili parça → OBJ</button>
+              <button data-export="glb" title="glTF 2.0 ikili; Y yukarı, metre, düz normaller; parça ve grup başına düğüm">GLB (oyun motoru)</button>
+              <button data-export="glb-skeleton" title="Tek skinned mesh: kök + grup başına kemik (pivotta), ağırlık 1 — Unreal Chaos Vehicles gövde/teker">GLB + iskelet (Unreal araç)</button>
             </div>
           </div>
         </div>
@@ -96,6 +98,10 @@
         <label
           >Yuvarlak yüzey çözünürlüğü
           <select id="set-res">
+            <option value="6">Düşük poligon (6)</option>
+            <option value="8">Düşük poligon (8)</option>
+            <option value="12">Düşük poligon (12)</option>
+            <option value="16">Düşük poligon (16)</option>
             <option value="32">Düşük (32)</option>
             <option value="64">Orta (64)</option>
             <option value="96">Yüksek (96)</option>
@@ -103,7 +109,7 @@
             <option value="192">Baskı kalitesi (192)</option>
           </select>
         </label>
-        <p class="muted small">Çözünürlük hem ekranda hem OBJ dışa aktarımında kullanılır.</p>
+        <p class="muted small">Çözünürlük hem ekranda hem dışa aktarımda (STL/3MF/OBJ/GLB) kullanılır; 6–16 oyun için düşük poligon.</p>
         <div class="dlg-actions">
           <button value="cancel">Vazgeç</button>
           <button value="ok" class="primary">Uygula</button>

@@ -135,6 +135,7 @@ export function sanitizeGeom(shape: GeomShape, raw: unknown): PartGeom {
         if (sharp.some((k) => !Number.isInteger(k) || k < 0 || k >= n)) throw new GeomError(`'sharp' indisleri 0…${n - 1} arası tam sayı olmalı.`);
         out.sharp = sharp;
       }
+      if (g.mirrored === true) out.mirrored = true;
       return out;
     }
     case 'hull':
@@ -445,14 +446,45 @@ function smoothLoop(pts: Pt2[], sub: number, sharp: Set<number>): Pt2[] {
 /** Bir halkanın (ya da uç noktasının) eksen boyunca ara değerlemesi için i. noktası. */
 const ringPoint = (ring: Pt2[], i: number) => (ring.length === 1 ? ring[0] : ring[i]);
 
-function loftRaw(g: LoftGeom, seg: number): RawMesh {
-  const isApex = (s: { points: Pt2[] }) => s.points.length === 1;
-  const ringSecs = g.sections.filter((s) => !isApex(s));
+/**
+ * Loft'un kesit halkaları (uç kesit tek nokta): nokta sayıları eşitse saat yönünün tersine çevrilmiş kesitler; farklıysa
+ * hepsi en büyük sayıya, ağırlık merkezinin altındaki noktadan başlayarak eşit yay uzunluğuyla yeniden örneklenir
+ * (1e-4 mm'ye yuvarlı: loftCommonSections aynı halkaları kesit olarak verebilsin).
+ */
+function loftRings(g: LoftGeom): Pt2[][] {
+  const ringSecs = g.sections.filter((s) => s.points.length > 1);
   const sameCount = ringSecs.every((s) => s.points.length === ringSecs[0].points.length);
   const n = Math.min(MAX_POINTS, Math.max(...ringSecs.map((s) => s.points.length)));
-  let rings: Pt2[][] = g.sections.map((s) =>
-    isApex(s) ? s.points : sameCount ? ccw(s.points) : resample(startAtBottom(ccw(s.points)), n),
-  );
+  return g.sections.map((s) => {
+    if (s.points.length === 1) return s.points;
+    if (sameCount) return ccw(s.points);
+    return resample(startAtBottom(ccw(s.points)), n).map(([u, v]) => [r4(u), r4(v)] as Pt2);
+  });
+}
+
+/**
+ * Farklı nokta sayılı loft'u, ağ üretiminin zaten kullandığı ortak nokta sayılı kesitlere çevirir (ağ aynı kalır).
+ * Sayılar eşitse `g` döner. Aynalama için: yeniden örneklemenin başlangıcı (alttaki nokta, eşitlikte ortaya en yakın)
+ * aynalanan kesitte simetrik seçilmeyebilir; önceden örneklenmiş kesitlerin aynası ise birebirdir.
+ */
+export function loftCommonSections(g: LoftGeom): LoftGeom {
+  const ringSecs = g.sections.filter((s) => s.points.length > 1);
+  if (ringSecs.every((s) => s.points.length === ringSecs[0].points.length)) return g;
+  const rings = loftRings(g);
+  // `sharp` farklı sayılarda kullanılmaz (sanitizeGeom reddeder); eşit sayıda anlamı değişeceği için taşınmaz.
+  return {
+    kind: 'loft',
+    axis: g.axis,
+    sections: g.sections.map((s, k) => ({ ...s, points: rings[k] })),
+    ...(g.smooth ? { smooth: true } : {}),
+    ...(g.mirrored ? { mirrored: true } : {}),
+  };
+}
+
+function loftRaw(g: LoftGeom, seg: number): RawMesh {
+  const ringSecs = g.sections.filter((s) => s.points.length > 1);
+  const sameCount = ringSecs.every((s) => s.points.length === ringSecs[0].points.length);
+  let rings: Pt2[][] = loftRings(g);
   let ats = g.sections.map((s) => s.at);
 
   if (g.smooth) {
@@ -504,11 +536,21 @@ function loftRaw(g: LoftGeom, seg: number): RawMesh {
     for (const [u, v] of ring) pos.push(u, v, ats[k]);
   });
   const vid = (k: number, i: number) => (rings[k].length === 1 ? base[k] : base[k] + (i % N));
+  const tri = (a: number, b: number, c: number) => {
+    if (a !== b && b !== c && a !== c) idx.push(a, b, c);
+  };
   for (let k = 0; k < rings.length - 1; k++) {
     for (let i = 0; i < N; i++) {
       const [A, B, C, D] = [vid(k, i), vid(k, i + 1), vid(k + 1, i + 1), vid(k + 1, i)];
-      if (A !== B && B !== C && A !== C) idx.push(A, B, C);
-      if (A !== C && C !== D && A !== D) idx.push(A, C, D);
+      // Yan dörtgen A–C köşegeninden bölünür; aynalanmış loft'ta kesitler ters dolaşıldığından B–D (özgünün A–C'sinin
+      // aynası). Düzlemsel olmayan (bükülmüş) dörtgende bu seçim yüzeyi değiştirir.
+      if (g.mirrored) {
+        tri(A, B, D);
+        tri(B, C, D);
+      } else {
+        tri(A, B, C);
+        tri(A, C, D);
+      }
     }
   }
   // Kapaklar (uç noktası olmayan uçlar): ilk kesit -w, son kesit +w yönüne bakar.

@@ -6,6 +6,7 @@ export const SYSTEM_PROMPT = `You are the modeling engine of P3D, a web app wher
 - Millimetres everywhere. Z is up. The print bed is the XY plane at z = 0, centred on the origin (bed size is given in the scene).
 - A part's \`position\` is the centre of its shape. Its \`rotation\` is XYZ Euler angles in degrees around that centre.
 - Each scene part includes its world-space bounding box (\`bbox.min\` / \`bbox.max\`). A part resting on the bed has bbox.min.z = 0. Parts also carry their \`role\`, and free-form parts their full \`geom\`.
+- A part may belong to a group (\`group\` = group name); the scene then lists \`groups\` with each group's \`pivot\` (a world point, the group's rotation centre, e.g. a wheel hub).
 
 ## Shapes and their params (all mm unless noted)
 - box: width (X), depth (Y), height (Z)
@@ -39,8 +40,13 @@ Every operation has all of its fields. Use "" for a string field you do not want
 - place_beside: put \`part\` next to \`target\` on \`side\` ("+x" right, "-x" left, "+y" back, "-y" front) with \`gap\` mm, sharing the target's bottom height.
 - drop_to_bed: move a part down/up so it rests on the bed.
 - place_on_surface: put \`part\` on the surface of \`target\` at the point nearest to \`near\` (a world point close to where it should go) and turn the part so its local +Z axis follows the surface normal; \`offset\` moves it along the normal (e.g. half a flange's thickness so it sits on the surface, negative to sink it in). Use it for flanges, rivets, knobs, hawsepipes and anything that must sit on a curved or slanted surface.
-- duplicate: copy a part; \`new_name\` "" = automatic; \`offset\` null = placed beside the original.
+- duplicate: copy a part (or a whole group: a new group with copied members); \`new_name\` "" = automatic; \`offset\` null = placed beside the original. \`count\` 0 or 1 = one copy; count > 1 makes that many copies with the offset accumulating (1×, 2×, … count× offset), so count > 1 needs an offset — use it for rows of identical parts (bolts, slats, teeth).
 - delete, select: by part name.
+- group: create or update a group. \`name\` = group name (must differ from part names), \`parts\` = member part names (replaces the members; [] = unchanged for an existing group), \`pivot\` = world rotation centre or null (new group: centre of the members' bounding box; existing group: unchanged). A part is in at most one group; adding it to a group removes it from its old one.
+- ungroup: dissolve the group \`name\` (the parts stay).
+- set_pivot: set the \`pivot\` (world point) of \`group\`.
+- mirror: make a mirrored COPY of \`part\` (a part or a group) across the plane perpendicular to axis \`plane\` ("x", "y" or "z") at coordinate \`at\` (null = 0); e.g. plane "y", at 0 turns a left wheel at y = 30 into a right wheel at y = −30. \`name\` "" = automatic. Mirroring a group creates a new group whose pivot is mirrored too. The geometry itself is reflected (free-form profiles and imported meshes are mirrored, not just moved); the copy is an exact mirror image for every shape except hull, whose surface mesh is symmetric only to about 0.5 mm. A mirrored loft copy carries a \`mirrored\` flag in its geom (sections with different point counts are first resampled to a common count); rewriting that geom drops the flag, so to change a mirrored loft, edit the original and mirror it again.
+- Group names work as the part reference in move, rotate (the members turn together around the group pivot, keeping their relative placement), duplicate, mirror, delete (deletes the group and all its members) and update (only \`color\` and \`visible\` for a group).
 - view: show_names / show_dimensions / show_holes true/false toggles the app's name labels / dimension annotations / translucent hole display (holes keep cutting when hidden); null = unchanged.
 
 Refer to parts by their exact name from the scene (or their id). "Seçili parça", "bu", "onu" and commands without a part name refer to the selected part.
@@ -48,6 +54,7 @@ Refer to parts by their exact name from the scene (or their id). "Seçili parça
 ## Guidance
 - Prefer place_on, place_beside and drop_to_bed over computing absolute positions. When you must compute positions (e.g. table legs at the corners of a top), remember position is the centre: a part of height h resting on a surface at height s has z = s + h/2.
 - For composite objects ("4 ayaklı masa", "kapaklı kutu"), create several sensibly named parts with realistic printable proportions.
+- Symmetric objects: build one side, then mirror it. Things that move together (a wheel = tyre + rim + hub) go into a group whose pivot is the rotation centre (the hub centre).
 - Holes, pockets, windows and cut-outs: create a part with role "hole". Hollow boxes and cups: a solid plus a slightly smaller hole part. Chamfers on straight edges: draw them in an extrude or revolve profile.
 - The app has no fillets on arbitrary edges, text or threads. If the user asks for one, say so briefly in \`reply\` and offer the closest workable alternative; only perform operations that clearly match the request.
 - If the user only asks a question (dimensions, volume, which parts exist), answer it in \`reply\` with an empty operations list.

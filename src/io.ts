@@ -9,7 +9,12 @@ import { build3mf, buildStl, type WorldMesh } from './meshio';
 import { unionGeometries } from './csg';
 import { exportGeometry, exportableParts } from './model';
 import { PALETTE, defaultParams, sanitizeParams } from './shapes';
-import { newProject, type Part, type Project } from './types';
+import { buildGlb } from './gltf';
+import { fold } from './text';
+import { newProject, type GroupDef, type Part, type Project } from './types';
+
+/** Yuvarlak yüzey çözünürlüğünün alt sınırı (düşük poligonlu oyun modelleri için 6). */
+export const MIN_RESOLUTION = 6;
 
 // ---------------------------------------------------------------------------
 // Proje dosyası (.p3d.json)
@@ -38,7 +43,7 @@ export function parseProject(data: unknown, dropped?: string[]): Project {
   base.view.showNames = view.showNames !== false;
   base.view.showDimensions = view.showDimensions !== false;
   base.view.showHoles = view.showHoles !== false;
-  base.settings.resolution = Math.round(num(settings.resolution, base.settings.resolution, 16, 256));
+  base.settings.resolution = Math.round(num(settings.resolution, base.settings.resolution, MIN_RESOLUTION, 256));
   base.settings.bedX = num(settings.bedX, base.settings.bedX, 20, 2000);
   base.settings.bedY = num(settings.bedY, base.settings.bedY, 20, 2000);
 
@@ -50,6 +55,22 @@ export function parseProject(data: unknown, dropped?: string[]): Project {
       } catch (e) {
         console.warn('[p3d] ağ verisi atlandı:', (e as Error).message);
       }
+    }
+  }
+
+  const vec = (v: unknown) => {
+    const o = (v ?? {}) as Record<string, unknown>;
+    return { x: num(o.x, 0, -1e5, 1e5), y: num(o.y, 0, -1e5, 1e5), z: num(o.z, 0, -1e5, 1e5) };
+  };
+  // Gruplar: ad (benzersiz) + pivot. Üyesi olmayan grup atılır; alan yalnızca grup varsa eklenir.
+  const groups: GroupDef[] = [];
+  if (Array.isArray(d.groups)) {
+    for (const raw of d.groups) {
+      const g = (raw ?? {}) as Record<string, unknown>;
+      if (typeof g.name !== 'string' || !g.name.trim()) continue;
+      const name = g.name.trim();
+      if (groups.some((x) => fold(x.name) === fold(name))) continue;
+      groups.push({ name, pivot: vec(g.pivot) });
     }
   }
 
@@ -79,10 +100,6 @@ export function parseProject(data: unknown, dropped?: string[]): Project {
         return;
       }
     }
-    const vec = (v: unknown) => {
-      const o = (v ?? {}) as Record<string, unknown>;
-      return { x: num(o.x, 0, -1e5, 1e5), y: num(o.y, 0, -1e5, 1e5), z: num(o.z, 0, -1e5, 1e5) };
-    };
     let id = typeof r.id === 'string' && r.id ? r.id : newId();
     if (ids.has(id)) id = newId();
     ids.add(id);
@@ -98,8 +115,11 @@ export function parseProject(data: unknown, dropped?: string[]): Project {
       ...(geom ? { geom } : {}),
       ...(r.role === 'hole' || r.role === 'reference' ? { role: r.role } : {}),
       ...(r.role === 'hole' && Array.isArray(r.cuts) && r.cuts.length ? { cuts: r.cuts.filter((c): c is string => typeof c === 'string') } : {}),
+      ...(typeof r.group === 'string' && groups.some((g) => g.name === r.group) ? { group: r.group } : {}),
     });
   });
+  const used = groups.filter((g) => base.parts.some((p) => p.group === g.name));
+  if (used.length) base.groups = used;
   return base;
 }
 
@@ -196,7 +216,9 @@ export type ExportKind =
   | 'selected-stl'
   | 'all-3mf'
   | 'merged-stl'
-  | 'merged-3mf';
+  | 'merged-3mf'
+  | 'glb'
+  | 'glb-skeleton';
 
 /** Görünür katıların birleşimi (union): örtüşen parçalar tek kapalı gövde olur (dilimleyiciye tek parça). */
 export function mergedMesh(project: Project, parts: Part[]): WorldMesh {
@@ -241,6 +263,14 @@ export function exportModel(kind: ExportKind, project: Project, selectedId: stri
     if (kind === 'merged-stl') download(`${base}_birlesik.stl`, buildStl([m]), 'model/stl');
     else download(`${base}_birlesik.3mf`, build3mf(project.name, [m]) as BlobPart, 'model/3mf');
     return `${visible.length} parça birleştirildi → ${base}_birlesik.${kind === 'merged-stl' ? 'stl' : '3mf'} (tek gövde)`;
+  }
+  if (kind === 'glb' || kind === 'glb-skeleton') {
+    // Oyun motoru: glTF 2.0 ikili, Y yukarı, metre, düz (flat) normaller. İskelette gruplar kemik olur.
+    const skeleton = kind === 'glb-skeleton';
+    const file = `${base}${skeleton ? '_iskelet' : ''}.glb`;
+    download(file, buildGlb(project, { skeleton }) as BlobPart, 'model/gltf-binary');
+    const bones = (project.groups ?? []).filter((g) => visible.some((p) => p.group === g.name)).length;
+    return `${visible.length} parça → ${file}${skeleton ? ` (kök + ${bones} grup kemiği)` : ''}`;
   }
   if (kind === 'all-3mf') {
     download(`${base}.3mf`, build3mf(project.name, visible.map((p) => worldMesh(project, p))) as BlobPart, 'model/3mf');
