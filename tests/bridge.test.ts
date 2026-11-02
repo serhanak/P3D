@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { handleBridge } from '../server/bridge';
+import { makeAsset } from '../src/assets';
 import { contentDigest, type BridgeCommand, type BridgeHello, type BridgeResult, type BridgeSceneResponse, type BridgeWorkspace, type SceneSummary } from '../shared/ops';
 
 // Köprü sunucusu port 0'da gerçek bir HTTP sunucusuyla çalıştırılır; sekmeler SSE'yi fetch akışıyla okur.
@@ -634,5 +635,77 @@ describe('p3d save / open korumaları', () => {
     const load = t.commands.at(-1)!;
     expect(load).toMatchObject({ action: 'load', dirty: true });
     expect((load.project as { parts: { name: string }[] }).parts.map((p) => p.name)).toEqual(['saglam']);
+  }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// Tarayıcısız çekirdekle gelen sekme yolu: --ops dosyası, import src, sekmeden export/check, save src kuralı
+
+describe('p3d: --ops dosyası, import kaynağı, sekmeden export/check, save ve referans ağ', () => {
+  let dir: string;
+  const CUBE_OBJ = [
+    ...[[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0], [0, 0, 10], [10, 0, 10], [10, 10, 10], [0, 10, 10]].map((v) => `v ${v.join(' ')}`),
+    'f 1 3 2', 'f 1 4 3', 'f 5 6 7', 'f 5 7 8', 'f 1 2 6', 'f 1 6 5',
+    'f 2 3 7', 'f 2 7 6', 'f 3 4 8', 'f 3 8 7', 'f 4 1 5', 'f 4 5 8',
+  ].join('\n');
+
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'p3d-cekirdek-'));
+    writeFileSync(path.join(dir, 'p3d.json'), JSON.stringify({ workspace: 'cekirdek' }));
+    writeFileSync(path.join(dir, 'kup.obj'), CUBE_OBJ);
+    mkdirSync(path.join(dir, 'model'));
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('ops --ops dosyası stdin yerine okunur ({"ops": …} biçimi de)', async () => {
+    const t = await openTab('cekirdek');
+    t.auto(['a']);
+    writeFileSync(path.join(dir, 'ops.json'), JSON.stringify({ ops: [{ op: 'create', shape: 'box', name: 'a' }] }));
+    const r = await p3d(['ops', '--ops', 'ops.json', '--label', 'dosyadan'], dir);
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
+    expect(t.commands.at(-1)).toMatchObject({ ops: [{ op: 'create', shape: 'box', name: 'a' }], label: 'dosyadan' });
+  }, 60_000);
+
+  it('import: işleme ağ, mutlak kaynak yolu (src) ve maxTris yazılır', async () => {
+    const t = await openTab('cekirdek');
+    t.auto(['kup']);
+    const r = await p3d(['import', 'kup.obj', '--max-tris', '500', '--role', 'reference', '--keep-position'], dir);
+    expect(r.code).toBe(0);
+    const op = t.commands.at(-1)!.ops![0];
+    expect(op).toMatchObject({ op: 'import_mesh', name: 'kup', role: 'reference', src: path.join(dir, 'kup.obj'), maxTris: 500, position: { x: 5, y: 5, z: 5 } });
+    expect((op as { asset: { triangles: number } }).asset.triangles).toBe(12);
+  }, 60_000);
+
+  it('export ve check --file olmadan sekmenin sahnesinden', async () => {
+    const t = await openTab('cekirdek');
+    await t.put(['a', 'b']);
+    const r = await p3d(['export', 'sekme.stl', '--parts', 'b'], dir);
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toMatch(/çalışma alanı: cekirdek \(rev \d+\)/);
+    expect(readFileSync(path.join(dir, 'sekme.stl')).length).toBe(84 + 50 * 12);
+    const c = await p3d(['check', '--profile', 'game', '--max-tris', '10'], dir);
+    expect(c.stdout).toContain('profil game (bütçe 10 üçgen)');
+    expect(c.stdout).toContain('Toplam 24 üçgen; bütçe 10 aşıldı');
+  }, 60_000);
+
+  it('save: kaynağı olan ağ gömülmez (yol dosyaya göreli), --embed ile gömülür', async () => {
+    const t = await openTab('cekirdek');
+    t.auto([]);
+    const asset = makeAsset('kup', new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]), new Uint32Array([0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3]), 'a_kup12345');
+    const src = path.join(dir, 'kup.obj');
+    const mesh = { ...project([]), parts: [{ ...box('tarama'), shape: 'mesh', params: { scale: 1 }, geom: { kind: 'mesh', asset: asset.id, src, maxTris: 500 } }] };
+    await t.put([], { project: mesh, assets: { [asset.id]: asset } });
+    let r = await p3d(['save', 'model/yol.p3d.json'], dir);
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toContain('1 ağ yolla anılıyor');
+    let raw = JSON.parse(readFileSync(path.join(dir, 'model', 'yol.p3d.json'), 'utf8'));
+    expect(raw.parts[0].geom).toEqual({ kind: 'mesh', asset: asset.id, src: '../kup.obj', maxTris: 500 });
+    expect(raw.assets).toBeUndefined();
+    r = await p3d(['save', 'model/gomulu.p3d.json', '--embed'], dir);
+    expect(r.stdout).toContain('1 ağ gömülü');
+    raw = JSON.parse(readFileSync(path.join(dir, 'model', 'gomulu.p3d.json'), 'utf8'));
+    expect(raw.parts[0].geom.src).toBe('../kup.obj');
+    expect(raw.assets[asset.id]).toEqual(asset);
   }, 60_000);
 });

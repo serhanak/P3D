@@ -54,9 +54,12 @@ export function makeAsset(name: string, positions: Float32Array, indices: Uint32
   return { id, name, positions: f32ToB64(positions), indices: u32ToB64(indices), triangles: indices.length / 3 };
 }
 
-/** Varlığı doğrular ve depoya ekler (aynı kimlik varsa üzerine yazmaz). */
-export function registerAsset(raw: unknown): MeshAsset {
-  const a = raw as Partial<MeshAsset> | null;
+/**
+ * Varlığı doğrular ve depoya ekler (aynı kimlik varsa üzerine yazmaz). `id` verilirse varlığın kendi kimliği yerine o
+ * kullanılır (ör. `src` dosyasından yeniden okunan ağ, projedeki kimliğiyle kaydedilir).
+ */
+export function registerAsset(raw: unknown, id?: string): MeshAsset {
+  const a = (id === undefined ? raw : { ...(raw as object), id }) as Partial<MeshAsset> | null;
   if (!a || typeof a.id !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(a.id)) throw new Error('Geçersiz ağ kimliği.');
   if (typeof a.positions !== 'string' || typeof a.indices !== 'string') throw new Error('Ağ verisi eksik.');
   const existing = assets.get(a.id);

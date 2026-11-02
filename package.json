@@ -12,6 +12,10 @@
     "typecheck": "tsc --noEmit"
   },
   "type": "module",
+  "exports": {
+    ".": "./src/api.ts",
+    "./package.json": "./package.json"
+  },
   "bin": {
     "p3d": "bin/p3d.mjs"
   },

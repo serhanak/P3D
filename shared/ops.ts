@@ -82,10 +82,18 @@ export interface HullGeom {
   kind: 'hull';
   stations: HullStation[];
 }
-/** İçe aktarılmış üçgen ağ; veri projenin `assets` deposundadır. */
+/**
+ * İçe aktarılmış üçgen ağ; veri projenin `assets` deposundadır. `src` verilirse ağ dosyası yolla anılır: Node'da
+ * kaydederken (`saveProjectFile`) dosya varsa ağ gömülmez, yol proje dosyasına göreli yazılır; açarken gömülü ağ yoksa
+ * dosya okunup `maxTris` ile yeniden sadeleştirilir (aynı kimlikle). Tarayıcı `src`'yi okumaz, yalnızca taşır.
+ */
 export interface MeshGeom {
   kind: 'mesh';
   asset: string;
+  /** Kaynak ağ dosyası (STL/OBJ/3MF). Bellekte mutlak, dosyada proje dosyasının klasörüne göreli. */
+  src?: string;
+  /** İçe aktarmadaki üçgen sınırı (yeniden okurken aynı ağ çıksın diye). */
+  maxTris?: number;
 }
 export type PartGeom = ExtrudeGeom | RevolveGeom | LoftGeom | HullGeom | MeshGeom;
 
@@ -178,8 +186,11 @@ export type Op =
   | { op: 'mirror'; part: string; plane: Axis; at?: number | null; name?: string }
   | { op: 'select'; part: string }
   | { op: 'view'; show_names?: boolean | null; show_dimensions?: boolean | null; show_holes?: boolean | null }
-  /** Yalnızca yerel kullanım (arayüz/köprü): ağ verisiyle birlikte mesh parçası ekler. `position` yoksa tablaya yerleşir. */
-  | { op: 'import_mesh'; asset: MeshAsset; name?: string; role?: Role | ''; color?: string; position?: Vec3 | null };
+  /**
+   * Yalnızca yerel kullanım (arayüz/köprü): ağ verisiyle birlikte mesh parçası ekler. `position` yoksa tablaya yerleşir.
+   * `src` / `maxTris` parçanın geom'una yazılır (bkz. MeshGeom; `p3d import` doldurur).
+   */
+  | { op: 'import_mesh'; asset: MeshAsset; name?: string; role?: Role | ''; color?: string; position?: Vec3 | null; src?: string; maxTris?: number };
 
 export type OpName = Op['op'];
 

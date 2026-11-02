@@ -3,7 +3,7 @@
 // yerel koordinatlara taşır. Sonuç her zaman kapalı ve dışa dönüktür (işaretli hacim > 0).
 import * as THREE from 'three';
 import { mergeVertices, toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { ExtrudeGeom, GeomAxis, GeomShape, HullGeom, LoftGeom, PartGeom, Pt2, RevolveGeom } from '../shared/ops';
+import type { ExtrudeGeom, GeomAxis, GeomShape, HullGeom, LoftGeom, MeshGeom, PartGeom, Pt2, RevolveGeom } from '../shared/ops';
 import { decodedAsset } from './assets';
 import { frameRing, hullSolid } from './csg';
 
@@ -142,9 +142,18 @@ export function sanitizeGeom(shape: GeomShape, raw: unknown): PartGeom {
       return sanitizeHull(g);
     case 'mesh': {
       if (typeof g.asset !== 'string' || !g.asset) throw new GeomError('Mesh parçasının ağ kimliği (asset) eksik.');
-      return { kind: 'mesh', asset: g.asset };
+      return { kind: 'mesh', asset: g.asset, ...meshSource(g) };
     }
   }
+}
+
+/** Mesh geom'unun isteğe bağlı kaynak alanları (`src`, `maxTris`); geçersizleri atılır. */
+export function meshSource(g: Record<string, unknown>): Pick<MeshGeom, 'src' | 'maxTris'> {
+  const out: Pick<MeshGeom, 'src' | 'maxTris'> = {};
+  if (typeof g.src === 'string' && g.src.trim()) out.src = g.src.trim();
+  const max = Number(g.maxTris);
+  if (g.maxTris !== undefined && Number.isFinite(max) && max >= 1) out.maxTris = Math.round(max);
+  return out;
 }
 
 const MAX_STATIONS = 512;

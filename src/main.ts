@@ -60,11 +60,35 @@ try {
 }
 let initial: Project | null = null;
 let unreadable = restored?.error ?? '';
+/** Kayıt okundu ama bazı parçaları atlandı ("ad: neden"). */
+const droppedOnRestore: string[] = [];
 if (restored && !unreadable) {
   try {
-    initial = parseProject(restored.project);
+    initial = parseProject(restored.project, droppedOnRestore);
+    const raw = (restored.project as { parts?: unknown } | null)?.parts;
+    const lost = (Array.isArray(raw) ? raw.length : 0) - initial.parts.length;
+    if (lost > 0 && !droppedOnRestore.length) droppedOnRestore.push(`${lost} parça (neden bilinmiyor)`);
   } catch (e) {
     unreadable = (e as Error).message;
+  }
+}
+if (droppedOnRestore.length && restored) {
+  // Sessiz kayıp olmasın: ham kayıt (tüm parçalarıyla) yedeğe taşınır, okunabilen parçalarla devam edilir; sekme
+  // dosyayla aynı değildir (kirli). Yedeklenemezse asıl kayıt korunur ve bu sekmede otomatik kayıt kapanır.
+  const list = droppedOnRestore.map((d) => `“${d}”`).join(', ');
+  restored.dirty = true;
+  if (!autosaveOn) {
+    restoreWarning = `Otomatik kayıttaki ${droppedOnRestore.length} parça okunamadı ve gösterilmiyor: ${list}. Bu sekme salt okunur olduğundan kayda dokunulmadı.`;
+  } else {
+    try {
+      const where = await autosave.quarantine();
+      restoreWarning = `Otomatik kayıttaki ${droppedOnRestore.length} parça okunamadı ve projeden çıkarıldı: ${list}. Ham kayıt (tüm parçalarıyla) yedeğe taşındı: ${where}.`;
+    } catch (e) {
+      autosaveOn = false;
+      restoreWarning =
+        `Otomatik kayıttaki ${droppedOnRestore.length} parça okunamadı: ${list}; ham kayıt yedeklenemedi (${(e as Error).message}). ` +
+        'Asıl kayıt korunuyor; bu sekmede otomatik kayıt kapalı. Projeyi dosyaya kaydedin.';
+    }
   }
 }
 if (unreadable) {
@@ -374,8 +398,12 @@ const startBridge = () => connectBridge(store, viewer, ws, {
 
 store.onWarning = (m) => addLog('warn', '⚠ ' + m);
 viewer.onWarning = (m) => addLog('warn', '⚠ ' + m);
+// Kısmi geri yüklemede asıl kayıt yedeğe taşındı: okunabilen parçalar ilk düzenlemeyi beklemeden yeniden yazılır
+// (yenilenen sayfa boş açılmasın).
+if (droppedOnRestore.length && autosaveOn) autosave.save({ project: store.project, file: store.file, dirty: true }, store.onWarning);
 if (restoreWarning) addLog('warn', '⚠ ' + restoreWarning);
 if (unreadable) toast('Otomatik kayıt okunamadı; ayrıntı günlükte.', true);
+if (droppedOnRestore.length) toast(`Otomatik kayıttaki ${droppedOnRestore.length} parça okunamadı; ayrıntı günlükte.`, true);
 if (csgError) addLog('warn', `⚠ Delik (boolean) çekirdeği yüklenemedi; delik parçaları kesmeyecek. (${csgError})`);
 
 addLog(

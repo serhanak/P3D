@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { ROLES, isGeomShape, type Axis, type GroupDef, type LoftGeom, type Op, type ParamChange, type Pt2, type Role, type SceneSummary, type Side, type Vec3 } from '../shared/ops';
 import { decodedAsset, getAsset, makeAsset, newAssetId, registerAsset } from './assets';
 import { resolveColor } from './colors';
-import { GeomError, defaultGeom, describeGeom, geometryVolume, loftCommonSections, sanitizeGeom } from './geom';
+import { GeomError, defaultGeom, describeGeom, geometryVolume, loftCommonSections, meshSource, sanitizeGeom } from './geom';
 import { PALETTE, SHAPE_DEFS, buildGeometry, defaultParams, fmt, sanitizeParams, type DimWord, type Params } from './shapes';
 import { fold } from './text';
 import type { Part, Project } from './types';
@@ -654,7 +654,7 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
             rotation: { x: 0, y: 0, z: 0 },
             color: colorOf(op.color) ?? PALETTE[project.parts.length % PALETTE.length],
             visible: true,
-            geom: { kind: 'mesh', asset: asset.id },
+            geom: { kind: 'mesh', asset: asset.id, ...meshSource(op) },
           };
           if (role) setRole(part, role);
           const pos = checkVec(op.position, 'konum');

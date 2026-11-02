@@ -309,8 +309,11 @@ function nameAllocator(): (raw: string, fallback: string) => string {
 
 // ---------------------------------------------------------------------------
 
-/** Dışa aktarılacak parçalar: görünür katılar; `refs` verilirse yalnızca o parçalar / grupların üyeleri (proje sırasıyla). */
-function selectParts(project: Project, refs?: string[]): Part[] {
+/**
+ * Dışa aktarılacak parçalar: görünür katılar; `refs` verilirse yalnızca o parçalar / grupların üyeleri (proje sırasıyla).
+ * Diğer biçimler de kullanır (files.ts → exportFile).
+ */
+export function selectParts(project: Project, refs?: string[]): Part[] {
   const solids = exportableParts(project.parts);
   if (!refs?.length) return solids;
   const keep = new Set<Part>();
