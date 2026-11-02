@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "start": "tsx --env-file-if-exists=.env scripts/launch.ts start",
     "p3d": "tsx scripts/p3d.ts",
-    "test": "vitest run",
+    "test": "vitest run --dir tests",
     "typecheck": "tsc --noEmit"
   },
   "type": "module",

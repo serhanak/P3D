@@ -1,11 +1,23 @@
-// Claude Code köprüsü için komut satırı aracı (bkz. server/bridge.ts). Açık tarayıcı sayfasının sahnesini
+// Claude Code köprüsü için komut satırı aracı (bkz. server/bridge.ts). Açık tarayıcı sekmesinin sahnesini
 // okur, ona işlem gönderir, görüntüsünü alır; ölçüm ve kesitleri uygulamanın aynı motoruyla Node'da hesaplar.
 // Geliştirme sunucusu (npm run dev) ve uygulama sekmesi açık olmalıdır (section --file hariç).
 // Depo içinde `npm run -s p3d -- <komut>`, başka klasörlerde global `p3d <komut>` (depoda bir kez `npm link`).
 //
-//   p3d scene [--full]                 sahne özeti (--full: tüm proje JSON'u)
+// Çalışma alanı (ws): her ws ayrı bir sekmedir (http://localhost:5173/w/<ad>; kök: /). Sıra: --ws <ad> >
+// P3D_WS > komutun yazıldığı klasörden yukarı doğru aranan ilk p3d.json'ın "workspace" alanı > kök.
+// p3d.json: { "workspace": "ad", "file": "model.p3d.json", "onAmbiguity": "ask-critical" } (file, p3d.json'a göre).
+//
+//   p3d status                         sunucu, ws ve adresi, bağlı sekme, p3d.json, diğer çalışma alanları
+//   p3d view                           ws adresini varsayılan tarayıcıda açar
+//   p3d scene [--full] [--stale]       sahne özeti (--full: tüm proje JSON'u; --stale: sekme yoksa son bilinen)
 //   p3d ops [--label "metin"]          stdin'den Op[] JSON'u (ya da {"ops": [...]}) uygular
 //   p3d undo | redo | fit
+//   p3d open [dosya.p3d.json] [--force]  dosyayı sekmeye yükler (geri alınabilir); varsayılan: p3d.json → file.
+//                                      Sekmede kaydedilmemiş iş varsa ya da dosyadaki parçalar okunamıyorsa --force ister.
+//   p3d save [dosya.p3d.json] [--force]  sekmenin projesini dosyaya yazar (geçici dosya + yeniden adlandırma);
+//                                      varsayılan: p3d.json → file. Sekmenin bağlı olmadığı mevcut bir dosyanın ya da
+//                                      dolu bir dosyanın boş sekmeyle üzerine yazmak --force ister; P3D dosyası olmayanın
+//                                      üzerine hiç yazılmaz.
 //   p3d snapshot [--views iso,front,right,top] [--size 1000x750] [--dims] [--out klasör]
 //   p3d import <dosya.stl|obj|3mf> [--name ad] [--role solid|hole|reference] [--color #hex]
 //              [--max-tris 60000] [--keep-position]
@@ -14,18 +26,58 @@
 //   p3d section --axis x|y|z --at v1,v2,… [--parts a,b] [--file dosya.stl] [--tol 0.1]
 //
 // Adres: P3D_URL (varsayılan http://localhost:5173). Göreli dosya yolları komutun yazıldığı klasöre göre çözülür.
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawn, type SpawnOptions } from 'node:child_process';
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { BridgeResult, Op, Pt2, SceneSummary, SceneSummaryPart, SnapshotView } from '../shared/ops.ts';
+import {
+  contentDigest,
+  wsLabel,
+  wsPath,
+  type BridgeResult,
+  type BridgeSceneResponse,
+  type BridgeWorkspace,
+  type Op,
+  type Pt2,
+  type SceneSummary,
+  type SceneSummaryPart,
+  type SnapshotView,
+} from '../shared/ops.ts';
+import { resolveWorkspace, samePath, type WorkspaceChoice } from './config.ts';
 
 const base = (process.env.P3D_URL || 'http://localhost:5173').replace(/\/$/, '');
-const [cmd, ...rest] = process.argv.slice(2);
+
+// `--ws <ad>` (ya da `--ws=<ad>`) komuttan önce ya da sonra yazılabilir.
+const argv = process.argv.slice(2);
+let wsFlag: string | undefined;
+let wsFlagError = '';
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i] === '--ws') {
+    if (argv[i + 1] === undefined) wsFlagError = '--ws bir çalışma alanı adı ister (kök için: --ws ""; Git Bash dışında --ws / da olur).';
+    wsFlag = argv[i + 1] ?? '';
+    argv.splice(i, 2);
+    break;
+  }
+  if (argv[i].startsWith('--ws=')) {
+    wsFlag = argv[i].slice('--ws='.length);
+    argv.splice(i, 1);
+    break;
+  }
+}
+const [cmd, ...rest] = argv;
 
 // `npm run p3d` çalışma klasörünü depo köküne çevirir; komutun yazıldığı klasör INIT_CWD'dedir.
 // Global `p3d` komutu (bin/p3d.mjs) zaten çağıranın klasöründe çalışır.
 const callerDir = process.env.npm_lifecycle_event === 'p3d' && process.env.INIT_CWD ? process.env.INIT_CWD : process.cwd();
 const fromCaller = (file: string) => path.resolve(callerDir, file);
+
+// Çalışma alanı yalnızca köprü gerektiğinde çözülür (section --file bozuk bir p3d.json'dan etkilenmesin).
+let choice: WorkspaceChoice | undefined;
+function workspace(): WorkspaceChoice {
+  if (wsFlagError) throw new Error(wsFlagError);
+  return (choice ??= resolveWorkspace({ flag: wsFlag, env: process.env.P3D_WS, cwd: callerDir }));
+}
+const ws = () => workspace().ws;
 
 function flag(name: string): string | undefined {
   const i = rest.indexOf(name);
@@ -33,6 +85,26 @@ function flag(name: string): string | undefined {
 }
 const has = (name: string) => rest.includes(name);
 const list = (name: string) => flag(name)?.split(',').map((s) => s.trim()).filter(Boolean);
+
+const VALUE_FLAGS = new Set(['--label', '--views', '--size', '--out', '--name', '--role', '--color', '--max-tris', '--parts', '--axis', '--at', '--file', '--tol']);
+/** Bayrak olmayan argümanlar (dosya yolları). */
+function positionals(): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    if (VALUE_FLAGS.has(rest[i])) i++;
+    else if (!rest[i].startsWith('--')) out.push(rest[i]);
+  }
+  return out;
+}
+
+class CallError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 async function call(method: string, p: string, body?: unknown): Promise<unknown> {
   let r: Response;
@@ -43,11 +115,171 @@ async function call(method: string, p: string, body?: unknown): Promise<unknown>
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
-    throw new Error(`${base} adresine bağlanılamadı. Geliştirme sunucusu çalışıyor mu (npm run dev)?`);
+    throw new CallError(0, `${base} adresine bağlanılamadı. Geliştirme sunucusu çalışıyor mu (P3D klasöründe: npm run dev)?`);
   }
   const data = (await r.json().catch(() => ({}))) as { error?: string };
-  if (!r.ok) throw new Error(data.error ?? `HTTP ${r.status}`);
+  if (!r.ok) throw new CallError(r.status, data.error ?? `HTTP ${r.status}`);
   return data;
+}
+
+/** Çalışma alanının hedef sekmesinin sahnesi (bağlı sekme yoksa sunucu 409 ve açılacak adresi döner). */
+async function getScene(opts: { full?: boolean; stale?: boolean } = {}): Promise<BridgeSceneResponse> {
+  const q = [`ws=${encodeURIComponent(ws())}`, ...(opts.full ? ['full'] : []), ...(opts.stale ? ['stale'] : [])];
+  return (await call('GET', `/api/bridge/scene?${q.join('&')}`)) as BridgeSceneResponse;
+}
+
+/** Çalışma alanının hedef sekmesine işlem/eylem gönderir. */
+async function post(body: Record<string, unknown>): Promise<BridgeResult> {
+  return (await call('POST', '/api/bridge/ops', { ws: ws(), ...body })) as BridgeResult;
+}
+
+function ago(iso: string): string {
+  const d = new Date(iso);
+  const s = Math.max(0, Math.round((Date.now() - d.getTime()) / 1000));
+  const rel = s < 60 ? `${s} sn önce` : s < 3600 ? `${Math.round(s / 60)} dk önce` : `${Math.round(s / 3600)} sa önce`;
+  return `${d.toLocaleTimeString('tr-TR')} (${rel})`;
+}
+
+function sceneHeader(r: BridgeSceneResponse): string {
+  const bits = [`çalışma alanı: ${wsLabel(r.ws)}`, `rev ${r.rev}`, ago(r.at), `${r.tabs} sekme`];
+  if (!r.connected) bits.push('BAĞLI SEKME YOK — son bilinen sahne');
+  if (r.file) bits.push(`dosya: ${r.file}${r.dirty ? ' ● kaydedilmemiş' : ''}`);
+  return bits.join(' · ');
+}
+
+/**
+ * open/save dosyası: argüman ya da (aynı çalışma alanındaysa) p3d.json → file. p3d.json'daki yol p3d.json'ın
+ * klasörünün dışına çıkamaz (komutta açıkça yazılan yol serbesttir).
+ */
+function projectFile(command: 'open' | 'save'): string {
+  const arg = positionals()[0];
+  if (arg) return fromCaller(arg);
+  const c = workspace();
+  if (c.configError) throw c.configError;
+  const cfg = c.config;
+  if (cfg && (cfg.file || cfg.fileError) && cfg.config.workspace !== c.ws) {
+    // Başka bir ws'nin sekmesi bu projenin dosyasının üzerine yazılmasın (ya da tersi).
+    throw new Error(
+      `Dosya belirtilmedi. ${cfg.path} '${wsLabel(cfg.config.workspace)}' çalışma alanına ait, şu an '${wsLabel(c.ws)}' seçili; ` +
+        `dosyayı açıkça yazın: p3d ${command} <dosya.p3d.json>`,
+    );
+  }
+  if (cfg?.fileError) throw new Error(cfg.fileError);
+  if (cfg?.file) return cfg.file;
+  throw new Error(`Dosya belirtilmedi: p3d ${command} <dosya.p3d.json> yazın ya da p3d.json'a "file" ekleyin.`);
+}
+
+/**
+ * `save` hedefi zaten varsa içeriği: P3D projesi değilse (format/parts yok, bozuk JSON) Error — üzerine hiç
+ * yazılmaz (yanlışlıkla başka bir dosyayı ezmemek için). Yoksa null.
+ */
+function existingProject(file: string): { parts: number } | null {
+  const st = statOf(file);
+  if (!st) return null;
+  if (st.isDirectory()) throw new Error(`Bu bir klasör: ${file}; dosya adı yazın (ör. model.p3d.json).`);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, ''));
+  } catch {
+    raw = undefined;
+  }
+  const o = raw as { format?: unknown; parts?: unknown } | undefined;
+  if (!o || typeof o !== 'object' || o.format !== 'p3d' || !Array.isArray(o.parts)) {
+    throw new Error(
+      `${file} var ama bir P3D proje dosyası değil ("format": "p3d" ve "parts" yok); üzerine yazılmadı. ` +
+        'Başka bir dosya adı verin ya da dosyayı kendiniz taşıyın/silin.',
+    );
+  }
+  return { parts: o.parts.length };
+}
+
+/** Önce aynı klasörde geçici dosyaya yazar, sonra yeniden adlandırır: yarıda kalan yazma mevcut dosyayı bozmasın. */
+function writeFileAtomic(file: string, text: string): void {
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.tmp`);
+  try {
+    writeFileSync(tmp, text);
+    renameSync(tmp, file);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw new Error(`${file} yazılamadı: ${(e as Error).message}`);
+  }
+}
+
+const listed = (items: string[]) => items.map((s) => `\n  - ${s}`).join('');
+
+function statOf(p: string) {
+  try {
+    return statSync(p);
+  } catch {
+    return null;
+  }
+}
+
+/** Adresi varsayılan tarayıcıda açar. */
+function openInBrowser(url: string): Promise<void> {
+  const [bin, args, opts]: [string, string[], SpawnOptions] =
+    process.platform === 'win32'
+      ? ['cmd', ['/c', 'start', '""', `"${url}"`], { windowsVerbatimArguments: true }]
+      : process.platform === 'darwin'
+        ? ['open', [url], {}]
+        : ['xdg-open', [url], {}];
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, args, { ...opts, detached: true, stdio: 'ignore' });
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
+
+/** `p3d status`: sunucu, çalışma alanı, sekme ve p3d.json durumu. Sunucuya ulaşılamazsa çıkış kodu 1. */
+async function status(): Promise<void> {
+  const row = (k: string, v: string) => console.log(`${k.padEnd(16)}${v}`);
+  let c: WorkspaceChoice | null = null;
+  try {
+    c = workspace();
+  } catch (e) {
+    row('Çalışma alanı:', `HATA — ${(e as Error).message}`);
+    process.exitCode = 1;
+  }
+  let spaces: BridgeWorkspace[] | null = null;
+  try {
+    spaces = (await call('GET', '/api/bridge/workspaces')) as BridgeWorkspace[];
+    row('Sunucu:', `${base} — erişilebilir, köprü açık`);
+  } catch (e) {
+    const err = e as CallError;
+    row('Sunucu:', err.status === 404 ? `${base} — erişilebilir ama köprü kapalı (sunucu --bridge ile başlatılmalı; npm run dev'de açıktır)` : `${base} — ERİŞİLEMİYOR. P3D klasöründe "npm run dev" ile başlatın.`);
+    process.exitCode = 1;
+  }
+  if (!c) return;
+  row('Çalışma alanı:', `${wsLabel(c.ws)} (kaynak: ${c.source})`);
+  row('Adres:', base + wsPath(c.ws));
+  if (c.configError) row('p3d.json:', `HATA — ${c.configError.message}`);
+  else if (c.config) {
+    row('p3d.json:', c.config.path);
+    row('  workspace:', wsLabel(c.config.config.workspace) + (c.config.config.workspace === c.ws ? '' : ' (kullanılmıyor: ' + c.source + ' önce gelir)'));
+    if (c.config.fileError) row('  file:', `HATA — ${c.config.fileError}`);
+    else if (c.config.file) row('  file:', `${c.config.file} ${statOf(c.config.file)?.isFile() ? '(var)' : '(yok — p3d save ile oluşturulur)'}`);
+    if (c.config.config.onAmbiguity) row('  onAmbiguity:', c.config.config.onAmbiguity);
+  } else row('p3d.json:', `yok (${callerDir} ve üst klasörlerde bulunamadı)`);
+  if (!spaces) return;
+  const mine = spaces.find((s) => s.ws === c.ws);
+  if (!mine?.tabs) {
+    row('Sekme:', `bağlı sekme yok — açmak için: p3d view${c.source === '--ws' ? ` --ws ${c.ws || '""'}` : ''}`);
+  } else {
+    let line = `bağlı · ${mine.tabs} sekme`;
+    try {
+      const r = await getScene();
+      line += ` · rev ${r.rev} · ${ago(r.at)} · ${(r.scene as SceneSummary).parts.length} parça`;
+      row('Sekme:', line);
+      row('  dosya bağı:', r.file ? `${r.file}${r.dirty ? ' ● kaydedilmemiş değişiklik var' : ' (kaydedilmiş)'}` : 'yok');
+    } catch (e) {
+      row('Sekme:', `${line} · ${(e as Error).message}`);
+    }
+  }
+  const others = spaces.filter((s) => s.ws !== c.ws && s.tabs > 0);
+  row('Diğer ws:', others.length ? others.map((s) => `${wsLabel(s.ws)} (${s.tabs} sekme${s.parts !== null ? `, ${s.parts} parça` : ''})`).join(', ') : 'yok');
 }
 
 const n = (v: number) => String(Math.round(v * 100) / 100);
@@ -132,29 +364,145 @@ const PLANE: Record<string, string> = { x: '[y, z]', y: '[x, z]', z: '[x, y]' };
 
 async function main(): Promise<void> {
   switch (cmd) {
+    case 'status':
+      return status();
+    case 'view': {
+      const url = base + wsPath(ws());
+      try {
+        await openInBrowser(url);
+      } catch (e) {
+        throw new Error(`Tarayıcı açılamadı (${(e as Error).message}); adresi elle açın: ${url}`);
+      }
+      console.log(`Tarayıcıda açılıyor: ${url}`);
+      return;
+    }
     case 'scene': {
       const full = has('--full');
-      const r = (await call('GET', `/api/bridge/scene${full ? '?full' : ''}`)) as { connected: boolean; scene: unknown };
-      if (!r.connected) console.log('(uyarı: bağlı tarayıcı sayfası yok; son bilinen sahne)');
-      if (full) console.log(JSON.stringify(r.scene, null, 2));
-      else printScene(r.scene as SceneSummary);
+      const r = await getScene({ full, stale: has('--stale') });
+      if (full) {
+        // stdout yalnızca JSON kalsın (betikler okuyabilsin); başlık stderr'e.
+        console.error(sceneHeader(r));
+        console.log(JSON.stringify(r.scene, null, 2));
+      } else {
+        console.log(sceneHeader(r));
+        printScene(r.scene as SceneSummary);
+      }
       return;
     }
     case 'ops': {
       const raw = JSON.parse(await readStdin()) as unknown;
       const ops = Array.isArray(raw) ? raw : (raw as { ops?: unknown }).ops;
-      printResult((await call('POST', '/api/bridge/ops', { ops, label: flag('--label') })) as BridgeResult);
+      printResult(await post({ ops, label: flag('--label') }));
       return;
     }
     case 'undo':
     case 'redo':
     case 'fit':
-      printResult((await call('POST', '/api/bridge/ops', { action: cmd, label: flag('--label') })) as BridgeResult);
+      printResult(await post({ action: cmd, label: flag('--label') }));
       return;
+    case 'open': {
+      const file = projectFile('open');
+      const force = has('--force');
+      if (!statOf(file)?.isFile()) throw new Error(`Dosya bulunamadı: ${file}`);
+      let raw: unknown;
+      try {
+        raw = JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, ''));
+      } catch (e) {
+        throw new Error(`${file} okunamadı: ${(e as Error).message}`);
+      }
+      const { parseProject } = await import('../src/io.ts');
+      const { usedAssets } = await import('../src/assets.ts');
+      const dropped: string[] = [];
+      const project = parseProject(raw, dropped);
+      const rawParts = (raw as { parts?: unknown }).parts;
+      const rawCount = Array.isArray(rawParts) ? rawParts.length : 0;
+      // Parça sessizce kaybolmasın: okunamayanlar listelenir; --force ile yüklenir ama sekme kirli kalır.
+      if (rawCount !== project.parts.length && !dropped.length) dropped.push(`${rawCount - project.parts.length} parça (neden bilinmiyor)`);
+      if (dropped.length && !force) {
+        throw new Error(
+          `${file}: ${dropped.length} parça okunamadı ve yüklenmeyecekti:${listed(dropped)}\n` +
+            'Dosyayı düzeltin ya da bu parçalar olmadan yüklemek için --force ekleyin (sekme "kaydedilmemiş" kalır; kaydederseniz bu parçalar dosyadan da çıkar).',
+        );
+      }
+      // Sekmedeki kaydedilmemiş iş üzerine yazılmasın (yükleme geri alınabilir ama geri-al geçmişi sayfa yenilenince gider).
+      if (!force) {
+        const r = await getScene();
+        const parts = (r.scene as SceneSummary).parts.length;
+        const undoNote = 'ya da üzerine yüklemek için --force ekleyin (önceki içerik p3d undo ile geri gelir).';
+        if (r.dirty) {
+          throw new Error(
+            `Sekmede kaydedilmemiş değişiklik var (${r.file ? `dosya: ${r.file}` : 'bağlı dosya yok'}, ${parts} parça); yüklenmedi. ` +
+              `Önce kaydedin: p3d save${r.file ? '' : ' <dosya.p3d.json>'} — ${undoNote}`,
+          );
+        }
+        if (!r.file && parts > 0) {
+          throw new Error(`Sekmedeki proje (${parts} parça) bir dosyaya bağlı değil; yüklenmedi. Önce kaydedin: p3d save <dosya.p3d.json> — ${undoNote}`);
+        }
+      }
+      const r = await post({
+        action: 'load',
+        project,
+        assets: usedAssets(project),
+        file,
+        ...(dropped.length ? { dirty: true } : {}),
+        label: flag('--label') ?? `Aç: ${path.basename(file)}`,
+      });
+      printResult(r);
+      if (dropped.length) console.log(`⚠ ${dropped.length} parça yüklenmedi (--force):${listed(dropped)}\n  Sekme "kaydedilmemiş" sayılıyor.`);
+      return;
+    }
+    case 'save': {
+      const file = projectFile('save');
+      const force = has('--force');
+      if (!statOf(path.dirname(file))?.isDirectory()) throw new Error(`Klasör bulunamadı: ${path.dirname(file)} (dosya: ${file})`);
+      const existing = existingProject(file);
+      const r = await getScene({ full: true });
+      // Sekmenin projesi (sunucunun eklediği `assets` hariç): özeti sekme kendi JSON'uyla karşılaştırır.
+      const { assets: _assets, ...tabProject } = r.scene as Record<string, unknown>;
+      const { parseProject, projectToJson } = await import('../src/io.ts');
+      const { getAsset } = await import('../src/assets.ts');
+      const dropped: string[] = [];
+      const project = parseProject(r.scene, dropped);
+      const rawCount = Array.isArray(tabProject.parts) ? tabProject.parts.length : 0;
+      if (rawCount !== project.parts.length && !dropped.length) dropped.push(`${rawCount - project.parts.length} parça (neden bilinmiyor)`);
+      if (dropped.length) {
+        throw new Error(`Sekmedeki ${dropped.length} parça dosyaya yazılamazdı (okunamadı):${listed(dropped)}\nDosya yazılmadı.`);
+      }
+      const noMesh = project.parts.filter((p) => p.geom?.kind === 'mesh' && !getAsset(p.geom.asset)).map((p) => `'${p.name}'`);
+      if (noMesh.length) {
+        throw new Error(
+          `Şu ağ (mesh) parçalarının ağ verisi yok: ${noMesh.join(', ')} — sekme ağı sunucuya göndermemiş (ör. otomatik kayda sığmadığı ` +
+            'için sekmede yer tutucu küp görünüyor). Dosya yazılmadı; ağı yeniden içe aktarın (p3d import) ya da parçayı silin.',
+        );
+      }
+      if (existing && !force) {
+        if (!r.file || !samePath(r.file, file)) {
+          throw new Error(
+            `${file} zaten var ve sekme bu dosyaya bağlı değil (${r.file ? `bağlı dosya: ${r.file}` : 'dosya bağı yok'}); üzerine yazılmadı. ` +
+              'Üzerine yazmak için --force ekleyin ya da başka bir dosya adı verin.',
+          );
+        }
+        if (project.parts.length === 0 && existing.parts > 0) {
+          throw new Error(
+            `Sekme boş (0 parça) ama ${file} ${existing.parts} parça içeriyor; üzerine yazılmadı. Yanlış çalışma alanı olabilir (p3d status). ` +
+              'Dosyayı bilerek boşaltıyorsanız --force ekleyin.',
+          );
+        }
+      }
+      writeFileAtomic(file, projectToJson(project));
+      console.log(`✓ Kaydedildi: ${file} (${project.parts.length} parça; çalışma alanı ${wsLabel(r.ws)}, rev ${r.rev})`);
+      try {
+        const m = await post({ action: 'mark_saved', file, digest: contentDigest(JSON.stringify(tabProject)) });
+        for (const e of m.errors) console.log(`⚠ ${e}`);
+      } catch (e) {
+        console.log(`⚠ Sekme "kaydedildi" olarak işaretlenemedi: ${(e as Error).message}`);
+      }
+      return;
+    }
     case 'snapshot': {
       const [w, h] = (flag('--size') ?? '1000x750').split('x').map(Number);
       const views = (list('--views') ?? ['iso', 'front', 'right', 'top']) as SnapshotView[];
-      const r = (await call('POST', '/api/bridge/ops', { action: 'snapshot', snapshot: { views, width: w, height: h, dims: has('--dims') } })) as BridgeResult;
+      const r = await post({ action: 'snapshot', snapshot: { views, width: w, height: h, dims: has('--dims') } });
       const out = fromCaller(flag('--out') ?? path.join(tmpdir(), 'p3d-snapshots'));
       mkdirSync(out, { recursive: true });
       for (const img of r.images ?? []) {
@@ -189,13 +537,13 @@ async function main(): Promise<void> {
         color: flag('--color'),
         position: has('--keep-position') ? imp.center : null,
       };
-      printResult((await call('POST', '/api/bridge/ops', { ops: [op], label: flag('--label') ?? `İçe aktar: ${path.basename(file)}` })) as BridgeResult);
+      printResult(await post({ ops: [op], label: flag('--label') ?? `İçe aktar: ${path.basename(file)}` }));
       return;
     }
     case 'check': {
       const { initCsg } = await import('../src/csg.ts');
       await initCsg();
-      const r = (await call('GET', '/api/bridge/scene?full')) as { scene: unknown };
+      const r = await getScene({ full: true });
       const { parseProject } = await import('../src/io.ts');
       const { checkProject } = await import('../src/check.ts');
       const issues = checkProject(parseProject(r.scene));
@@ -243,7 +591,7 @@ async function main(): Promise<void> {
         printSection(path.basename(fileArg), g);
         return;
       }
-      const r = (await call('GET', '/api/bridge/scene?full')) as { scene: unknown };
+      const r = await getScene({ full: true });
       const { parseProject, worldMesh } = await import('../src/io.ts');
       const { roleOf, solidVolume } = await import('../src/model.ts');
       const { partBox } = await import('../src/engine.ts');
@@ -297,8 +645,10 @@ async function main(): Promise<void> {
     default:
       console.log(
         [
-          'Kullanım: p3d <komut>   (depo içinde: npm run -s p3d -- <komut>)',
-          '  scene [--full] · ops [--label "metin"] < ops.json · undo · redo · fit',
+          'Kullanım: p3d [--ws <ad>] <komut>   (depo içinde: npm run -s p3d -- <komut>)',
+          '  Çalışma alanı: --ws <ad> (kök: --ws "" ya da --ws /) > P3D_WS > üst klasörlerdeki ilk p3d.json ("workspace") > kök',
+          '  status · view · scene [--full] [--stale] · ops [--label "metin"] < ops.json · undo · redo · fit',
+          '  open [dosya.p3d.json] [--force] · save [dosya.p3d.json] [--force]   (dosya verilmezse p3d.json → "file")',
           '  snapshot [--views iso,front,back,left,right,top,bottom] [--size 1000x750] [--dims] [--out klasör]',
           '  import <dosya.stl|obj|3mf> [--name ad] [--role solid|hole|reference] [--color #hex] [--max-tris N] [--keep-position]',
           '  measure [--parts a,b] · check',

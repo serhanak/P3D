@@ -1,6 +1,7 @@
 import './style.css';
 import wasmUrl from 'manifold-3d/manifold.wasm?url';
-import type { Op } from '../shared/ops';
+import { wsFromPathname, wsLabel, wsPath, type Op } from '../shared/ops';
+import { claimAutosave, indexedDbBackend, localStorageBackend, type AutosaveRecord } from './autosave';
 import { sceneSummary, type ApplyResult } from './engine';
 import { exportModel, parseProject, projectToJson, download, safeFileName, type ExportKind } from './io';
 import { connectBridge } from './bridge';
@@ -22,16 +23,68 @@ function demoProject(): Project {
   return newProject('Örnek proje');
 }
 
-const restored = Store.restore();
-let initial: Project;
-let firstRun = false;
-try {
-  initial = restored ? parseProject(restored) : demoProject();
-  firstRun = !restored;
-} catch {
-  initial = demoProject();
-  firstRun = true;
+/** Geçersiz adres: uygulama yerine açıklama gösterilir, başka hiçbir şey çalışmaz (otomatik kayıt dahil). */
+function showFatal(message: string): never {
+  const box = document.createElement('div');
+  box.className = 'fatal';
+  const h = document.createElement('h2');
+  h.textContent = 'Geçersiz adres';
+  const p = document.createElement('p');
+  p.textContent = message;
+  const links = document.createElement('p');
+  links.innerHTML = 'Kök çalışma alanı: <a href="/">/</a> · Adlandırılmış çalışma alanı: <code>/w/&lt;ad&gt;</code> (harf, rakam, <code>_ - .</code>; en fazla 64 karakter)';
+  box.append(h, p, links);
+  document.body.replaceChildren(box);
+  document.title = 'P3D — geçersiz adres';
+  throw new Error(message);
 }
+
+// Çalışma alanı adresten gelir: kök `/` (localStorage), `/w/<ad>` (IndexedDB).
+let ws = '';
+try {
+  ws = wsFromPathname(location.pathname);
+} catch (e) {
+  showFatal((e as Error).message);
+}
+
+const autosave = ws ? indexedDbBackend(ws) : localStorageBackend();
+// Aynı çalışma alanı başka bir sekmede zaten açıksa bu sekme otomatik kayıt yazmaz (kayıtlar birbirini ezmesin).
+const autosaveOwner = await claimAutosave(ws);
+let autosaveOn = autosaveOwner;
+let restored: AutosaveRecord | null = null;
+let restoreWarning = '';
+try {
+  restored = await autosave.load();
+} catch (e) {
+  restoreWarning = `Otomatik kayıt açılamadı (${(e as Error).message}); boş projeyle devam ediliyor ve değişiklikler bu tarayıcıda otomatik kaydedilmeyecek. Projeyi dosyaya kaydedin.`;
+}
+let initial: Project | null = null;
+let unreadable = restored?.error ?? '';
+if (restored && !unreadable) {
+  try {
+    initial = parseProject(restored.project);
+  } catch (e) {
+    unreadable = (e as Error).message;
+  }
+}
+if (unreadable) {
+  // Okunamayan kayıt silinmez: ham hâli yedeğe taşınır, sonra boş projeyle devam edilir. Yedeklenemezse asıl
+  // kayıt korunur ve bu sekmede otomatik kayıt kapanır (ilk düzenleme onu ezmesin).
+  restored = null;
+  if (!autosaveOn) {
+    restoreWarning = `Otomatik kayıt okunamadı (${unreadable}); bu sekme salt okunur olduğundan kayda dokunulmadı. Boş projeyle devam ediliyor.`;
+  } else {
+    try {
+      const where = await autosave.quarantine();
+      restoreWarning = `Otomatik kayıt okunamadı (${unreadable}); ham kayıt silinmedi, yedeğe taşındı: ${where}. Boş projeyle devam ediliyor.`;
+    } catch (e) {
+      autosaveOn = false;
+      restoreWarning = `Otomatik kayıt okunamadı (${unreadable}) ve yedeklenemedi (${(e as Error).message}). Asıl kayıt korunuyor; bu sekmede otomatik kayıt kapalı. Projeyi dosyaya kaydedin.`;
+    }
+  }
+}
+const firstRun = !restored && !ws && !unreadable;
+initial ??= ws ? newProject(ws) : demoProject();
 
 // Delik (boolean) çekirdeği: yüklenemezse uygulama deliksiz çalışır.
 let csgError = '';
@@ -41,7 +94,7 @@ try {
   csgError = (e as Error).message;
 }
 
-const store = new Store(initial);
+const store = new Store(initial, autosaveOn ? autosave : null, { file: restored?.file, dirty: restored?.dirty });
 const viewer = new Viewer($('viewport'));
 viewer.onSelect = (id) => store.select(id);
 
@@ -118,7 +171,30 @@ function render(): void {
   $<HTMLButtonElement>('btn-undo').disabled = !store.canUndo;
   $<HTMLButtonElement>('btn-redo').disabled = !store.canRedo;
   $<HTMLButtonElement>('btn-export').disabled = !store.project.parts.length;
-  document.title = `${store.project.name} — P3D`;
+  document.title = ws ? `P3D — ${ws}` : `${store.project.name} — P3D`;
+  renderWsBadge();
+}
+
+/** Araç çubuğu rozeti: `<ws> · <dosya adı> ●` (● = kaydedilmemiş). Kökte yalnızca dosya bağlıyken görünür. */
+function renderWsBadge(): void {
+  const badge = document.getElementById('ws-badge');
+  if (!badge) return;
+  const file = store.file;
+  badge.hidden = !ws && !file;
+  if (badge.hidden) return;
+  const name = file ? file.split(/[\\/]/).pop() || file : '';
+  badge.textContent = file ? `${wsLabel(ws)} · ${name}` : wsLabel(ws);
+  const dot = document.createElement('span');
+  dot.className = 'dirty';
+  dot.textContent = ' ●';
+  if (file && store.dirty) badge.appendChild(dot);
+  badge.title = [
+    `Çalışma alanı: ${wsLabel(ws)} (${location.origin}${wsPath(ws)})`,
+    file ? `Dosya: ${file}` : 'Bağlı dosya yok (terminalde: p3d open / p3d save)',
+    file ? (store.dirty ? '● Kaydedilmemiş değişiklik var (p3d save)' : 'Dosyayla aynı') : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 store.subscribe(render);
 render();
@@ -232,8 +308,14 @@ function loadStatus(attempt = 0): void {
 loadStatus();
 
 // Terminaldeki Claude Code oturumu sahneyi okuyup işlem gönderebilir (server/bridge.ts).
-const startBridge = () => connectBridge(store, viewer, {
-  onConnected: () => addLog('info', 'Claude Code köprüsü bağlı: terminalden gelen komutlar burada uygulanır.'),
+const startBridge = () => connectBridge(store, viewer, ws, {
+  onConnected: () =>
+    addLog(
+      'info',
+      ws
+        ? `Claude Code köprüsü bağlı (çalışma alanı “${ws}”): terminalde “p3d --ws ${ws} …” ya da p3d.json'da "workspace": "${ws}".`
+        : 'Claude Code köprüsü bağlı: terminalden gelen komutlar burada uygulanır.',
+    ),
   onApplied: (res, label) => {
     if (label) addLog('user', label, 'Claude Code');
     logResult(res, label ? undefined : 'Claude Code');
@@ -253,18 +335,71 @@ const startBridge = () => connectBridge(store, viewer, {
     logResult(res);
     return res;
   },
+  onLoad: (cmd) => {
+    if (cmd.label) addLog('user', cmd.label, 'Claude Code');
+    const dropped: string[] = [];
+    const project = parseProject({ ...(cmd.project as object), assets: cmd.assets ?? {} }, dropped);
+    // Dosyadaki her şey yüklenemediyse (`p3d open --force`) sekme dosyayla aynı değildir: kirli kalır.
+    const partial = cmd.dirty === true || dropped.length > 0;
+    store.replace(project, cmd.file, partial);
+    viewer.fit(store.project);
+    const res: ApplyResult = {
+      messages: [
+        `${cmd.file ? `“${cmd.file}”` : 'Proje'} yüklendi (${project.parts.length} parça). Önceki içerik geri-al ile geri gelir.` +
+          (partial ? ' Dosyadaki bazı parçalar yüklenemedi; sekme “kaydedilmemiş” sayılıyor.' : ''),
+      ],
+      errors: dropped.map((d) => `Yüklenemedi: ${d}`),
+      lastPartId: null,
+      clearSelection: true,
+    };
+    logResult(res, cmd.label ? undefined : 'Claude Code');
+    return res;
+  },
+  onMarkSaved: (file, digest, label) => {
+    if (label) addLog('user', label, 'Claude Code');
+    // Özet, kaydedilen projenin özetidir: sekme o arada değiştiyse dosya son hâli içermez, sekme kirli kalır.
+    const same = store.markSaved(file, digest);
+    const res: ApplyResult = same
+      ? { messages: [`Kaydedildi: ${file}`], errors: [], lastPartId: null, clearSelection: false }
+      : {
+          messages: [],
+          errors: [`Sekmedeki proje kayıt sırasında değişti; “${file}” son hâli içermiyor. Sekme “kaydedilmemiş” kaldı — yeniden kaydedin (p3d save).`],
+          lastPartId: null,
+          clearSelection: false,
+        };
+    logResult(res, label ? undefined : 'Claude Code');
+    return res;
+  },
 });
 
 store.onWarning = (m) => addLog('warn', '⚠ ' + m);
 viewer.onWarning = (m) => addLog('warn', '⚠ ' + m);
+if (restoreWarning) addLog('warn', '⚠ ' + restoreWarning);
+if (unreadable) toast('Otomatik kayıt okunamadı; ayrıntı günlükte.', true);
 if (csgError) addLog('warn', `⚠ Delik (boolean) çekirdeği yüklenemedi; delik parçaları kesmeyecek. (${csgError})`);
 
 addLog(
   'info',
   firstRun
     ? 'Hoş geldiniz! Örnek iki parça eklendi. Deneyin: “mil parçasının çapını 10mm büyüt”, “tabanı kırmızı yap”, “ölçüleri gizle”. Tüm örnekler için “yardım” yazın.'
-    : 'Proje geri yüklendi. Örnek komutlar için “yardım” yazın.',
+    : !restored
+      ? `${ws ? `“${ws}” çalışma alanı: yeni` : 'Yeni'} boş proje. Örnek komutlar için “yardım” yazın.`
+      : `${ws ? `“${ws}” çalışma alanı: proje` : 'Proje'} geri yüklendi${store.file ? ` (dosya: ${store.file}${store.dirty ? ', kaydedilmemiş değişiklik var' : ''})` : ''}. Örnek komutlar için “yardım” yazın.`,
 );
+
+// Aynı çalışma alanı başka bir sekmede açık: bu sekme kayıt yazmaz; kalıcı, görünür uyarı.
+if (!autosaveOwner) {
+  const text =
+    `Bu çalışma alanı (${wsLabel(ws)}) başka bir sekmede de açık: bu sekmede otomatik kayıt kapalı (salt okunur kayıt); ` +
+    'yaptığınız değişiklikler sayfa yenilenince kaybolur. Terminal komutları en son açılan sekmeye (bu sekmeye) gider. ' +
+    'Diğer sekmeyi kapatıp bu sekmeyi yenileyin ya da projeyi dosyaya kaydedin.';
+  const banner = document.createElement('div');
+  banner.className = 'ro-banner';
+  banner.setAttribute('role', 'alert');
+  banner.textContent = '⚠ ' + text;
+  $('viewport').appendChild(banner);
+  addLog('warn', '⚠ ' + text);
+}
 
 // ---------------------------------------------------------------------------
 // Araç çubuğu
@@ -291,16 +426,25 @@ $<HTMLInputElement>('project-name').addEventListener('change', (e) => {
   else render();
 });
 
+/** Yeni/Aç… dosya bağını kaldırır: kullanıcı bunu bilsin (terminaldeki `p3d save` artık o dosyaya bağlı değil). */
+function noteUnbound(prev: string | undefined): void {
+  if (prev) addLog('info', `Dosya bağı kaldırıldı (önceki: ${prev}); bu proje bir dosyaya bağlı değil. Bağlamak için: p3d save <dosya.p3d.json>`);
+}
+
 $('btn-new').addEventListener('click', () => {
   if (store.project.parts.length && !confirm('Yeni proje açılsın mı? Kaydedilmemiş değişiklikler kaybolur.')) return;
+  const prev = store.file;
   store.load(newProject());
   viewer.fit(store.project);
   addLog('info', 'Yeni proje oluşturuldu.');
+  noteUnbound(prev);
 });
 
 function saveProject(): void {
   const file = `${safeFileName(store.project.name)}.p3d.json`;
   download(file, projectToJson(store.project), 'application/json');
+  // İndirilen dosyanın tam yolu bilinmez; bağ yalnızca dosya adıdır (gösterim ve "kaydedildi" durumu için).
+  store.markSaved(file);
   toast(`Kaydedildi: ${file}`);
 }
 $('btn-save').addEventListener('click', saveProject);
@@ -312,11 +456,15 @@ fileInput.addEventListener('change', async () => {
   fileInput.value = '';
   if (!file) return;
   try {
-    const project = parseProject(JSON.parse(await file.text()));
+    const dropped: string[] = [];
+    const project = parseProject(JSON.parse(await file.text()), dropped);
+    const prev = store.file;
     store.load(project);
     viewer.fit(store.project);
     addLog('info', `“${file.name}” yüklendi (${project.parts.length} parça).`);
-    toast('Proje yüklendi.');
+    for (const d of dropped) addLog('warn', `⚠ Yüklenemedi: ${d}`);
+    noteUnbound(prev);
+    toast(dropped.length ? `Proje yüklendi; ${dropped.length} parça okunamadı (günlükte).` : 'Proje yüklendi.', dropped.length > 0);
   } catch (e) {
     toast(`Yüklenemedi: ${(e as Error).message}`, true);
   }

@@ -145,6 +145,58 @@ input[type='color']::-webkit-color-swatch {
 .project-name:hover {
   border-color: var(--border);
 }
+.ws-badge {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--accent-2);
+  font-size: 12px;
+  cursor: default;
+}
+.ws-badge[hidden] {
+  display: none;
+}
+.ws-badge .dirty {
+  color: var(--warn);
+}
+/* Aynı çalışma alanı başka sekmede açık: otomatik kayıt kapalı uyarısı (görünümün üstünde, kalıcı). */
+.ro-banner {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  max-width: min(720px, calc(100% - 24px));
+  padding: 6px 12px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  background: rgba(40, 34, 18, 0.92);
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+.fatal {
+  max-width: 640px;
+  margin: 80px auto;
+  padding: 24px 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  line-height: 1.5;
+}
+.fatal h2 {
+  margin: 0 0 8px;
+  color: var(--err);
+}
+.fatal a {
+  color: var(--accent-2);
+}
 .tb-group {
   display: flex;
   align-items: center;

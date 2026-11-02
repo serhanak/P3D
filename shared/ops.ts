@@ -342,9 +342,78 @@ export interface NlResponse {
   operations: Op[];
 }
 
+// Çalışma alanları (tarayıcı, köprü sunucusu ve CLI ortak kullanır)
+
+/** Kök çalışma alanı: adres `/`, otomatik kayıt localStorage'da. Diğerleri `/w/<ad>`, kayıt IndexedDB'de. */
+export const ROOT_WS = '';
+export const WS_NAME_MAX = 64;
+const WS_NAME_RE = /^[\p{L}\p{N}_.-]+$/u;
+
+/** Çalışma alanı adı geçersizse Türkçe açıklama, geçerliyse null. Kök ('') geçerlidir. */
+export function wsNameError(name: string): string | null {
+  if (name === ROOT_WS) return null;
+  if ([...name].length > WS_NAME_MAX) return `Çalışma alanı adı en fazla ${WS_NAME_MAX} karakter olabilir.`;
+  if (name === '.' || name === '..') return `Çalışma alanı adı '${name}' olamaz.`;
+  if (!WS_NAME_RE.test(name)) {
+    return `Geçersiz çalışma alanı adı '${name}': yalnızca harf, rakam, '_', '-' ve '.' kullanılabilir (boşluk ve eğik çizgi olmaz).`;
+  }
+  return null;
+}
+
+/** Adı Unicode NFC biçimine getirip doğrular; geçersizse Error fırlatır. Boş/eksik ad kök demektir. */
+export function normalizeWs(raw: unknown): string {
+  if (raw === undefined || raw === null) return ROOT_WS;
+  if (typeof raw !== 'string') throw new Error('Çalışma alanı adı metin olmalı.');
+  const name = raw.normalize('NFC');
+  const err = wsNameError(name);
+  if (err) throw new Error(err);
+  return name;
+}
+
+/** Sayfa yolundan çalışma alanı: `/` → kök, `/w/<ad>` → ad. Başka yollar ve geçersiz adlar Error fırlatır. */
+export function wsFromPathname(pathname: string): string {
+  if (pathname === '/' || pathname === '/index.html') return ROOT_WS;
+  const m = /^\/w\/([^/]*)\/?$/.exec(pathname);
+  if (!m) throw new Error(`Bu adreste P3D yok: '${pathname}'. Kök için '/', bir çalışma alanı için '/w/<ad>' kullanın.`);
+  let name: string;
+  try {
+    name = decodeURIComponent(m[1]);
+  } catch {
+    throw new Error(`Çalışma alanı adı çözülemedi: '${m[1]}'.`);
+  }
+  if (!name) throw new Error("Çalışma alanı adı boş: adres '/w/<ad>' biçiminde olmalı.");
+  return normalizeWs(name);
+}
+
+/** Çalışma alanının sayfa yolu: kök `/`, diğerleri `/w/<ad>` (yüzde kodlu). */
+export function wsPath(ws: string): string {
+  return ws ? `/w/${encodeURIComponent(ws)}` : '/';
+}
+
+/** Mesajlarda gösterilecek ad. */
+export const wsLabel = (ws: string): string => (ws ? ws : 'kök');
+
+/**
+ * Metnin kısa içerik özeti (16 onaltılık karakter; cyrb53 benzeri, iki 32 bit kanal). Kriptografik değildir:
+ * tarayıcı ve Node'da aynı sonucu verir, eşzamanlıdır; `p3d save` ile sekmenin aynı projeyi gördüğünü doğrular.
+ */
+export function contentDigest(text: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  const hex = (n: number) => (n >>> 0).toString(16).padStart(8, '0');
+  return hex(h2) + hex(h1);
+}
+
 // Claude Code köprüsü (server/bridge.ts ↔ src/bridge.ts)
 
-export type BridgeAction = 'undo' | 'redo' | 'fit' | 'snapshot';
+export type BridgeAction = 'undo' | 'redo' | 'fit' | 'snapshot' | 'load' | 'mark_saved';
 
 export const SNAPSHOT_VIEWS = ['iso', 'front', 'back', 'left', 'right', 'top', 'bottom'] as const;
 export type SnapshotView = (typeof SNAPSHOT_VIEWS)[number];
@@ -363,13 +432,62 @@ export interface BridgeCommand {
   ops?: Op[];
   action?: BridgeAction;
   snapshot?: SnapshotOptions;
+  /** load: proje dosyasının içeriği (parseProject girdisi) ve gömülü ağları. */
+  project?: unknown;
+  assets?: Record<string, MeshAsset>;
+  /** load / mark_saved: sekmenin bağlanacağı dosya yolu (yalnızca gösterim). */
+  file?: string;
+  /** load: yüklenen proje dosyayla aynı değil (ör. `--force` ile bazı parçalar atlandı); sekme kirli kalır. */
+  dirty?: boolean;
+  /**
+   * mark_saved: kaydedilen projenin içerik özeti (`contentDigest(JSON.stringify(proje))`). Sekme yalnızca kendi
+   * güncel projesinin özeti eşleşirse "kaydedildi" sayar; okunduktan sonra değiştiyse kirli kalır.
+   */
+  digest?: string;
   /** Günlükte gösterilecek açıklama (ör. kullanıcının komutu). */
   label?: string;
+}
+
+/** SSE bağlantısının ilk olayı (`event: hello`): sunucunun bu sekmeye verdiği kimlik. */
+export interface BridgeHello {
+  client: string;
+  ws: string;
+}
+
+/** GET /api/bridge/scene?ws=… yanıtı: yalnızca o çalışma alanının hedef sekmesinin (en son bağlanan) sahnesi. */
+export interface BridgeSceneResponse {
+  /** false yalnızca `?stale` ile: bağlı sekme yok, son bilinen sahne. */
+  connected: boolean;
+  ws: string;
+  /** Sahneyi bildiren sekmenin kimliği. */
+  client: string;
+  /** Çalışma alanı başına her sahne bildiriminde artan sayaç. */
+  rev: number;
+  /** Bildirim zamanı (ISO). */
+  at: string;
+  /** Çalışma alanındaki bağlı sekme sayısı. */
+  tabs: number;
+  /** Sekmenin bağlı olduğu dosya ve kaydedilmemiş değişiklik durumu. */
+  file: string | null;
+  dirty: boolean;
+  /** Sahne özeti; `?full` ile tam proje (+ assets). */
+  scene: unknown;
+}
+
+/** GET /api/bridge/workspaces öğesi. */
+export interface BridgeWorkspace {
+  ws: string;
+  tabs: number;
+  rev: number | null;
+  at: string | null;
+  parts: number | null;
 }
 
 /** Tarayıcının uygulama sonucu. */
 export interface BridgeResult {
   id: string;
+  /** Sonucu gönderen sekme (sunucu, komutun gönderildiği sekmeyle eşleştirir). */
+  client: string;
   messages: string[];
   errors: string[];
   scene: SceneSummary;

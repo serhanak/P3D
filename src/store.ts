@@ -1,11 +1,8 @@
-import type { Op } from '../shared/ops';
-import { registerAsset, usedAssets } from './assets';
+import { contentDigest, type Op } from '../shared/ops';
+import type { AutosaveBackend } from './autosave';
 import { applyOps, type ApplyResult } from './engine';
 import type { Project } from './types';
 
-const AUTOSAVE_KEY = 'p3d.autosave.v1';
-/** Mesh ağ verisi ayrı anahtarda: proje her değiştiğinde yeniden yazılmasın. */
-const ASSETS_KEY = 'p3d.autosave.assets.v1';
 const HISTORY_LIMIT = 200;
 
 type Listener = () => void;
@@ -14,25 +11,42 @@ type Listener = () => void;
 export class Store {
   project: Project;
   selectedId: string | null = null;
+  /** Sekmenin bağlı olduğu proje dosyası (yalnızca gösterim; `p3d open`/`p3d save`/Kaydet kurar). */
+  file: string | undefined;
+  /** Son yükleme/kayıttan sonra proje değişti mi. */
+  dirty = false;
   private undoStack: string[] = [];
   private redoStack: string[] = [];
   private listeners = new Set<Listener>();
   private saveTimer: number | undefined;
-  private savedAssets = '';
+  /** Son yüklenen/kaydedilen projenin JSON'u; null = bilinmiyor (kirli sayılır). */
+  private savedJson: string | null;
   /** Otomatik kayıt sorunları (ör. ağ verisi tarayıcı depolamasına sığmadı). */
   onWarning: (msg: string) => void = () => {};
 
-  constructor(initial: Project) {
+  constructor(
+    initial: Project,
+    private backend: AutosaveBackend | null = null,
+    saved: { file?: string; dirty?: boolean } = {},
+  ) {
     this.project = initial;
+    this.file = saved.file;
+    this.savedJson = saved.dirty ? null : JSON.stringify(initial);
+    this.dirty = !!saved.dirty;
   }
 
   subscribe(fn: Listener): void {
     this.listeners.add(fn);
   }
 
-  private emit(): void {
+  /**
+   * Abonelere bildirir. `json`: projenin yeni JSON'u (biliniyorsa; kirlilik bununla hesaplanır), `false`: proje
+   * değişmedi (ör. yalnızca seçim) — kirlilik yeniden hesaplanmaz, otomatik kayıt da gerekmez.
+   */
+  private emit(json?: string | false): void {
+    if (json !== false) this.dirty = this.savedJson === null || this.savedJson !== (json ?? JSON.stringify(this.project));
     for (const fn of this.listeners) fn();
-    this.scheduleAutosave();
+    if (json !== false) this.scheduleAutosave();
   }
 
   get canUndo(): boolean {
@@ -47,7 +61,9 @@ export class Store {
     const before = JSON.stringify(this.project);
     const draft: Project = JSON.parse(before);
     const res = applyOps(draft, ops, this.selectedId);
-    if (JSON.stringify(draft) !== before) {
+    const after = JSON.stringify(draft);
+    const changed = after !== before;
+    if (changed) {
       this.undoStack.push(before);
       if (this.undoStack.length > HISTORY_LIMIT) this.undoStack.shift();
       this.redoStack = [];
@@ -55,7 +71,7 @@ export class Store {
     }
     if (res.clearSelection) this.selectedId = null;
     if (res.lastPartId && this.project.parts.some((p) => p.id === res.lastPartId)) this.selectedId = res.lastPartId;
-    this.emit();
+    this.emit(changed ? after : false);
     return res;
   }
 
@@ -65,7 +81,7 @@ export class Store {
     this.redoStack.push(JSON.stringify(this.project));
     this.project = JSON.parse(prev);
     this.fixSelection();
-    this.emit();
+    this.emit(prev);
     return true;
   }
 
@@ -75,14 +91,14 @@ export class Store {
     this.undoStack.push(JSON.stringify(this.project));
     this.project = JSON.parse(next);
     this.fixSelection();
-    this.emit();
+    this.emit(next);
     return true;
   }
 
   select(id: string | null): void {
     if (this.selectedId === id) return;
     this.selectedId = id;
-    this.emit();
+    this.emit(false);
   }
 
   /** Ayarlar gibi geri alınabilir ama işlem olmayan değişiklikler için. */
@@ -90,20 +106,54 @@ export class Store {
     const before = JSON.stringify(this.project);
     const draft: Project = JSON.parse(before);
     fn(draft);
-    if (JSON.stringify(draft) === before) return;
+    const after = JSON.stringify(draft);
+    if (after === before) return;
     this.undoStack.push(before);
     this.redoStack = [];
     this.project = draft;
-    this.emit();
+    this.emit(after);
   }
 
-  /** Yeni proje ya da dosyadan yükleme: geçmiş sıfırlanır. */
+  /** Yeni proje ya da dosyadan yükleme: geçmiş sıfırlanır, dosya bağı kalkar, proje kaydedilmiş sayılır. */
   load(project: Project): void {
     this.project = project;
     this.selectedId = null;
     this.undoStack = [];
     this.redoStack = [];
-    this.emit();
+    this.file = undefined;
+    this.savedJson = JSON.stringify(project);
+    this.emit(this.savedJson);
+  }
+
+  /**
+   * Geri alınabilir yükleme (köprüden `p3d open`): önceki proje geri-al yığınına girer. Dosya bağı `file` olur
+   * (verilmezse kalkar). Yeni proje kaydedilmiş sayılır; `dirty` ise (ör. dosyadaki bazı parçalar atlandı)
+   * kaydedilene kadar kirli kalır.
+   */
+  replace(project: Project, file?: string, dirty = false): void {
+    this.undoStack.push(JSON.stringify(this.project));
+    if (this.undoStack.length > HISTORY_LIMIT) this.undoStack.shift();
+    this.redoStack = [];
+    this.project = project;
+    this.selectedId = null;
+    this.file = file;
+    const json = JSON.stringify(project);
+    this.savedJson = dirty ? null : json;
+    this.emit(json);
+  }
+
+  /**
+   * Proje dosyaya kaydedildi (`p3d save`, Kaydet): dosya bağını kurar ve mevcut durumu kaydedilmiş sayar.
+   * `digest` verilirse (kaydedilen projenin `contentDigest`'i) yalnızca güncel proje aynıysa kaydedilmiş sayılır;
+   * değilse (proje kayıt sırasında değişti) dosya bağı yine kurulur ama sekme kirli kalır ve false döner.
+   */
+  markSaved(file: string, digest?: string): boolean {
+    const json = JSON.stringify(this.project);
+    const same = digest === undefined || contentDigest(json) === digest;
+    this.file = file;
+    this.savedJson = same ? json : null;
+    this.emit(json);
+    return same;
   }
 
   private fixSelection(): void {
@@ -111,40 +161,10 @@ export class Store {
   }
 
   private scheduleAutosave(): void {
+    if (!this.backend) return;
     window.clearTimeout(this.saveTimer);
     this.saveTimer = window.setTimeout(() => {
-      try {
-        localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(this.project));
-      } catch {
-        // Depolama kapalı/dolu olabilir; otomatik kayıt isteğe bağlıdır.
-      }
-      const assets = usedAssets(this.project);
-      const key = Object.keys(assets).sort().join(',');
-      if (key === this.savedAssets) return;
-      try {
-        localStorage.setItem(ASSETS_KEY, JSON.stringify(assets));
-        this.savedAssets = key;
-      } catch {
-        this.savedAssets = key;
-        this.onWarning('İçe aktarılan ağ tarayıcının otomatik kaydına sığmadı; sayfa yenilenirse kaybolur. Projeyi Kaydet ile dosyaya kaydedin.');
-      }
+      this.backend?.save({ project: this.project, file: this.file, dirty: this.dirty }, (m) => this.onWarning(m));
     }, 400);
   }
-
-  static restore(): Project | null {
-    try {
-      const assets = JSON.parse(localStorage.getItem(ASSETS_KEY) ?? '{}') as Record<string, unknown>;
-      for (const a of Object.values(assets)) registerAsset(a);
-    } catch {
-      // Bozuk ağ kaydı: mesh parçaları yer tutucu olarak görünür.
-    }
-    try {
-      const raw = localStorage.getItem(AUTOSAVE_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
-  }
 }
-
-

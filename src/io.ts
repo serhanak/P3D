@@ -20,8 +20,11 @@ export function projectToJson(project: Project): string {
   return JSON.stringify(Object.keys(assets).length ? { ...project, assets } : project, null, 2);
 }
 
-/** Dosyadan/otomatik kayıttan gelen veriyi doğrular; bilinmeyen alanları atar, eksikleri tamamlar. */
-export function parseProject(data: unknown): Project {
+/**
+ * Dosyadan/otomatik kayıttan gelen veriyi doğrular; bilinmeyen alanları atar, eksikleri tamamlar.
+ * Okunamayan parçalar atlanır; `dropped` verilirse her biri için "ad: neden" eklenir (sessiz kayıp olmasın).
+ */
+export function parseProject(data: unknown, dropped?: string[]): Project {
   if (!data || typeof data !== 'object') throw new Error('Geçersiz proje dosyası.');
   const d = data as Record<string, unknown>;
   if (d.format !== 'p3d') throw new Error('Bu bir P3D proje dosyası değil.');
@@ -53,9 +56,16 @@ export function parseProject(data: unknown): Project {
   const ids = new Set<string>();
   const parts = Array.isArray(d.parts) ? d.parts : [];
   parts.forEach((raw, i) => {
-    if (!raw || typeof raw !== 'object') return;
+    if (!raw || typeof raw !== 'object') {
+      dropped?.push(`#${i + 1}: parça bir nesne değil`);
+      return;
+    }
     const r = raw as Record<string, unknown>;
-    if (!SHAPES.includes(r.shape as never)) return;
+    const label = typeof r.name === 'string' && r.name.trim() ? `'${r.name.trim()}'` : `#${i + 1}`;
+    if (!SHAPES.includes(r.shape as never)) {
+      dropped?.push(`${label}: bilinmeyen şekil '${String(r.shape)}'`);
+      return;
+    }
     const shape = r.shape as Part['shape'];
     const params = { ...defaultParams(shape), ...((r.params ?? {}) as Record<string, number>) };
     sanitizeParams(shape, params);
@@ -65,6 +75,7 @@ export function parseProject(data: unknown): Project {
         geom = sanitizeGeom(shape, r.geom);
       } catch (e) {
         console.warn(`[p3d] '${String(r.name)}' atlandı:`, (e as Error).message);
+        dropped?.push(`${label}: ${(e as Error).message}`);
         return;
       }
     }
