@@ -147,12 +147,16 @@ export function sanitizeGeom(shape: GeomShape, raw: unknown): PartGeom {
   }
 }
 
-/** Mesh geom'unun isteğe bağlı kaynak alanları (`src`, `maxTris`); geçersizleri atılır. */
-export function meshSource(g: Record<string, unknown>): Pick<MeshGeom, 'src' | 'maxTris'> {
-  const out: Pick<MeshGeom, 'src' | 'maxTris'> = {};
+/**
+ * Mesh geom'unun isteğe bağlı kaynak alanları (`src`, `maxTris`, `srcSize`, `srcHash`); geçersizleri atılır (sayılar
+ * yalnızca gerçek tam sayıysa: "500" ya da 2,5 kabul edilmez).
+ */
+export function meshSource(g: Record<string, unknown>): Pick<MeshGeom, 'src' | 'maxTris' | 'srcSize' | 'srcHash'> {
+  const out: Pick<MeshGeom, 'src' | 'maxTris' | 'srcSize' | 'srcHash'> = {};
   if (typeof g.src === 'string' && g.src.trim()) out.src = g.src.trim();
-  const max = Number(g.maxTris);
-  if (g.maxTris !== undefined && Number.isFinite(max) && max >= 1) out.maxTris = Math.round(max);
+  if (typeof g.maxTris === 'number' && Number.isSafeInteger(g.maxTris) && g.maxTris > 0) out.maxTris = g.maxTris;
+  if (typeof g.srcSize === 'number' && Number.isSafeInteger(g.srcSize) && g.srcSize >= 0) out.srcSize = g.srcSize;
+  if (typeof g.srcHash === 'string' && /^[0-9a-f]{8,64}$/i.test(g.srcHash)) out.srcHash = g.srcHash.toLowerCase();
   return out;
 }
 

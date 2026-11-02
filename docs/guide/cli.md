@@ -32,7 +32,7 @@ Hata olursa çıkış kodu 1.
 ## Yalnızca dosya
 | Komut | Ne yapar |
 |---|---|
-| `apply --file m.p3d.json [--ops ops.json \| stdin] [--out başka.p3d.json] [--dry-run] [--new] [--embed] [--label]` | İşlemleri dosyaya uygular; **bir hata varsa dosyayı yazmaz**. `--new` dosya yoksa boş projeyle başlar |
+| `apply --file m.p3d.json [--ops ops.json \| stdin] [--out başka.p3d.json] [--force] [--dry-run] [--new] [--embed] [--label]` | İşlemleri dosyaya uygular; **bir hata varsa dosyayı yazmaz**. `--new` dosya yoksa boş projeyle başlar; `--out` mevcut başka bir dosyaysa `--force` ister |
 
 ## Diğer
 | Komut | Ne yapar |
@@ -46,3 +46,6 @@ Hata olursa çıkış kodu 1.
   göreli yazar (`--embed` ile gömer). Böylece lisanslı/büyük referanslar model dosyasına girmez; dosya taşınırsa kaynak da
   taşınmalı.
 - Ağ verisi ne gömülü ne kaynaktan bulunabilen bir dosya açılmaz (yer tutucu küp üretilmez).
+- Dosyada gömülü gelen ağ `--embed` olmadan kaydedilse de gömülü kalır. Kaynak dosya içe aktarmadan sonra değişmişse açarken
+  "kaynak dosya değişmiş" uyarısı çıkar (gömülü ağ varsa o kullanılır). `export` bir referans ağın kaynağının üzerine yazmaz.
+- Okunamayan parça: `check` hata sayar (çıkış 1), `export`/`apply` yazmaz, `scene`/`measure` uyarıyı çıktıda gösterir.

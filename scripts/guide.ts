@@ -56,6 +56,8 @@ export interface SkillInstall {
   dest: string;
   /** kuruldu: yeni · güncellendi: önceki dosyanın üzerine yazıldı · aynı: içerik zaten aynıydı (yazılmadı). */
   status: 'kuruldu' | 'güncellendi' | 'aynı';
+  /** güncellendi: önceki içeriğin yedeği (`SKILL.md.bak`; varsa üzerine yazılır). */
+  backup?: string;
 }
 
 /** Skills klasörü: P3D_SKILLS_DIR (sınama için) > ~/.claude/skills. */
@@ -63,7 +65,10 @@ export function skillsDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.P3D_SKILLS_DIR ? path.resolve(env.P3D_SKILLS_DIR) : path.join(homedir(), '.claude', 'skills');
 }
 
-/** SKILL.md'yi `<skills>/p3d/SKILL.md`'ye kopyalar (klasörü oluşturur). */
+/**
+ * SKILL.md'yi `<skills>/p3d/SKILL.md`'ye kopyalar (klasörü oluşturur). Hedef farklı içerikle varsa (kullanıcı elle
+ * düzenlemiş olabilir) önce `SKILL.md.bak`'a yedeklenir.
+ */
 export function installSkill(dir = skillsDir(), source = SKILL_SOURCE): SkillInstall {
   const text = readIfFile(source);
   if (text === null) throw new Error(`Skill kaynağı bulunamadı: ${source}`);
@@ -71,6 +76,12 @@ export function installSkill(dir = skillsDir(), source = SKILL_SOURCE): SkillIns
   const before = readIfFile(dest);
   if (before === text) return { dest, status: 'aynı' };
   mkdirSync(path.dirname(dest), { recursive: true });
+  if (before === null) {
+    writeFileSync(dest, text);
+    return { dest, status: 'kuruldu' };
+  }
+  const backup = `${dest}.bak`;
+  writeFileSync(backup, before);
   writeFileSync(dest, text);
-  return { dest, status: before === null ? 'kuruldu' : 'güncellendi' };
+  return { dest, status: 'güncellendi', backup };
 }

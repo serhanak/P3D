@@ -24,7 +24,7 @@
 //              [--max-tris 60000] [--keep-position]   (parçaya kaynak yolu src olarak yazılır)
 //
 // Sekme ya da dosya (--file verilmezse çalışma alanı sekmesinin sahnesi):
-//   p3d scene --file m.p3d.json [--full]
+//   p3d scene --file m.p3d.json [--full]   (--full: dosyadaki gibi; src göreli, gömülü ağlar gömülü)
 //   p3d check [--file m.p3d.json] [--profile print|game] [--max-tris N]   z-fighting, boolean, ince parça, tabla /
 //                                      oyun: üçgen bütçesi, bozuk üçgen; hata varsa çıkış kodu 1
 //   p3d measure [--file m.p3d.json] [--parts a,b]
@@ -35,9 +35,11 @@
 //                                      (P3D_CHROME) görünmez açar, geçici bir ws'de görüntü alır; sunucu açık olmalı
 //
 // Yalnızca dosya:
-//   p3d apply --file m.p3d.json [--ops ops.json] [--out başka.p3d.json] [--dry-run] [--new] [--embed] [--label "metin"]
+//   p3d apply --file m.p3d.json [--ops ops.json] [--out başka.p3d.json] [--force] [--dry-run] [--new] [--embed] [--label "metin"]
 //                                      işlemleri dosyaya uygular; hata varsa dosya yazılmaz, çıkış kodu 1
-//                                      (--new: dosya yoksa boş projeyle başlar)
+//                                      (--new: dosya yoksa boş projeyle başlar; --out mevcut başka bir dosyaysa --force ister)
+//
+// Okunamayan parça: check hata sayar (çıkış 1), export ve apply hiç yazmaz, scene/measure/section uyarıyı stdout'a basar.
 //
 // Diğer:
 //   p3d run <betik.mts|ts|mjs|js> [arg…]   betiği çağıranın klasöründe çalıştırır; `from 'p3d'` src/api.ts'ye çözülür
@@ -233,28 +235,62 @@ function projectFileFlag(command: string): string | undefined {
   throw new Error(`--file uzantısı tanınmadı (${path.basename(file)}): proje için .p3d.json${command === 'section' ? ', ağ için .stl / .obj / .3mf' : ''}.`);
 }
 
-/**
- * Proje dosyasını okur (ağlar gömülü ya da src'den). `strict`: okunamayan parça varsa hata (yazacak komutlar);
- * değilse parçalar atlanır ve stderr'e uyarı yazılır (salt okunur komutlar).
- */
-async function readProjectFile(file: string, strict: boolean): Promise<Project> {
-  const { loadProjectFile } = await import('../src/files.ts');
-  if (strict) return loadProjectFile(file);
-  const dropped: string[] = [];
-  const project = await loadProjectFile(file, { dropped });
-  if (dropped.length) console.error(`⚠ ${file}: ${dropped.length} parça okunamadı ve atlandı:${listed(dropped)}`);
-  return project;
+/** Okunan proje + atlanan parçalar ("ad: neden") + yükleme uyarıları (ör. kaynak ağ dosyası değişmiş). */
+interface LoadedProject {
+  project: Project;
+  dropped: string[];
+  warnings: string[];
 }
 
-/** `--file` verilmişse dosyadaki, yoksa çalışma alanı sekmesindeki proje (boolean çekirdeği hazır). */
-async function sourceProject(command: string, strict = false): Promise<{ project: Project; source: string }> {
+/**
+ * Proje dosyasını okur (ağlar gömülü ya da src'den). `strict`: okunamayan parça varsa hata (yazacak komutlar);
+ * değilse atlanır ve `dropped`'a girer. Atlananları ve uyarıları basmak çağıranın işidir (printLoadNotes).
+ */
+async function readProjectFile(file: string, strict: boolean): Promise<LoadedProject> {
+  const { loadProjectFile } = await import('../src/files.ts');
+  const dropped: string[] = [];
+  const warnings: string[] = [];
+  const project = await loadProjectFile(file, strict ? { warnings } : { dropped, warnings });
+  return { project, dropped, warnings };
+}
+
+/** Sekmenin tam projesini doğrular; okunamayan parçalar `dropped`'a (sayı tutmazsa nedeni bilinmeyen olarak). */
+async function parseTabProject(scene: unknown): Promise<{ project: Project; dropped: string[] }> {
+  const { parseProject } = await import('../src/io.ts');
+  const dropped: string[] = [];
+  const project = parseProject(scene, dropped);
+  const raw = (scene as { parts?: unknown } | null)?.parts;
+  const rawCount = Array.isArray(raw) ? raw.length : 0;
+  if (rawCount !== project.parts.length && !dropped.length) dropped.push(`${rawCount - project.parts.length} parça (neden bilinmiyor)`);
+  return { project, dropped };
+}
+
+/**
+ * Atlanan parçaları ve yükleme uyarılarını görünür basar: stdout (sonuçla birlikte okunsun); `toStderr` yalnızca
+ * stdout'un JSON kalması gerektiğinde (scene --full).
+ */
+function printLoadNotes(l: { dropped: string[]; warnings: string[] }, toStderr = false): void {
+  const out = toStderr ? console.error : console.log;
+  if (l.dropped.length) out(`⚠ ${l.dropped.length} parça okunamadı ve atlandı (sonuçlara dahil değil):${listed(l.dropped)}`);
+  for (const w of l.warnings) out(`⚠ ${w}`);
+}
+
+/**
+ * `--file` verilmişse dosyadaki, yoksa çalışma alanı sekmesindeki proje (boolean çekirdeği hazır). `strict`: okunamayan
+ * parça varsa hata (export); değilse `dropped`'da döner.
+ */
+async function sourceProject(command: string, strict = false): Promise<LoadedProject & { source: string }> {
   const file = projectFileFlag(command);
-  if (file) return { project: await readProjectFile(file, strict), source: `dosya: ${file}` };
+  if (file) return { ...(await readProjectFile(file, strict)), source: `dosya: ${file}` };
   const { initCsg } = await import('../src/csg.ts');
   await initCsg();
   const r = await getScene({ full: true });
-  const { parseProject } = await import('../src/io.ts');
-  return { project: parseProject(r.scene), source: `çalışma alanı: ${wsLabel(r.ws)} (rev ${r.rev})` };
+  const { project, dropped } = await parseTabProject(r.scene);
+  const source = `çalışma alanı: ${wsLabel(r.ws)} (rev ${r.rev})`;
+  if (strict && dropped.length) {
+    throw new Error(`Sekmedeki ${dropped.length} parça okunamadı (${source}):${listed(dropped)}\nHiçbir şey yazılmadı; parçaları düzeltin ya da silin.`);
+  }
+  return { project, dropped, warnings: [], source };
 }
 
 /** Adresi varsayılan tarayıcıda açar. */
@@ -449,7 +485,9 @@ const SNAP_CONNECT_MS = 30_000;
  * yükler, görüntü alır. Tarayıcı süreç ağacı ve geçici profil her durumda (hata dahil) kapatılır/silinir.
  */
 async function snapshotFile(file: string): Promise<void> {
-  const project = await readProjectFile(file, false);
+  const loaded = await readProjectFile(file, false);
+  printLoadNotes(loaded);
+  const { project } = loaded;
   try {
     await call('GET', '/api/bridge/workspaces');
   } catch (e) {
@@ -567,7 +605,9 @@ async function measureOrSection(command: 'measure' | 'section'): Promise<void> {
     printSection(path.basename(file), g);
     return;
   }
-  const { project } = await sourceProject(command);
+  const loaded = await sourceProject(command);
+  printLoadNotes(loaded);
+  const { project } = loaded;
   const { worldMesh, mergedMesh } = await import('../src/io.ts');
   const { roleOf, solidVolume } = await import('../src/model.ts');
   const { partBox } = await import('../src/engine.ts');
@@ -643,7 +683,7 @@ const USAGE = [
   '  snapshot --file m.p3d.json [--views …] [--size …] [--dims] [--out klasör]   (görünmez Chrome/Edge; P3D_CHROME)',
   '',
   'Yalnızca dosya:',
-  '  apply --file m.p3d.json [--ops ops.json | stdin] [--out başka.p3d.json] [--dry-run] [--new] [--embed] [--label "metin"]',
+  '  apply --file m.p3d.json [--ops ops.json | stdin] [--out başka.p3d.json] [--force] [--dry-run] [--new] [--embed] [--label "metin"]',
   '',
   'Diğer:',
   '  run <betik.mts|ts|mjs|js> [arg…]   (betikte: import { applyOps, THREE } from \'p3d\')',
@@ -668,14 +708,18 @@ async function main(): Promise<void> {
       const full = has('--full');
       const file = projectFileFlag('scene');
       if (file) {
-        const project = await readProjectFile(file, false);
+        const loaded = await readProjectFile(file, false);
         if (full) {
+          // Dosyadaki gibi (src göreli, dosyada gömülü ağlar gömülü); stdout yalnızca JSON, notlar stderr'e.
+          const { projectFileText } = await import('../src/files.ts');
           console.error(`dosya: ${file}`);
-          console.log(JSON.stringify(project, null, 2));
+          printLoadNotes(loaded, true);
+          console.log(projectFileText(loaded.project, file));
         } else {
           const { sceneSummary } = await import('../src/engine.ts');
           console.log(`dosya: ${file}`);
-          printScene(sceneSummary(project, null));
+          printLoadNotes(loaded);
+          printScene(sceneSummary(loaded.project, null));
         }
         return;
       }
@@ -706,6 +750,11 @@ async function main(): Promise<void> {
       const file = projectFileFlag('apply')!;
       const out = flag('--out') ? fromCaller(flag('--out')!) : file;
       if (fileKind(out) !== 'project') throw new Error(`--out bir proje dosyası olmalı (.p3d.json): ${out}`);
+      // --out başka bir mevcut dosyayı gösteriyorsa yanlışlıkla ezilmesin (kaynak dosyanın kendisi serbest).
+      const otherOut = !samePath(out, file);
+      if (otherOut && !has('--force') && !has('--dry-run') && statOf(out)) {
+        throw new Error(`${out} zaten var (--out kaynak dosyadan farklı: ${file}); üzerine yazmak için --force ekleyin ya da başka bir dosya adı verin.`);
+      }
       const ops = await readOps();
       const { initCsg } = await import('../src/csg.ts');
       let project: Project;
@@ -716,7 +765,9 @@ async function main(): Promise<void> {
         await initCsg();
         console.log(`Yeni proje: ${file}`);
       } else {
-        project = await readProjectFile(file, true);
+        const loaded = await readProjectFile(file, true);
+        printLoadNotes(loaded);
+        project = loaded.project;
       }
       const label = flag('--label');
       if (label) console.log(`İşlem: ${label}`);
@@ -738,7 +789,7 @@ async function main(): Promise<void> {
         return;
       }
       const { saveProjectFile } = await import('../src/files.ts');
-      const saved = saveProjectFile(project, out, { embed: has('--embed') });
+      const saved = saveProjectFile(project, out, { embed: has('--embed'), overwrite: !otherOut || has('--force') });
       for (const w of saved.warnings) console.log(`⚠ ${w}`);
       console.log(`✓ Kaydedildi: ${saved.file} (${saved.parts} parça${saveNote(saved)})`);
       return;
@@ -750,7 +801,9 @@ async function main(): Promise<void> {
       const { loadProjectFile } = await import('../src/files.ts');
       const { usedAssets } = await import('../src/assets.ts');
       const dropped: string[] = [];
-      const project = await loadProjectFile(file, { dropped });
+      const warnings: string[] = [];
+      const project = await loadProjectFile(file, { dropped, warnings });
+      for (const w of warnings) console.log(`⚠ ${w}`);
       // Parça sessizce kaybolmasın: okunamayanlar listelenir; --force ile yüklenir ama sekme kirli kalır.
       if (dropped.length && !force) {
         throw new Error(
@@ -794,11 +847,7 @@ async function main(): Promise<void> {
       const r = await getScene({ full: true });
       // Sekmenin projesi (sunucunun eklediği `assets` hariç): özeti sekme kendi JSON'uyla karşılaştırır.
       const { assets: _assets, ...tabProject } = r.scene as Record<string, unknown>;
-      const { parseProject } = await import('../src/io.ts');
-      const dropped: string[] = [];
-      const project = parseProject(r.scene, dropped);
-      const rawCount = Array.isArray(tabProject.parts) ? tabProject.parts.length : 0;
-      if (rawCount !== project.parts.length && !dropped.length) dropped.push(`${rawCount - project.parts.length} parça (neden bilinmiyor)`);
+      const { project, dropped } = await parseTabProject(r.scene);
       if (dropped.length) {
         throw new Error(`Sekmedeki ${dropped.length} parça dosyaya yazılamazdı (okunamadı):${listed(dropped)}\nDosya yazılmadı.`);
       }
@@ -840,10 +889,11 @@ async function main(): Promise<void> {
       if (!statOf(file)?.isFile()) throw new Error(`Dosya bulunamadı: ${file}`);
       const maxTris = Number(flag('--max-tris') ?? 60000);
       if (!Number.isInteger(maxTris) || maxTris < 1) throw new Error(`--max-tris pozitif bir tam sayı olmalı ('${flag('--max-tris')}').`);
-      const { meshAssetFromSoup } = await import('../src/meshio.ts');
-      const { readMeshFile } = await import('../src/files.ts');
+      const { meshAssetFromSoup, parseMeshFile } = await import('../src/meshio.ts');
+      const { sourceStamp } = await import('../src/files.ts');
       const name = flag('--name') ?? path.basename(file).replace(/\.[^.]+$/, '');
-      const imp = await meshAssetFromSoup(name, readMeshFile(file), maxTris);
+      const data = readFileSync(file);
+      const imp = await meshAssetFromSoup(name, parseMeshFile(file, new Uint8Array(data).buffer), maxTris);
       console.log(`${path.basename(file)}: ${imp.originalTriangles} üçgen → ${imp.asset.triangles}; boyut ${vec(imp.size)} mm; dosyadaki merkez ${vec(imp.center)}`);
       const op: Op = {
         op: 'import_mesh',
@@ -852,22 +902,27 @@ async function main(): Promise<void> {
         role: (flag('--role') ?? '') as Extract<Op, { op: 'import_mesh' }>['role'],
         color: flag('--color'),
         position: has('--keep-position') ? imp.center : null,
-        // Kaynak yolla anılır: p3d save ağı gömmez, proje dosyasına göreli yol yazar (--embed ile gömer).
+        // Kaynak yolla anılır: p3d save ağı gömmez, proje dosyasına göreli yol yazar (--embed ile gömer). Damga
+        // (boyut + özet) kaynak sonradan değişirse fark edilsin diye.
         src: file,
         maxTris,
+        ...sourceStamp(data),
       };
       printResult(await post({ ops: [op], label: flag('--label') ?? `İçe aktar: ${path.basename(file)}` }));
       return;
     }
     case 'check': {
       const opts = checkOptions();
-      const { project, source } = await sourceProject('check');
+      const { project, source, dropped, warnings } = await sourceProject('check');
       const { checkProject } = await import('../src/check.ts');
       console.log(`${source} · profil ${opts.profile}${opts.maxTris ? ` (bütçe ${opts.maxTris} üçgen)` : ''}`);
+      for (const w of warnings) console.log(`⚠ ${w}`);
+      // Okunamayan parça denetlenemedi: "sorun yok" denmesin.
+      for (const d of dropped) console.log(`✕ Parça okunamadı, denetlenmedi: ${d}`);
       const issues = checkProject(project, opts);
       for (const i of issues) console.log(`${i.level === 'hata' ? '✕' : '⚠'} ${i.message}`);
-      if (!issues.length) console.log('✓ Sorun bulunmadı.');
-      if (issues.some((i) => i.level === 'hata')) process.exitCode = 1;
+      if (!issues.length && !dropped.length) console.log('✓ Sorun bulunmadı.');
+      if (dropped.length || issues.some((i) => i.level === 'hata')) process.exitCode = 1;
       return;
     }
     case 'measure':
@@ -878,7 +933,8 @@ async function main(): Promise<void> {
       if (!outArg) throw new Error('Çıktı dosyası gerekli: export <çıktı.stl|3mf|obj|glb> [--file m.p3d.json]');
       const units = flag('--units');
       const normals = flag('--normals');
-      const { project, source } = await sourceProject('export', true);
+      const { project, source, warnings } = await sourceProject('export', true);
+      for (const w of warnings) console.log(`⚠ ${w}`);
       const { exportFile } = await import('../src/files.ts');
       const r = await exportFile(project, fromCaller(outArg), {
         parts: list('--parts'),
@@ -929,7 +985,7 @@ async function main(): Promise<void> {
         r.status === 'kuruldu'
           ? `✓ Skill kuruldu: ${r.dest}`
           : r.status === 'güncellendi'
-            ? `✓ Skill güncellendi (mevcut dosyanın üzerine yazıldı): ${r.dest}`
+            ? `✓ Skill güncellendi (mevcut dosyanın üzerine yazıldı; önceki içerik yedeklendi: ${r.backup}): ${r.dest}`
             : `✓ Skill zaten güncel (aynı içerik, yazılmadı): ${r.dest}`,
       );
       return;

@@ -1,11 +1,13 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unzipSync, strFromU8 } from 'fflate';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { GUIDE_DIR, SKILL_SOURCE, guideTopics } from '../scripts/guide';
+import { findChrome, launchHeadless } from '../scripts/headless';
+import { makeAsset } from '../src/assets';
 
 // Global `p3d` komutu (bin/p3d.mjs) başka klasörlerden çalıştırılır; --file komutları sunucu gerektirmez.
 const BIN = fileURLToPath(new URL('../bin/p3d.mjs', import.meta.url));
@@ -80,6 +82,27 @@ describe('p3d run', () => {
     expect(JSON.parse(r.stdout)).toEqual({ parts: 1, errors: [], len: 5, argv: ['a', '--ws', 'b'], cwd: dir });
   }, 60_000);
 
+  it('`npm run p3d -- run` yolu (tsx ile scripts/p3d.ts, INIT_CWD): çözümleme kancasını p3d.ts kaydeder', () => {
+    const sub = path.join(dir, 'npmrun');
+    mkdirSync(sub);
+    writeFileSync(
+      path.join(sub, 'b.mts'),
+      [
+        "import { newProject, SHAPES } from 'p3d';",
+        "console.log(JSON.stringify({ name: newProject('npm').name, box: SHAPES.includes('box'), cwd: process.cwd(), argv: process.argv.slice(2) }));",
+      ].join('\n'),
+    );
+    // `npm run p3d` = `tsx scripts/p3d.ts` depo kökünde; komutun yazıldığı klasör INIT_CWD'de.
+    const r = spawnSync(process.execPath, ['--import', 'tsx', path.join(ROOT, 'scripts', 'p3d.ts'), 'run', 'b.mts', 'x'], {
+      cwd: ROOT,
+      env: cleanEnv({ npm_lifecycle_event: 'p3d', INIT_CWD: sub }),
+      encoding: 'utf8',
+    });
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ name: 'npm', box: true, cwd: sub, argv: ['x'] });
+  }, 60_000);
+
   it('betik yoksa açıklayıcı hata; betiğin hatası yığın iziyle, çıkış kodu 1', () => {
     const missing = p3dRun(['run', 'yok.mts'], dir);
     expect(missing.code).toBe(1);
@@ -147,6 +170,64 @@ describe('tarayıcısız komutlar (--file)', () => {
     expect(notOps.stderr).toContain('bir işlem dizisi olmalı');
   }, 60_000);
 
+  it('apply --out: hedef başka bir mevcut dosyaysa --force ister; kaynak dosyanın kendisi (farklı yazımla) serbest', () => {
+    const kopya = path.join(dir, 'kopya.p3d.json');
+    const before = readFileSync(kopya, 'utf8');
+    const input = JSON.stringify([{ op: 'create', shape: 'box', name: 'ek' }]);
+    const r = p3dRun(['apply', '--file', 'model.p3d.json', '--out', 'kopya.p3d.json'], dir, { input });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`${kopya} zaten var (--out kaynak dosyadan farklı: ${model}); üzerine yazmak için --force ekleyin`);
+    expect(readFileSync(kopya, 'utf8')).toBe(before);
+    // --dry-run yazmadığı için engellenmez.
+    expect(p3dRun(['apply', '--file', 'model.p3d.json', '--out', 'kopya.p3d.json', '--dry-run'], dir, { input }).code).toBe(0);
+    const f = p3dRun(['apply', '--file', 'model.p3d.json', '--out', 'kopya.p3d.json', '--force'], dir, { input });
+    expect(f.code).toBe(0);
+    expect(JSON.parse(readFileSync(kopya, 'utf8')).parts.map((p: { name: string }) => p.name)).toEqual(['govde', 'teker1', 'ek']);
+    // --out kaynak dosyanın kendisi: --force gerekmez.
+    copyFileSync(model, path.join(dir, 'ayni.p3d.json'));
+    const same = p3dRun(['apply', '--file', 'ayni.p3d.json', '--out', `alt${path.sep}..${path.sep}ayni.p3d.json`], dir, { input });
+    expect(same.stderr).toBe('');
+    expect(same.code).toBe(0);
+  }, 60_000);
+
+  it('okunamayan parça: check hata sayar (çıkış 1), measure / scene stdout\'ta uyarır, export yazmaz', () => {
+    const raw = JSON.parse(readFileSync(model, 'utf8'));
+    raw.parts.push({ ...raw.parts[0], id: 'p_garip', name: 'garip', shape: 'yildiz' });
+    writeFileSync(path.join(dir, 'garip.p3d.json'), JSON.stringify(raw));
+    const why = "'garip': bilinmeyen şekil 'yildiz'";
+    const c = p3dRun(['check', '--file', 'garip.p3d.json'], dir);
+    expect(c.code).toBe(1);
+    expect(c.stdout).toContain(`✕ Parça okunamadı, denetlenmedi: ${why}`);
+    expect(c.stdout).not.toContain('Sorun bulunmadı');
+    const m = p3dRun(['measure', '--file', 'garip.p3d.json'], dir);
+    expect(m.code).toBe(0);
+    expect(m.stdout).toContain(`⚠ 1 parça okunamadı ve atlandı (sonuçlara dahil değil):\n  - ${why}`);
+    const s = p3dRun(['scene', '--file', 'garip.p3d.json'], dir);
+    expect(s.stdout).toContain(`⚠ 1 parça okunamadı ve atlandı`);
+    const full = p3dRun(['scene', '--file', 'garip.p3d.json', '--full'], dir);
+    expect(JSON.parse(full.stdout).parts).toHaveLength(2); // stdout yalnızca JSON
+    expect(full.stderr).toContain(why);
+    const e = p3dRun(['export', 'garip.stl', '--file', 'garip.p3d.json'], dir);
+    expect(e.code).toBe(1);
+    expect(e.stderr).toContain(`1 parça okunamadı:\n  - ${why}`);
+    expect(readdirSync(dir)).not.toContain('garip.stl');
+  }, 60_000);
+
+  it('scene --file --full dosyadaki gibi: src göreli, dosyada gömülü ağ gömülü, yoksa gömülmez', () => {
+    const raw = JSON.parse(readFileSync(model, 'utf8'));
+    const mesh = { ...raw.parts[0], id: 'p_ref', name: 'ref', shape: 'mesh', params: { scale: 1 }, role: 'reference', geom: { kind: 'mesh', asset: 'a_clikup01', src: 'alt/kup.obj', maxTris: 500 } };
+    writeFileSync(path.join(dir, 'yol.p3d.json'), JSON.stringify({ ...raw, parts: [mesh] }));
+    const yol = JSON.parse(p3dRun(['scene', '--file', 'yol.p3d.json', '--full'], dir).stdout);
+    expect(yol.parts[0].geom).toMatchObject({ kind: 'mesh', asset: 'a_clikup01', src: 'alt/kup.obj', maxTris: 500 });
+    expect(yol.assets).toBeUndefined();
+    const asset = makeAsset('dortyuz', new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]), new Uint32Array([0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3]), 'a_clikup02');
+    const embedded = { ...mesh, geom: { ...mesh.geom, asset: asset.id } };
+    writeFileSync(path.join(dir, 'gomulu.p3d.json'), JSON.stringify({ ...raw, parts: [embedded], assets: { [asset.id]: asset } }));
+    const gom = JSON.parse(p3dRun(['scene', '--file', 'gomulu.p3d.json', '--full'], dir).stdout);
+    expect(gom.parts[0].geom).toEqual({ kind: 'mesh', asset: asset.id, src: 'alt/kup.obj', maxTris: 500 });
+    expect(gom.assets).toEqual({ [asset.id]: asset });
+  }, 60_000);
+
   it('scene --file: parça satırında grup, sonda grup listesi ve pivot', () => {
     const out = p3d(['scene', '--file', 'model.p3d.json'], dir);
     expect(out).toContain(`dosya: ${model}`);
@@ -211,6 +292,56 @@ describe('tarayıcısız komutlar (--file)', () => {
   }, 60_000);
 });
 
+describe('snapshot --file tarayıcısı (scripts/headless.ts)', () => {
+  const has = (...paths: string[]) => (p: string) => paths.includes(p);
+
+  it('findChrome: P3D_CHROME önce gelir (varlığı denetlenmez)', () => {
+    expect(findChrome({ P3D_CHROME: 'X:/tarayici.exe' }, 'win32', () => false)).toBe('X:/tarayici.exe');
+  });
+
+  it("findChrome Windows: önce Chrome (Program Files → (x86) → LOCALAPPDATA), sonra Edge; PATH aranmaz", () => {
+    const env = { ProgramFiles: 'C:\\Program Files', 'ProgramFiles(x86)': 'C:\\Program Files (x86)', LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' };
+    const chromeLocal = 'C:\\Users\\u\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe';
+    const chromePf = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+    const edge = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
+    expect(findChrome(env, 'win32', has(edge, chromeLocal, chromePf))).toBe(chromePf);
+    expect(findChrome(env, 'win32', has(edge, chromeLocal))).toBe(chromeLocal);
+    expect(findChrome(env, 'win32', has(edge))).toBe(edge);
+    expect(findChrome(env, 'win32', has())).toBeNull();
+    expect(findChrome({ ...env, PATH: 'C:\\bin' }, 'win32', (p) => p.startsWith('C:\\bin'))).toBeNull();
+    // Ortam değişkeni eksik kök atlanır.
+    expect(findChrome({ LOCALAPPDATA: 'D:\\L' }, 'win32', has('D:\\L\\Google\\Chrome\\Application\\chrome.exe'))).toBe('D:\\L\\Google\\Chrome\\Application\\chrome.exe');
+  });
+
+  it('findChrome macOS: /Applications, sonra ~/Applications; Chrome → Chromium → Edge', () => {
+    const user = '/Users/u/Applications/Chromium.app/Contents/MacOS/Chromium';
+    expect(findChrome({ HOME: '/Users/u' }, 'darwin', has(user))).toBe(user);
+    expect(findChrome({}, 'darwin', has('/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'))).toBe(
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    );
+    expect(findChrome({ HOME: '/Users/u' }, 'darwin', has())).toBeNull();
+  });
+
+  it('findChrome Linux: standart yollar, sonra PATH sırasıyla', () => {
+    expect(findChrome({ PATH: '/usr/local/bin' }, 'linux', has('/usr/bin/chromium', '/usr/local/bin/google-chrome'))).toBe('/usr/bin/chromium');
+    expect(findChrome({ PATH: '/opt/x/bin:/usr/local/bin' }, 'linux', has('/usr/local/bin/chromium', '/opt/x/bin/microsoft-edge'))).toBe('/opt/x/bin/microsoft-edge');
+    expect(findChrome({}, 'linux', has())).toBeNull();
+  });
+
+  it('launchHeadless: hemen kapanan süreç failure() ile bildirilir; close() profili siler', async () => {
+    const mine = () => readdirSync(tmpdir()).filter((f) => f.startsWith('p3d-chrome-'));
+    const before = new Set(mine());
+    // Node, Chrome bayraklarını tanımaz ve hemen çıkar: ana süreç bitmişken kapatma yolu (Windows'ta taskkill çalışmaz).
+    const b = launchHeadless(process.execPath, 'http://127.0.0.1:9/');
+    for (let i = 0; i < 200 && !b.failure(); i++) await new Promise((r) => setTimeout(r, 25));
+    expect(b.failure()).toMatch(/^Tarayıcı beklenmedik biçimde kapandı \(çıkış kodu \d+\)\.$/);
+    expect(mine().filter((f) => !before.has(f))).toHaveLength(1);
+    await b.close();
+    await b.close(); // ikinci çağrı zararsız
+    expect(mine().filter((f) => !before.has(f))).toEqual([]);
+  }, 30_000);
+});
+
 describe('p3d guide / skill install', () => {
   it('guide: konu listesi, konu metni, bilinmeyen konuda çıkış 1', () => {
     const topics = guideTopics();
@@ -227,7 +358,7 @@ describe('p3d guide / skill install', () => {
     expect(unknown.stdout).toContain('Konular:');
   }, 60_000);
 
-  it('skill install P3D_SKILLS_DIR altına kopyalar; tekrarında aynı, değişmişse üzerine yazdığını söyler', () => {
+  it('skill install P3D_SKILLS_DIR altına kopyalar; tekrarında aynı, değişmişse yedekleyip üzerine yazdığını söyler', () => {
     const skills = path.join(dir, 'skills');
     const env = { P3D_SKILLS_DIR: skills };
     const dest = path.join(skills, 'p3d', 'SKILL.md');
@@ -235,8 +366,11 @@ describe('p3d guide / skill install', () => {
     expect(readFileSync(dest, 'utf8')).toBe(readFileSync(SKILL_SOURCE, 'utf8'));
     expect(p3dRun(['skill', 'install'], dir, { env }).stdout).toContain('zaten güncel');
     writeFileSync(dest, 'eski');
-    expect(p3dRun(['skill', 'install'], dir, { env }).stdout).toContain('üzerine yazıldı');
+    const upd = p3dRun(['skill', 'install'], dir, { env }).stdout;
+    expect(upd).toContain('üzerine yazıldı');
+    expect(upd).toContain(`önceki içerik yedeklendi: ${dest}.bak`);
     expect(readFileSync(dest, 'utf8')).toBe(readFileSync(SKILL_SOURCE, 'utf8'));
+    expect(readFileSync(`${dest}.bak`, 'utf8')).toBe('eski');
     expect(p3dRun(['skill'], dir).code).toBe(1);
   }, 60_000);
 });

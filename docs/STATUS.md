@@ -8,7 +8,7 @@
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (194 test, ~20 sn) — hepsi temiz olmalı. Global komut için bir kez `npm link`.
+1. `npm install` · `npm run typecheck` · `npm test` (213 test, ~25 sn) — hepsi temiz olmalı. Global komut için bir kez `npm link`.
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
    yok → kullanıcıdan F5 isteyin). Kullanıcı kök sekmede değişiklik yapılmasına izin verdi ve ilerlemeyi orada izlemeyi seviyor;
@@ -173,8 +173,11 @@
 - Komut sırasında bağlantı koparsa (409/504) komut uygulanmış olabilir; körlemesine tekrarlamadan `p3d scene` ile bakın.
 - `open`'ın sekme denetimi ile yükleme arasında küçük bir yarış kalır (yükleme geri alınabilir). Sunucudaki ağ deposu
   (`state.assets`) sınırsız büyür; `snapshot --file` geçici alanları `/workspaces` listesinde 0 sekmeyle kalır (en fazla 20).
+- Gömülü bir ağı yeniden yolla anılan yapmanın yolu yok (`--no-embed` yok). Sert kapanmada (terminal kapanması)
+  `snapshot --file`'ın Chrome süreci ve `p3d-chrome-*` geçici profili kalabilir.
 - `src` dosyası değişirse aynı kimlikli ağı zaten yüklemiş sekme/süreç eski ağı tutar. Tarayıcının **Aç…** düğmesi ağı
-  gömülü olmayan dosyada mesh parçalarını yer tutucu gösterir; bu dosyaları `p3d open` ile açın.
+  gömülü olmayan dosyada mesh parçalarını yer tutucu gösterir (uyarır; Kaydet de uyarır ve dosyayı "kaydedildi" saymaz);
+  bu dosyaları `p3d open` ile açın.
 - Sunucu yeniden başlayınca sekme otomatik yeniden bağlanır (EventSource), ama sahne bir değişiklik olana ya da
   bağlantı açılana kadar sunucuda yoktur (`scene` → 409).
 - Sayfa, sunucu yeniden başlarken yüklenirse sekme bağlantısız kalır ve elle yenilemek gerekir. Bu, `vite.config.ts`

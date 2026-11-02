@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { strToU8, zipSync } from 'fflate';
 import { SHAPES, isGeomShape } from '../shared/ops';
-import { registerAsset, usedAssets } from './assets';
+import { getAsset, registerAsset, usedAssets } from './assets';
 import { isHexColor, normalizeHex } from './colors';
 import { newId, partMatrix } from './engine';
 import { sanitizeGeom } from './geom';
@@ -19,10 +19,21 @@ export const MIN_RESOLUTION = 6;
 // ---------------------------------------------------------------------------
 // Proje dosyası (.p3d.json)
 
-/** Proje dosyası metni; mesh parçalarının ağ verisi `assets` altında dosyaya gömülür. */
+/**
+ * Proje dosyası metni; mesh parçalarının ağ verisi `assets` altında dosyaya gömülür. Verisi bellekte olmayan ağ
+ * gömülemez (parça yalnızca kimlik ve `src` ile yazılır): önce `meshPartsWithoutData` ile denetleyin.
+ */
 export function projectToJson(project: Project): string {
   const assets = usedAssets(project);
   return JSON.stringify(Object.keys(assets).length ? { ...project, assets } : project, null, 2);
+}
+
+/**
+ * Ağ verisi depoda olmayan mesh parçaları: ekranda yer tutucu küp görünür, dosyaya gömülemez (ör. `src` ile yolla
+ * anılan ağ tarayıcıda açıldı ya da ağ otomatik kayda sığmadı).
+ */
+export function meshPartsWithoutData(project: Project): Part[] {
+  return project.parts.filter((p) => p.geom?.kind === 'mesh' && !getAsset(p.geom.asset));
 }
 
 /**

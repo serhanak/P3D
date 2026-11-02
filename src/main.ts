@@ -3,7 +3,7 @@ import wasmUrl from 'manifold-3d/manifold.wasm?url';
 import { wsFromPathname, wsLabel, wsPath, type Op } from '../shared/ops';
 import { claimAutosave, indexedDbBackend, localStorageBackend, type AutosaveRecord } from './autosave';
 import { sceneSummary, type ApplyResult } from './engine';
-import { exportModel, parseProject, projectToJson, download, safeFileName, type ExportKind } from './io';
+import { exportModel, meshPartsWithoutData, parseProject, projectToJson, download, safeFileName, type ExportKind } from './io';
 import { connectBridge } from './bridge';
 import { initCsg } from './csg';
 import { meshAssetFromSoup, meshFormatOf, parseMeshFile } from './meshio';
@@ -470,7 +470,20 @@ $('btn-new').addEventListener('click', () => {
 
 function saveProject(): void {
   const file = `${safeFileName(store.project.name)}.p3d.json`;
+  const noData = meshPartsWithoutData(store.project);
   download(file, projectToJson(store.project), 'application/json');
+  if (noData.length) {
+    // Dosya eksik: bu ağlar gömülemedi (yalnızca kimlik ve kaynak yolu yazıldı). "Kaydedildi" sayılmaz, sekme kirli kalır.
+    const names = noData.map((p) => `'${p.name}'`).join(', ');
+    addLog(
+      'warn',
+      `⚠ “${file}” indirildi ama ${names} ağ verisi bu sekmede yüklü değil (yer tutucu küp görünüyor); ağ dosyaya ` +
+        'gömülemedi, yalnızca kaynak yolu yazıldı. Proje “kaydedildi” sayılmadı. Ağı yeniden içe aktarın ya da terminalden ' +
+        'kaydedin (kaynak dosyadan okunur): p3d save <dosya.p3d.json>',
+    );
+    toast(`Kaydedildi sayılmadı: ${noData.length} ağın verisi yüklü değil, dosyaya gömülemedi (ayrıntı günlükte).`, true);
+    return;
+  }
   // İndirilen dosyanın tam yolu bilinmez; bağ yalnızca dosya adıdır (gösterim ve "kaydedildi" durumu için).
   store.markSaved(file);
   toast(`Kaydedildi: ${file}`);
@@ -491,8 +504,15 @@ fileInput.addEventListener('change', async () => {
     viewer.fit(store.project);
     addLog('info', `“${file.name}” yüklendi (${project.parts.length} parça).`);
     for (const d of dropped) addLog('warn', `⚠ Yüklenemedi: ${d}`);
+    // Ağı yolla anılan (src) parçalar tarayıcıda okunamaz: yer tutucu küp sessiz kalmasın.
+    const noData = meshPartsWithoutData(project).map((p) => {
+      const src = p.geom?.kind === 'mesh' ? p.geom.src : undefined;
+      return `'${p.name}' ağı dosyada gömülü değil (kaynak: ${src ?? 'yok'}); p3d open ile açın.`;
+    });
+    for (const m of noData) addLog('warn', `⚠ ${m} Şimdilik yer tutucu küp gösteriliyor.`);
     noteUnbound(prev);
-    toast(dropped.length ? `Proje yüklendi; ${dropped.length} parça okunamadı (günlükte).` : 'Proje yüklendi.', dropped.length > 0);
+    if (noData.length) toast(noData.length === 1 ? noData[0] : `${noData.length} ağ dosyada gömülü değil; p3d open ile açın (ayrıntı günlükte).`, true);
+    else toast(dropped.length ? `Proje yüklendi; ${dropped.length} parça okunamadı (günlükte).` : 'Proje yüklendi.', dropped.length > 0);
   } catch (e) {
     toast(`Yüklenemedi: ${(e as Error).message}`, true);
   }

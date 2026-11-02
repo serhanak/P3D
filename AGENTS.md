@@ -200,6 +200,9 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
 - İçe aktarılan ağın kaynağı `geom.src` (+ `maxTris`): bellekte mutlak yol; `saveProjectFile` kaynak dosya varsa yolu
   proje dosyasına göre göreli yazar ve ağı **gömmez** (`--embed` ile gömer); `loadProjectFile` kaynaktan aynı kimlikle
   yeniden üretir. Ağ verisi ne gömülü ne kaynakta bulunabilen dosya yüklenmez (Node tarafında yer tutucu yok).
+  Dosyada gömülü gelen ağ sonraki kayıtlarda da gömülü kalır. `srcSize`/`srcHash` kaynak damgasıdır: değişmişse "kaynak dosya
+  değişmiş" uyarısı (gömülü ağ varsa o kullanılır). Sahne özetine (Claude/köprü) `src`'nin yalnızca dosya adı girer.
+  `export` bir parçanın kaynak dosyasının üzerine yazmaz.
 
 **Gruplar**
 - Üyelik parçada tutulur (`Part.group`), grup tanımı `Project.groups` (`{name, pivot}`); ikisi de opsiyoneldir, yoksa

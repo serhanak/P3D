@@ -85,7 +85,9 @@ export interface HullGeom {
 /**
  * İçe aktarılmış üçgen ağ; veri projenin `assets` deposundadır. `src` verilirse ağ dosyası yolla anılır: Node'da
  * kaydederken (`saveProjectFile`) dosya varsa ağ gömülmez, yol proje dosyasına göreli yazılır; açarken gömülü ağ yoksa
- * dosya okunup `maxTris` ile yeniden sadeleştirilir (aynı kimlikle). Tarayıcı `src`'yi okumaz, yalnızca taşır.
+ * dosya okunup `maxTris` ile yeniden sadeleştirilir (aynı kimlikle). Dosyada gömülü gelen ağ gömülü kalır; kaynak
+ * dosya değişmişse (`srcSize` / `srcHash` uyuşmaz) uyarı verilir ve gömülü ağ kullanılır. Tarayıcı `src`'yi okumaz,
+ * yalnızca taşır.
  */
 export interface MeshGeom {
   kind: 'mesh';
@@ -94,6 +96,10 @@ export interface MeshGeom {
   src?: string;
   /** İçe aktarmadaki üçgen sınırı (yeniden okurken aynı ağ çıksın diye). */
   maxTris?: number;
+  /** Ağın okunduğu kaynak dosyanın bayt boyutu (değişiklik denetimi). */
+  srcSize?: number;
+  /** Kaynak dosyanın kısa içerik özeti (SHA-256'nın ilk 16 onaltılık hanesi). */
+  srcHash?: string;
 }
 export type PartGeom = ExtrudeGeom | RevolveGeom | LoftGeom | HullGeom | MeshGeom;
 
@@ -188,9 +194,20 @@ export type Op =
   | { op: 'view'; show_names?: boolean | null; show_dimensions?: boolean | null; show_holes?: boolean | null }
   /**
    * Yalnızca yerel kullanım (arayüz/köprü): ağ verisiyle birlikte mesh parçası ekler. `position` yoksa tablaya yerleşir.
-   * `src` / `maxTris` parçanın geom'una yazılır (bkz. MeshGeom; `p3d import` doldurur).
+   * `src` / `maxTris` / `srcSize` / `srcHash` parçanın geom'una yazılır (bkz. MeshGeom; `p3d import` doldurur).
    */
-  | { op: 'import_mesh'; asset: MeshAsset; name?: string; role?: Role | ''; color?: string; position?: Vec3 | null; src?: string; maxTris?: number };
+  | {
+      op: 'import_mesh';
+      asset: MeshAsset;
+      name?: string;
+      role?: Role | '';
+      color?: string;
+      position?: Vec3 | null;
+      src?: string;
+      maxTris?: number;
+      srcSize?: number;
+      srcHash?: string;
+    };
 
 export type OpName = Op['op'];
 
@@ -357,8 +374,11 @@ export interface SceneSummaryPart {
   cuts?: string[];
   /** Üyesi olduğu grubun adı. */
   group?: string;
-  /** extrude/revolve/loft için tam geometri; mesh için yalnızca özet. */
-  geom?: PartGeom | { kind: 'mesh'; asset: string; triangles: number };
+  /**
+   * extrude/revolve/loft için tam geometri; mesh için yalnızca özet: kaynak dosyanın yalnızca adı (`src`, klasör yolu
+   * yok — özet Claude'a ve köprüye gider), `maxTris` / `srcSize` / `srcHash` yok.
+   */
+  geom?: PartGeom | { kind: 'mesh'; asset: string; triangles: number; src?: string };
 }
 
 export interface SceneSummary {

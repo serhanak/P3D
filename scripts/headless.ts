@@ -1,5 +1,9 @@
 // `p3d snapshot --file` için makinedeki Chrome/Edge'i görünmez (headless) açar ve süreç ağacıyla birlikte kapatır
 // (scripts/p3d.ts kullanır; ayrı modül ki testler içe aktarabilsin). WebGL görüntü alma SwiftShader ile çalışır.
+//
+// Geçici profil (`<tmpdir>/p3d-chrome-XXXXXX`) normal bitişte, hatada ve Ctrl+C'de silinir. p3d süreci sert biçimde
+// öldürülürse (görev yöneticisi, SIGKILL, güç kesilmesi) profil klasörü — ve Windows'ta nadiren tarayıcı alt süreçleri —
+// geride kalabilir; zararsızdır, elle silinebilir (Windows: %TEMP%\p3d-chrome-*, diğerleri: /tmp/p3d-chrome-*).
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -92,9 +96,13 @@ export function launchHeadless(chrome: string, url: string): HeadlessBrowser {
         const pid = proc.pid;
         if (pid !== undefined) {
           if (process.platform === 'win32') {
-            // Ana süreç bitmiş olsa da çalıştırılır: /T alt süreçleri (GPU, render) de kapatır.
-            await new Promise<void>((resolve) => execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve()));
+            // /T alt süreçleri (GPU, render) de kapatır. Ana süreç zaten bittiyse çalıştırılmaz: Windows PID'yi hemen
+            // başka bir sürece verebilir ve /T o sürecin ağacını öldürürdü (Chrome'un alt süreçleri ana süreçle kapanır).
+            if (!exited) {
+              await new Promise<void>((resolve) => execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve()));
+            }
           } else {
+            // Süreç grubu (-pid) üyesi kaldıkça kimlik başka gruba verilmez; ana süreç bitmiş olsa da alt süreçler kapanır.
             try {
               process.kill(-pid, 'SIGKILL');
             } catch {

@@ -167,6 +167,20 @@ describe('kök otomatik kaydı (localStorage)', () => {
     expect(m.has(META_KEY)).toBe(false);
   });
 
+  it('ağ verisi olmayan mesh parçası: yer tutucu kalıcılaşmaz, kimlik ve kaynak bilgisi (src, damga) kayıtta korunur', async () => {
+    const { m, storage } = fake();
+    const b = localStorageBackend(() => storage);
+    const geom = { kind: 'mesh' as const, asset: 'a_verisiz1', src: '../ref/tekne.stl', maxTris: 500, srcSize: 171, srcHash: '3cddc1fe606f0e36' };
+    const p = { ...newProject('verisiz'), parts: [{ id: 'p1', name: 'ag', shape: 'mesh' as const, params: { scale: 1 }, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, color: '#ffffff', visible: true, geom }] };
+    b.save({ project: p, dirty: true }, () => {});
+    expect(m.has(ASSETS_KEY)).toBe(false); // gömülecek veri yok; yer tutucu küp yazılmaz
+    const back = await localStorageBackend(() => storage).load();
+    const { parseProject, meshPartsWithoutData } = await import('../src/io');
+    const restored = parseProject(back!.project);
+    expect(restored.parts[0]).toMatchObject({ shape: 'mesh', geom });
+    expect(meshPartsWithoutData(restored).map((x) => x.name)).toEqual(['ag']);
+  });
+
   it('eski biçimdeki kayıt (yalnızca proje anahtarı) aynen yüklenir', async () => {
     const { m, storage } = fake();
     const p = newProject('eski');

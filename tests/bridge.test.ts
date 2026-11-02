@@ -674,6 +674,8 @@ describe('p3d: --ops dosyası, import kaynağı, sekmeden export/check, save ve 
     expect(r.code).toBe(0);
     const op = t.commands.at(-1)!.ops![0];
     expect(op).toMatchObject({ op: 'import_mesh', name: 'kup', role: 'reference', src: path.join(dir, 'kup.obj'), maxTris: 500, position: { x: 5, y: 5, z: 5 } });
+    // Kaynak damgası: dosya sonradan değişirse fark edilsin.
+    expect(op).toMatchObject({ srcSize: Buffer.byteLength(CUBE_OBJ), srcHash: expect.stringMatching(/^[0-9a-f]{16}$/) });
     expect((op as { asset: { triangles: number } }).asset.triangles).toBe(12);
   }, 60_000);
 
@@ -700,12 +702,45 @@ describe('p3d: --ops dosyası, import kaynağı, sekmeden export/check, save ve 
     expect(r.stderr).toBe('');
     expect(r.stdout).toContain('1 ağ yolla anılıyor');
     let raw = JSON.parse(readFileSync(path.join(dir, 'model', 'yol.p3d.json'), 'utf8'));
-    expect(raw.parts[0].geom).toEqual({ kind: 'mesh', asset: asset.id, src: '../kup.obj', maxTris: 500 });
+    // Damga (boyut + özet) kaydederken eklenir.
+    expect(raw.parts[0].geom).toEqual({ kind: 'mesh', asset: asset.id, src: '../kup.obj', maxTris: 500, srcSize: Buffer.byteLength(CUBE_OBJ), srcHash: expect.stringMatching(/^[0-9a-f]{16}$/) });
     expect(raw.assets).toBeUndefined();
+    const gomulu = path.join(dir, 'model', 'gomulu.p3d.json');
     r = await p3d(['save', 'model/gomulu.p3d.json', '--embed'], dir);
     expect(r.stdout).toContain('1 ağ gömülü');
-    raw = JSON.parse(readFileSync(path.join(dir, 'model', 'gomulu.p3d.json'), 'utf8'));
+    raw = JSON.parse(readFileSync(gomulu, 'utf8'));
     expect(raw.parts[0].geom.src).toBe('../kup.obj');
     expect(raw.assets[asset.id]).toEqual(asset);
+
+    // Aynı dosyaya sonradan --embed olmadan kaydetmek ağı atmaz: hedefte gömülü olan gömülü kalır.
+    await t.put([], { project: mesh, assets: { [asset.id]: asset }, file: gomulu, dirty: true });
+    r = await p3d(['save', 'model/gomulu.p3d.json'], dir);
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toContain('1 ağ gömülü');
+    expect(JSON.parse(readFileSync(gomulu, 'utf8')).assets[asset.id]).toEqual(asset);
+  }, 60_000);
+
+  it('sekmeden export / check: okunamayan parça varsa export yazmaz, check hata sayar; kaynak ağ dosyası ezilmez', async () => {
+    const t = await openTab('cekirdek');
+    const strange = { ...project(['a']), parts: [...project(['a']).parts, { ...box('garip'), shape: 'yildiz' }] };
+    await t.put(['a'], { project: strange });
+    const why = "'garip': bilinmeyen şekil 'yildiz'";
+    const e = await p3d(['export', 'garip.stl'], dir);
+    expect(e.code).toBe(1);
+    expect(e.stderr).toContain(`Sekmedeki 1 parça okunamadı (çalışma alanı: cekirdek`);
+    expect(e.stderr).toContain(why);
+    expect(readdirSync(dir)).not.toContain('garip.stl');
+    const c = await p3d(['check'], dir);
+    expect(c.code).toBe(1);
+    expect(c.stdout).toContain(`✕ Parça okunamadı, denetlenmedi: ${why}`);
+    expect(c.stdout).not.toContain('Sorun bulunmadı');
+
+    const src = path.join(dir, 'kup.obj');
+    const ref = { ...project(['a']), parts: [...project(['a']).parts, { ...box('ref'), shape: 'mesh', role: 'reference', params: { scale: 1 }, geom: { kind: 'mesh', asset: 'a_yokref02', src } }] };
+    await t.put(['a', 'ref'], { project: ref });
+    const k = await p3d(['export', 'kup.obj'], dir);
+    expect(k.code).toBe(1);
+    expect(k.stderr).toContain(`${src} 'ref' parçasının kaynak ağ dosyası (src); üzerine yazılmadı`);
+    expect(readFileSync(src, 'utf8')).toBe(CUBE_OBJ);
   }, 60_000);
 });

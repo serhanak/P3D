@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ROLES, isGeomShape, type Axis, type GroupDef, type LoftGeom, type Op, type ParamChange, type Pt2, type Role, type SceneSummary, type Side, type Vec3 } from '../shared/ops';
+import { ROLES, isGeomShape, type Axis, type GroupDef, type LoftGeom, type MeshGeom, type Op, type ParamChange, type Pt2, type Role, type SceneSummary, type Side, type Vec3 } from '../shared/ops';
 import { decodedAsset, getAsset, makeAsset, newAssetId, registerAsset } from './assets';
 import { resolveColor } from './colors';
 import { GeomError, defaultGeom, describeGeom, geometryVolume, loftCommonSections, meshSource, sanitizeGeom } from './geom';
@@ -1112,6 +1112,12 @@ function placeBeside(part: Part, target: Part, side: Side, gapMm: number, seg: n
 const r2 = (n: number) => Number(n.toFixed(2));
 const v2 = (v: THREE.Vector3 | Vec3): Vec3 => ({ x: r2(v.x), y: r2(v.y), z: r2(v.z) });
 
+/** Mesh özeti: kaynak dosyanın yalnızca adı (kullanıcının klasör yapısı Claude isteğine ve köprü özetine gitmesin). */
+function meshSummary(g: MeshGeom): { kind: 'mesh'; asset: string; triangles: number; src?: string } {
+  const name = g.src?.split(/[\\/]/).pop();
+  return { kind: 'mesh', asset: g.asset, triangles: getAsset(g.asset)?.triangles ?? 0, ...(name ? { src: name } : {}) };
+}
+
 export function sceneSummary(project: Project, selectedId: string | null): SceneSummary {
   const seg = project.settings.resolution;
   return {
@@ -1133,7 +1139,7 @@ export function sceneSummary(project: Project, selectedId: string | null): Scene
         role: p.role ?? 'solid',
         ...(p.cuts ? { cuts: p.cuts.map((id) => project.parts.find((q) => q.id === id)?.name ?? id) } : {}),
         ...(p.group ? { group: p.group } : {}),
-        ...(p.geom ? { geom: p.geom.kind === 'mesh' ? { ...p.geom, triangles: getAsset(p.geom.asset)?.triangles ?? 0 } : p.geom } : {}),
+        ...(p.geom ? { geom: p.geom.kind === 'mesh' ? meshSummary(p.geom) : p.geom } : {}),
       };
     }),
     ...(project.groups?.length ? { groups: project.groups.map((g) => ({ name: g.name, pivot: v2(g.pivot) })) } : {}),
