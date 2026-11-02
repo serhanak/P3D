@@ -24,102 +24,63 @@ Proje `.p3d.json` olarak kaydedilir, sonuç 3MF / STL / OBJ olarak dışa aktar�
 npm install
 npm run dev        # Vite geliştirme sunucusu, http://localhost:5173 (/api uçları + köprü dahil)
 npm run dev:claude # aynısı, serbest komutlar bu makinedeki Claude Code hesabıyla (--llm=claude-cli)
-npm test           # vitest run — tüm testler
+npm test           # vitest run --dir tests — tüm testler
 npm run typecheck  # tsc --noEmit
 npm run build      # typecheck + vite build → dist/
 npm start          # üretim: dist/ + /api → http://127.0.0.1:8080 (köprü kapalı)
-npm run -s p3d -- scene | ops | undo | redo | fit   # Claude Code köprüsü (aşağıya bakın)
-npm run -s p3d -- snapshot | measure | section | import   # görüntü, ölçüm, kesit, ağ içe aktarma
-npm link           # bir kez: global `p3d` komutu; başka klasörlerden `p3d scene` …, göreli yollar o klasöre göre
+npm link           # bir kez: global `p3d` komutu (her klasörden; göreli yollar o klasöre göre)
+p3d <komut>        # köprü + tarayıcısız CLI; depo içinde `npm run -s p3d -- <komut>` de olur. Tam liste: docs/guide/cli.md
 ```
-
-Başka projelerden kullanım (çalışma alanları, tarayıcısız çekirdek, skill, oyun) tasarımı ve adımları:
-[`docs/EXTERNAL-USE.md`](docs/EXTERNAL-USE.md). Tüketiciler P3D'ye yalnızca `p3d` komutu ve `p3d` paket adıyla erişir.
 
 `dev` ve `start` `scripts/launch.ts` üzerinden çalışır; açılış parametreleri ortam değişkenlerine çevrilir
 (parametre > ortam > `.env`): `--llm=auto|api|claude-cli|off` (`P3D_LLM`), `--bridge` / `--no-bridge`
 (`P3D_BRIDGE`), `--port`, `--host`, `--model`, `--effort`, `--claude-bin`. Ör. `npm start -- --llm=api`.
 
 Bir değişikliği bitirmeden önce **`npm run typecheck` ve `npm test` temiz olmalı.** Arayüz değişikliklerini
-mümkünse tarayıcıda da kontrol edin (geliştirme sunucusu HMR ile yeniden yükler; proje localStorage'dan
-geri gelir ama geri-al geçmişi ve seçim sıfırlanır).
+mümkünse tarayıcıda da kontrol edin (geliştirme sunucusu HMR ile yeniden yükler; proje otomatik kayıttan
+geri gelir ama geri-al geçmişi ve seçim sıfırlanır). Chrome eklentisi yoksa görünmez Chrome ile:
+`p3d snapshot --file model.p3d.json` ya da `scripts/headless.ts`.
 
 Claude modu için `.env` (bkz. `.env.example`): `P3D_LLM`, `ANTHROPIC_API_KEY`, opsiyonel `P3D_MODEL`,
 `P3D_EFFORT`, `P3D_BRIDGE`, `P3D_CLAUDE_BIN`, `PORT`, `HOST`.
 `.env` git'e girmez; anahtarı asla istemci koduna, loglara ya da commit'lere koymayın.
 
+## Kullanım rehberi ve başka projeler
+
+**P3D'yi kullanma kuralları tek yerdedir: [`docs/guide/`](docs/guide/index.md)** (`p3d guide [konu]` aynı dosyaları basar):
+`cli` (komutlar), `ops` (işlemler), `modeling` (koordinatlar, şekiller, serbest biçimler, delikler, z-fighting),
+`verify` (snapshot/measure/check/section), `ambiguity` (belirsizlik protokolü), `workspaces`, `scripts`, `game`.
+Hem bu depodaki oturumlar hem başka klasörlerdeki oturumlar (kullanıcı skill'i `tools/skill/p3d/SKILL.md` →
+`p3d skill install`) aynı metni okur. Davranış değişince rehberi de güncelleyin; `tests/guide.test.ts` her işlem
+tipinin `ops.md`'de, her komutun `cli.md`'de geçtiğini denetler.
+
+Başka projelerden kullanım tasarımı ve kararları: [`docs/EXTERNAL-USE.md`](docs/EXTERNAL-USE.md). Tüketiciler P3D'ye
+yalnızca `p3d` komutu ve `p3d` paket adıyla (`src/api.ts`) erişir; iç modüller serbestçe değişebilir.
+
 ## Kullanıcıyla terminalden tasarlamak (Claude Code köprüsü)
 
-Kullanıcı bu terminalde "4 ayaklı masa yap" gibi istekler yazarsa, açık tarayıcı sekmesindeki sahneyi
-**doğrudan** değiştirebilirsiniz (API anahtarı gerekmez; işlemleri siz üretirsiniz):
+Kullanıcı bu terminalde "4 ayaklı masa yap" gibi istekler yazarsa açık tarayıcı sekmesindeki sahneyi **doğrudan**
+değiştirebilirsiniz (API anahtarı gerekmez; işlemleri siz üretirsiniz): `p3d status` → `p3d scene` (ölçüleri bbox'tan
+alın) → `p3d ops --label "kullanıcının isteği"` (stdin ya da `--ops dosya.json`) → `p3d snapshot` / `check`. Her `ops`
+çağrısı tarayıcıda tek geri-al adımıdır ve günlükte "Claude Code" etiketiyle görünür. Ayrıntı: rehber.
 
-1. Geliştirme sunucusu çalışıyor olmalı (`npm run dev`, arka planda) ve uygulama tarayıcıda açık olmalı.
-2. `npm run -s p3d -- scene` → sahne özeti (parça adı, şekil, parametreler, merkez, bbox, renk; `*` seçili).
-   `--full` tüm proje JSON'unu verir.
-3. İşlemleri `shared/ops.ts`'teki `Op` tipine göre JSON olarak stdin'den gönderin; yanıt mesajları,
-   hataları ve güncel sahneyi döner (hata varsa çıkış kodu 1):
-   ```bash
-   npm run -s p3d -- ops --label "kullanıcının isteği" <<'EOF'
-   [{"op":"create","shape":"cylinder","name":"ayak1","params":[{"name":"diameter","value":6},{"name":"height","value":20}],"position":{"x":27,"y":17,"z":10}}]
-   EOF
-   ```
-   `params` her zaman dizidir: `{name, value, mode?: 'set'|'add'|'mul'}` (`name` bir `ParamKey` ya da `wall`).
-   `position` merkezdir (taban değil); `set_position` yalnızca burada/yerelde vardır ve `z`'si tabandır.
-4. `npm run -s p3d -- undo | redo | fit`. Her `ops` çağrısı tarayıcıda tek geri-al adımıdır ve günlükte
-   "Claude Code" etiketiyle görünür.
+Komutlar çalışma alanının (kök `/` ya da `/w/<ad>`) **en son bağlanan** sekmesine gider; alanda bağlı sekme yoksa 409.
+Test için kullanıcının sekmesine (kök) işlem göndermeyin: kendi alanınızı (`--ws deneme`) ya da `--file` kullanın.
+Köprü `server/bridge.ts` (sunucu) ↔ `src/bridge.ts` (tarayıcı, SSE + PUT sahne) ↔ `scripts/p3d.ts` (CLI) üçlüsüdür.
 
-Komutlar **en son bağlanan** sekmeye gider. Test için kullanıcının sekmesine işlem göndermeyin; gerekirse
-önce sorun ya da sonradan `undo` ile geri alın. Köprü `server/bridge.ts` (sunucu) ↔ `src/bridge.ts`
-(tarayıcı, SSE + PUT sahne) ↔ `scripts/p3d.ts` (CLI) üçlüsüdür.
-
-### Doğrulama döngüsü (çizdiğinizi görün ve ölçün)
-Kör çizmeyin; her anlamlı adımdan sonra kontrol edin:
-- `snapshot [--views iso,front,back,left,right,top,bottom] [--size 1000x750] [--out klasör]` → PNG yolları yazdırır;
-  dosyaları Read ile açıp bakın. Dik görünümler (front = −Y'den bakış, right = +X'ten) görünür parçaların kutusuna
-  sığdırılır; isim/ölçü yazıları (CSS) görüntüye girmez. Salt okunurdur, sahneyi değiştirmez.
-- `measure` → parça başına kutu ve **delikler uygulanmış** hacim; toplam ayrıca **birleşik** (union, örtüşmeler bir kez)
-  hacim ve PLA tahmini. Orijinalle karşılaştırmada birleşik hacmi kullanın. Node'da aynı motorla hesaplanır.
-- `check` → farklı katıların aynı düzlemde aynı yöne bakan üst üste yüzeyleri (ekranda z-fighting), boolean hataları,
-  hiçbir şeyi kesmeyen delikler, 0,8 mm altı parçalar, tabla teması. Hata varsa çıkış kodu 1. Her bitmiş modelde çalıştırın.
-- `section --axis x|y|z --at a,b [--parts …] [--tol 0.1]` → kesit çokgenleri ([y,z] / [x,z] / [x,y]);
-  `--file ref.stl` ile sahne olmadan bir dosyada. Alan negatifse "(iç boşluk)".
-- Bir nesneyi **orijinaline yakın** çizmek için: referansı `import ref.stl --role reference --keep-position` ile
-  yarı saydam alın, `section --file` ile istasyon / su hattı / boyuna kesitlerden ölçün, yapıyı (hangi özellik
-  hangi şekil) siz kurun, sayıları ölçümden alın; sonra `snapshot` + `measure` ile karşılaştırın.
-  Örnek akış: `examples/README.md` (3DBenchy).
-
-### Serbest biçimler ve delikler (AI-first)
-- Ham üçgen/mesh üretmeyin; niyeti `extrude` (profil), `revolve` (profil [r, a]), `loft` (kesitler) ile verin,
-  motor kapalı ağı üretir. `geom` koordinatları **yeniden merkezlenmez**: `position` {0,0,0} ile yazdığınız sayılar
-  dünya koordinatıdır (önerilen). 2B nokta ekseni: z → [x,y], x → [y,z], y → [x,z].
-- Loft kesitlerinde nokta sayısı ve başlangıç/dönüş yönü aynı olsun (örn. alt orta, saat yönünün tersi); farklıysa
-  yeniden örneklenir ve başlangıç alttaki noktaya hizalanır.
-- Doğrulama hataları açıklayıcıdır ("Kesit 30: kenarlar birbirini kesiyor", "en az 3 farklı nokta"); hatalı işlem
-  uygulanmaz, diğerleri uygulanır — mesajı okuyup düzeltin.
-- Boşluk, pencere, delik, cep: `role: "hole"` parça (katının içinden 1 mm taşsın). Delik varsayılan olarak kutusu
-  kesişen **tüm görünür katılardan** çıkar; komşu parçaları (içindeki dümen, çerçeve, flanş…) da keseceği için
-  `cuts: ["hedef"]` ile sınırlayın.
-- **Z-fighting kuralı:** aynı delik iki katıyı keserse ikisinde aynı düzlemde kesim yüzü oluşur ve ekranda titreşir.
-  Her deliği tek parçaya bağlayın; birden fazla parçanın oyulması gerekiyorsa her biri için ayrı delik kullanın ve
-  kesim yüzünü diğer parçanın malzemesi içinde bırakın (ör. kabin zemini: kabin içi yalnızca kabini, kabin duvarları
-  içinde biten ikinci delik yalnızca tekneyi keser). Çerçeve açıklığını deliğinden ~0,1 mm büyük çizin. `check` bulur.
-- Çerçeve/pervaz: `extrude` + `frame: genişlik` (profil açıklıktır), `open: true` son→ilk kenarı açık bırakır.
-- Eğri yüzeye oturan parçalar: `place_on_surface {part, target, near, offset}` → yerel +Z yüzey normaline döner.
-- Organik yüzeyler: `loft` + `smooth: true` (monoton kübik, taşma yapmaz), keskin kalacak indisler `sharp`, uçta
-  tek noktalı kesit. Kesit noktalarını ölçülen eğri boyunca eşit yay uzunluğuyla dağıtın (z'ye göre eşit değil).
-  **Loft, kesiti ucunda sıfıra inen ya da topolojisi değişen gövdelerde (tekne başı/kıçı, küpeşte + kuyu) zayıftır:**
-  uçlar bozulur, keskin kenar gövdeye karışır. Bunlar için **`hull` (endaze) şeklini** kullanın: istasyon başına
-  `{x, keel, sheer, breadth[]}` (breadth omurgadan küpeşteye eşit aralıklı yarı genişlikler, her istasyonda aynı sayı).
-  Uygulama tabloyu örtük yüzeye çevirir (`geom.ts` → `hullSdf`, `csg.hullSolid`: önce `Regularize` sadeleştirme, sonra
-  yan profil ekstrüzyonuyla kesişim → keskin küpeşte/taban/ayna). Taban yarı genişliği ≥ 1,5 mm olan istasyonda taban
-  keskin kesilir, V istasyonda (≤ 0,5) bodoslama örtük yüzeyin kendisidir. Oyuk (güverte) için ikinci bir `hull` delik.
-  Örnek mesh gömmeyin: örnekler ve kalıcı modeller uygulamanın kendi şekilleriyle kurulmalı (3DBenchy: `examples/`).
+### Geometri motoru notları (geliştirici)
 - **Dışa aktarım ve boolean girdisi indisli ağ kullanır** (`model.baseIndexed` / `exportGeometry`): üreticilerin ve
   boolean'ın indisli ağını konuma göre yeniden kaynaklamayın — yüzeylerin bir noktada değdiği yerlerde ayrı köşeler
   çöker ve kenarlar bozulur. Konuma göre kaynaklama yalnız three.js ilkellerinin (indissiz) dikiş kopyaları içindir.
+- `hull` tabloyu örtük yüzeye çevirir (`geom.ts` → `hullSdf`, `csg.hullSolid`: önce `Regularize` sadeleştirme, sonra
+  yan profil ekstrüzyonuyla kesişim → keskin küpeşte/taban/ayna). Taban yarı genişliği ≥ 1,5 mm olan istasyonda taban
+  keskin kesilir, V istasyonda (≤ 0,5) bodoslama örtük yüzeyin kendisidir. Ağı pahalıdır (~2 sn); `geom.ts` aynı tablo +
+  çözünürlük için önbellekler; çözünürlük 34 segmentin altında sadeleşmez.
 - Ağ sadeleştirme `meshoptimizer` + `Regularize` (iğne üçgen bırakmaz); `initCsg()` meshoptimizer'ı da hazırlar.
-  `mesh` ve `hull` parçalarında gölge kırılımı ve kenar çizgisi eşiği 50°'dir (gerçek 90° kenarlar görünür, üçgen
-  gürültüsü görünmez). `hull` ağı pahalıdır (~2 sn); `geom.ts` aynı tablo + çözünürlük için önbellekler.
+  `mesh` ve `hull` parçalarında gölge kırılımı ve kenar çizgisi eşiği 50°'dir.
+- Loft: farklı nokta sayılı kesitler yeniden örneklenir, başlangıç alttaki noktaya hizalanır (`loftRings`). Aynalanmış
+  kopya `mirrored: true` taşır ve dörtgenleri öbür köşegenden böler (birebir ayna); geom'u yeniden yazmak bayrağı düşürür.
+- Örnek mesh gömmeyin: örnekler ve kalıcı modeller uygulamanın kendi şekilleriyle kurulmalı (3DBenchy: `examples/`).
 
 ## Dizin yapısı
 
@@ -133,7 +94,11 @@ src/csg.ts           manifold-3d: başlatma (initCsg), çıkarma (delik), hacim,
 src/model.ts         Parçanın son geometrisi (delikler çıkarılmış): görünüm, dışa aktarım ve hacim ortak
 src/meshio.ts        STL/OBJ/3MF okuma (+ kaynak, sadeleştirme, merkezleme), STL/3MF yazma
 src/engine.ts        applyOps(): işlemleri projeye uygular; bbox, parça bulma, adlandırma, sahne özeti
-src/store.ts         Store: proje durumu, geri al/yinele (JSON anlık görüntü), localStorage otomatik kayıt
+src/store.ts         Store: proje durumu, geri al/yinele (JSON anlık görüntü), dosya bağı ve "kaydedilmedi" durumu
+src/autosave.ts      Otomatik kayıt arka uçları: kök localStorage, çalışma alanları IndexedDB; bozuk kayıt yedeği, tek yazar kilidi
+src/gltf.ts          Bağımlılıksız GLB yazıcı (Y-yukarı/metre, düz/yumuşak normal, grup düğümleri, Unreal için katı iskelet)
+src/api.ts           KARARLI kütüphane yüzeyi (`p3d` paketi, package.json exports); kıran değişiklik yapmayın
+src/files.ts         Node yardımcıları: loadProjectFile / saveProjectFile (atomik, ağ `src`) / exportFile
 src/nlp/parser.ts    Yerel Türkçe komut ayrıştırıcı (çevrimdışı)
 src/nlp/llm.ts       /api/status ve /api/nl istemcisi
 src/text.ts          fold(): Türkçe küçük harf + aksan kaldırma (1:1 karakter eşlemesi)
@@ -149,18 +114,27 @@ server/claude-cli.ts claude-cli arka ucu: `claude -p --json-schema …` alt sür
 server/bridge.ts     Claude Code köprüsü sunucu tarafı (SSE, sahne deposu, sonuç bekleme)
 src/bridge.ts        Köprünün tarayıcı tarafı (sahneyi bildirir, gelen işlemleri store.apply ile uygular)
 scripts/launch.ts    npm run dev / npm start başlatıcısı: açılış parametreleri → ortam değişkenleri
-scripts/p3d.ts       Köprü CLI'si (npm run p3d)
+scripts/p3d.ts       `p3d` CLI'si: köprü (sekme), --file ile tarayıcısız komutlar, apply/export/run/guide (docs/guide/cli.md)
+scripts/config.ts    Çalışma alanı seçimi: --ws > P3D_WS > yukarı doğru aranan p3d.json > kök; yol yardımcıları
+scripts/headless.ts  Görünmez Chrome/Edge (snapshot --file): tarayıcı bulma, başlatma, süreç ağacı ve profil temizliği
+scripts/guide.ts     `p3d guide` (docs/guide) ve `p3d skill install` (tools/skill/p3d → ~/.claude/skills/p3d)
 bin/p3d.mjs          Global `p3d` komutu (npm link): scripts/p3d.ts'yi çağıranın klasöründe tsx ile çalıştırır
+bin/p3d-resolve.mjs  Node çözümleme kancası: `p3d` paket adı → src/api.ts (`p3d run` betikleri kurulumsuz)
 server/prompt.ts     Claude sistem talimatı (sabit metin — önbelleklenir)
 server/index.ts      Üretim HTTP sunucusu (dist/ statik + /api)
 vite.config.ts       .env → process.env aktarımı, /api ara katmanı
 tests/               parser.test.ts (ayrıştırıcı+motor), io.test.ts (OBJ manifold, proje dosyası, examples/),
                      geom.test.ts (extrude/revolve/loft, delik, roller, kesit, STL/3MF/OBJ içe-dışa aktarma),
-                     cli.test.ts (global `p3d` komutu başka klasörden, göreli yollar)
+                     game.test.ts (GLB, gruplar/pivot, ayna, count, check game), api.test.ts (kararlı yüzey, dosya
+                     yardımcıları, ağ src), cli.test.ts (p3d komutu alt süreçle: run, apply, export, --file, guide),
+                     bridge.test.ts (köprü protokolü gerçek http sunucusuyla, open/save korumaları),
+                     workspace.test.ts (ws adı, p3d.json keşfi, kök kayıt biçimi, Store), guide.test.ts (rehber kapsamı)
 examples/            Örnek .p3d.json projeleri (Aç… ile yüklenir); io.test.ts hepsinin onarımsız yüklendiğini doğrular
 examples/tools/      Örnek üreteçleri (tsx ile çalışır, tsconfig dışı): build-3dbenchy.ts referans STL'den Benchy'yi kurar
 docs/STATUS.md       Güncel durum, doğrulama durumu, bilinen sorunlar, yol haritası
 docs/EXTERNAL-USE.md P3D'yi başka projelerden kullanma tasarımı: kararlar, belirsizlik protokolü, oyun, adımlar
+docs/guide/          KULLANIM REHBERİ (tek kaynak): p3d guide <konu>; bu depodaki ve başka klasörlerdeki oturumlar okur
+tools/skill/p3d/     Kullanıcı düzeyi Claude Code skill'inin kaynağı (ince giriş; p3d skill install ile kurulur)
 .claude/agents/      Claude Code alt ajanları (ölçüm, uygulama, doğrulama, inceleme); kullanım: CLAUDE.md
 ```
 
@@ -223,6 +197,23 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
   yalnızca kimliği taşır (aksi hâlde 200 adımlık geri-al yüzlerce MB olur). Dosyaya yazarken `projectToJson`
   kullanılan ağları `assets` altında gömer, `parseProject` depoya alır. Otomatik kayıtta ağlar ayrı anahtardadır
   (`p3d.autosave.assets.v1`); sığmazsa kullanıcı uyarılır, parça yer tutucu küp olarak görünür.
+- İçe aktarılan ağın kaynağı `geom.src` (+ `maxTris`): bellekte mutlak yol; `saveProjectFile` kaynak dosya varsa yolu
+  proje dosyasına göre göreli yazar ve ağı **gömmez** (`--embed` ile gömer); `loadProjectFile` kaynaktan aynı kimlikle
+  yeniden üretir. Ağ verisi ne gömülü ne kaynakta bulunabilen dosya yüklenmez (Node tarafında yer tutucu yok).
+
+**Gruplar**
+- Üyelik parçada tutulur (`Part.group`), grup tanımı `Project.groups` (`{name, pivot}`); ikisi de opsiyoneldir, yoksa
+  `parseProject` alan eklemez. Boş grup tutulmaz (`pruneGroups`). Parça ve grup adları tek ad alanıdır (çakışamaz).
+  Grup adı move/rotate/duplicate/mirror/delete/update(renk, görünürlük) işlemlerinde parça yerine geçer.
+
+**Çalışma alanları ve otomatik kayıt**
+- Kök `/` localStorage anahtarları **değişmez**: `p3d.autosave.v1`, `p3d.autosave.assets.v1` (+ dosya bağı için
+  `p3d.autosave.meta.v1`, okunamayan kayıt yedeği `p3d.autosave.v1.bozuk`). `/w/<ad>` alanları IndexedDB'de
+  (veritabanı `p3d`, depo `autosave`, anahtar = ad; yedek `<ad>#bozuk`). Okunamayan/parça düşen kayıt sessizce ezilmez,
+  önce yedeklenir. Aynı alan ikinci sekmede açılırsa o sekme kayıt yazmaz (salt okunur bant).
+- Köprü sözleşmesi: SSE `hello` ile sekme kimliği; PUT `/scene` `{ws, client, seq, …}` (eski `seq` yok sayılır);
+  komut ve sahne ws'nin en son bağlanan sekmesinden; sonuçta `client` eşleşir; `load` geri alınabilir, `mark_saved`
+  içerik özeti (`contentDigest`) eşleşirse sekmeyi temiz yapar.
 
 **Metin işleme**
 - `fold()` karakter karakter eşler; **çıktı uzunluğu girdiyle aynıdır.** Ayrıştırıcı katlanmış metinde
@@ -264,7 +255,10 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
   yazar (açılış parametresi kazanır).
 - Geliştirmede `/api` modülü istek anında `server.ssrLoadModule('/server/api.ts')` ile yüklenir; `vite.config.ts`
   sunucu dosyalarını içe aktarmaz. Böylece `server/` ya da `shared/` değişince sunucu yeniden başlamaz (yeniden başlama
-  sırasında yenilenen sekme bağlantısız kalıyordu). Köprü durumu bu yüzden `globalThis.__p3dBridge`'te tutulur.
+  sırasında yenilenen sekme bağlantısız kalıyordu). Köprü durumu bu yüzden `globalThis.__p3dBridge2`'de tutulur
+  (biçim değişirse anahtar adını sürümleyin).
+- `src/api.ts` sözleşmedir (başka repoların betikleri `import … from 'p3d'` ile kullanır): ad/imza/davranış kırılmaz,
+  yalnızca eklenir. CLI komutları, Op JSON ve `.p3d.json` biçimi de sözleşmedir (eski dosya `parseProject` ile açılmalı).
 
 **Görünüm**
 - `CSS2DObject` DOM öğeleri, nesnenin ebeveyni sahneden çıkarılınca kendiliğinden silinmez;
@@ -279,7 +273,13 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
 2. `src/engine.ts` → `applyOps` içine `case` ekleyin; parçayı `must()` ile bulun, `touch()` çağırın,
    Türkçe mesaj yazın, hatada `OpError` fırlatın. Ölçü/döndürme değiştiriyorsa `anchored()` kullanın.
 3. Claude'a açıksa `server/prompt.ts`'deki "Operations" bölümünü güncelleyin.
-4. Gerekirse ayrıştırıcıya kalıp ekleyin ve `tests/` altında test yazın.
+4. `docs/guide/ops.md` tablosuna ekleyin (`tests/guide.test.ts` denetler).
+5. Gerekirse ayrıştırıcıya kalıp ekleyin ve `tests/` altında test yazın.
+
+### Yeni bir CLI komutu eklemek
+`scripts/p3d.ts` → ana `switch (cmd)` + kullanım metni; `docs/guide/cli.md` tablosu (`tests/guide.test.ts` denetler);
+tarayıcısız çalışabiliyorsa mantığı `src/files.ts` / `src/api.ts` tarafına koyun ki betikler de kullanabilsin.
+Test: `tests/cli.test.ts` (alt süreç, geçici klasör) ya da `tests/bridge.test.ts` (sahte sekme).
 
 ### Yeni bir şekil eklemek
 1. `shared/ops.ts` → `SHAPES` (ve yeni parametre adı gerekiyorsa `PARAM_KEYS`).

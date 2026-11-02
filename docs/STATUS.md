@@ -1,17 +1,20 @@
 # Proje durumu
 
-> Son güncelleme: **2026-11-01** — başka projelerden kullanım planı ([`EXTERNAL-USE.md`](EXTERNAL-USE.md)); adım 1:
-> global `p3d` komutu. Önceki: v0.3 (2026-10-29) tekne (`hull`) şekli, çerçeve, yüzeye oturtma, delik hedefi,
-> birleştirme, `check`, indisli dışa aktarım; 3DBenchy örneği yalnızca uygulamanın kendi şekilleriyle.
+> Son güncelleme: **2026-11-02** — v0.4: başka projelerden kullanım ([`EXTERNAL-USE.md`](EXTERNAL-USE.md)): global `p3d`
+> komutu, `/w/<ad>` çalışma alanları, tarayıcısız çekirdek (`src/api.ts`, `--file`, `apply`, `export`, `p3d run`,
+> görünmez Chrome ile `snapshot --file`), kullanım rehberi (`docs/guide/`) + kullanıcı skill'i; oyun dışa aktarımı (GLB,
+> gruplar/pivot, ayna, `count`, düşük poligon, `check --profile game`). Önceki: v0.3 (2026-10-29) `hull`, çerçeve,
+> yüzeye oturtma, delik hedefi, birleştirme, `check`; 3DBenchy örneği.
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (69 test, ~10 sn) — hepsi temiz olmalı.
+1. `npm install` · `npm run typecheck` · `npm test` (194 test, ~20 sn) — hepsi temiz olmalı. Global komut için bir kez `npm link`.
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
-   kullanıcının tarayıcı sekmesi açık olmalı; `npm run -s p3d -- scene` ile bağlantıyı doğrulayın (409 = sekme bağlı
-   değil → kullanıcıdan F5 isteyin). Kullanıcı sahnede değişiklik yapılmasına izin verdi ve ilerlemeyi orada izlemeyi seviyor.
+   kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
+   yok → kullanıcıdan F5 isteyin). Kullanıcı kök sekmede değişiklik yapılmasına izin verdi ve ilerlemeyi orada izlemeyi seviyor;
+   deneme/test için kendi alanınızı (`--ws deneme`) ya da `--file` kullanın.
 3. Doğrulama döngüsü: `snapshot --out <scratchpad>` (Read ile bakın) · `measure` (birleşik hacim) · `check` (z-fighting) ·
-   `section`. Ayrıntı: AGENTS.md → "Doğrulama döngüsü", "Serbest biçimler ve delikler".
+   `section`. Ayrıntı: `docs/guide/verify.md`, `docs/guide/modeling.md` (CLAUDE.md içe aktarır).
 4. Örnekler uygulamanın kendi şekilleriyle kurulur, mesh gömülmez. 3DBenchy üreteci: `examples/tools/build-3dbenchy.ts`
    (referans STL indirme komutu dosyanın başında; repoya koymayın).
 5. Hacimli işleri alt ajanlara devredin (`.claude/agents/`: p3d-measurer, p3d-implementer, p3d-verifier, p3d-reviewer;
@@ -58,9 +61,27 @@
   sadeleştirme), `sliceMany` (bir ağda çok kesit, tek dönüşüm). İçe aktarma sadeleştirmesi `Regularize` ile.
   Testler her örneğin onarımsız yüklendiğini ve kapalı ağ olarak dışa aktarıldığını doğrular.
 - **Başlatıcı** (`scripts/launch.ts`): `npm run dev|start -- --llm --bridge --port --host --model --effort --claude-bin`.
-- **Global `p3d` komutu** (`bin/p3d.mjs`, depoda bir kez `npm link`): başka klasörlerdeki oturumlar `p3d scene` …
-  çalıştırır; göreli yollar (`import`, `--out`, `--file`) komutun yazıldığı klasöre göre (`npm run p3d` altında `INIT_CWD`).
-  `tsx` artık çalışma zamanı bağımlılığı. Başka projelerden kullanım planının 1. adımı ([`EXTERNAL-USE.md`](EXTERNAL-USE.md)).
+- **Global `p3d` komutu** (`bin/p3d.mjs`, depoda bir kez `npm link`): her klasörden; göreli yollar komutun yazıldığı
+  klasöre göre (`npm run p3d` altında `INIT_CWD`). Tam komut listesi: `docs/guide/cli.md`.
+- **Çalışma alanları (v0.4):** `/w/<ad>`; komut ve sahne alanın en son bağlanan sekmesinden (sekme kimliği, PUT `seq`,
+  `rev`); bağlı sekme yoksa 409. Kök localStorage'da (anahtarlar aynı), alanlar IndexedDB'de; okunamayan/parça düşen kayıt
+  yedeğe alınır; aynı alan ikinci sekmede salt okunur. Alan seçimi `--ws` > `P3D_WS` > `p3d.json` > kök. `status`, `view`,
+  `open` (geri alınabilir, kaydedilmemiş işi korur), `save` (atomik; başka dosyaya bağlı/boş sekme/P3D olmayan dosya
+  korumaları, içerik özetiyle "kaydedildi"). Sekmede `<alan> · <dosya> ●` rozeti.
+- **Tarayıcısız çekirdek (v0.4):** `src/api.ts` kararlı yüzey (`package.json` exports) + `src/files.ts`
+  (`loadProjectFile`, `saveProjectFile`, `exportFile`); `p3d run <betik>` (`import … from 'p3d'` kurulumsuz);
+  `scene|check|measure|section|export --file m.p3d.json`; `apply --file` (hata varsa yazmaz, `--dry-run`, `--new`);
+  `export .stl/.3mf/.obj/.glb`; içe aktarılan ağ yolla anılır (`geom.src`; kaydederken gömülmez, `--embed`);
+  `snapshot --file` görünmez Chrome/Edge ile (~8 sn).
+- **Oyun dışa aktarımı (v0.4):** GLB (`src/gltf.ts`; Y-yukarı/metre, düz/yumuşak normal, sRGB→lineer malzeme, grup
+  düğümleri, `--skeleton` ile Unreal Chaos için katı iskelet, ASCII kemik adları); gruplar + pivot (`group`, `ungroup`,
+  `set_pivot`; move/rotate/duplicate/mirror/delete grup adıyla); `mirror` (her şekilde geometri yansır; loft birebir);
+  `duplicate.count` (dizi); çözünürlük alt sınırı 6; `check --profile game` (üçgen bütçesi, bozuk üçgen).
+- **Kullanım rehberi + skill (v0.4):** `docs/guide/` (index, cli, ops, modeling, verify, ambiguity, workspaces, scripts,
+  game) tek kaynak; `p3d guide [konu]`; kullanıcı skill'i `tools/skill/p3d/SKILL.md` → `p3d skill install`
+  (`~/.claude/skills/p3d`); belirsizlik protokolü (`ask-critical` / `assume` / `ask-all`, `p3d.json` → `onAmbiguity`).
+- **VibroBal geçişi:** `VibroBal/enclosure/build.mts` artık `import … from 'p3d'` ve kendi klasöründen
+  `p3d run build.mts canta-v2`; çıktılar eskisiyle bayt bayt aynı (yalnızca rastgele kimlikler farklı).
 - **Görünüm:** Z-yukarı tabla ızgarası (10/50 mm), eksen göstergesi, renkli parçalar, kenar çizgileri,
   isim etiketleri (aç/kapa), ölçü çizgileri + etiketleri (aç/kapa), tıklayarak seçim, görünüm ön ayarları
   (İzo/Üst/Ön/Sağ), sığdır.
@@ -69,7 +90,7 @@
 - **Durum:** tüm değişiklikler işlem (Op) olarak; geri al/yinele (200 adım); localStorage otomatik kayıt.
 - **Dosya:** proje kaydet/aç (`.p3d.json`, doğrulama ve onarım ile); dışa aktarım: 3MF (renkli, parça başına
   nesne), STL (tümü / seçili), OBJ, OBJ+MTL (ZIP), her parça ayrı OBJ. Yalnızca görünür katılar; delikler uygulanmış.
-- **Ayarlar:** tabla boyutu, yuvarlak yüzey çözünürlüğü (32–192 segment; ekran + dışa aktarım).
+- **Ayarlar:** tabla boyutu, yuvarlak yüzey çözünürlüğü (6–192 segment; ekran + dışa aktarım).
 - **Sunucu:** Vite ara katmanı (geliştirme) ve `server/index.ts` (üretim) aynı `/api` işleyicisini kullanır.
 
 ## Doğrulama durumu
@@ -88,6 +109,10 @@
 | Claude isteği — `api` | ⚠️ Yalnızca **sahte (mock) API** ile doğrulandı: istek biçimi (model, `fallbacks`, beta başlığı, `output_config`, şema) ve yanıt işleme. **Gerçek API anahtarıyla hiç denenmedi.** |
 | Claude isteği — `claude-cli` | ✅ Gerçek `claude -p` (Claude Code 2.1.312, Windows) ile `/api/nl` uçtan uca: "tabanın dört köşesine … ayaklar koy" → doğru 5 işlem, ~9,4 sn. Tarayıcı arayüzünden (Claude modu seçiciyle) denenmedi; giriş yapılmamış/`claude` bulunamadı hata mesajları denenmedi |
 | Global `p3d` komutu | ✅ 2 test (`tests/cli.test.ts`: başka klasörden göreli `--file`, `npm run p3d` altında `INIT_CWD`). Elle: `npm link` sonrası Git Bash ve PowerShell'de başka klasörden `section --file` ve çalışan sunucuya `scene`; ayrı bir klasörde `npm link p3d` ile `p3d/src/*.ts` içe aktarılıp (P3D'nin tsx'iyle) `applyOps` + `initCsg` + `checkProject` çalıştı |
+| Çalışma alanları + köprü v0.4 | ✅ `tests/bridge.test.ts` (gerçek http sunucusu, sahte sekme: ws yalıtımı, hedef sekme, 409, rev/seq, load/mark_saved/özet, kopma, open/save korumaları) + `tests/workspace.test.ts` (p3d.json keşfi, kök kayıt biçimi, Store, yedek). Elle: görünmez Chrome'da `/w/deneme-ui` sekmesi — başlık/rozet, ops, save → rozet temiz, değişiklik → ●, Chrome yeniden açılınca IndexedDB'den geri geldi (dosya bağı + ●), `open` + `undo` önceki içeriğe döndü, WebGL snapshot; kök sekmeye dokunulmadı. İkinci sekme salt okunur bandı ve bozuk kayıt yedeği tarayıcıda **elle denenmedi** |
+| Tarayıcısız çekirdek | ✅ `tests/api.test.ts`, `tests/cli.test.ts` (alt süreç: `run` + `from 'p3d'`, `apply` hata/--dry-run/--new, `export` stl/3mf/glb, `check --profile game`, `guide`, `skill install`). `snapshot --file` Windows + Chrome'da elle; macOS/Linux tarayıcı yolları ve Ctrl+C ile kapatma denenmedi. Rehberdeki betik örneği `p3d run` ile çalıştı. VibroBal `build.mts` yeni yüzeyle aynı çıktıyı üretti |
+| Oyun dışa aktarımı | ✅ `tests/game.test.ts` (GLB başlık/chunk/accessor, eksen, birim, malzeme, flat/smooth, grup düğümleri, iskelet eklemleri/ağırlık/inverseBind, boş parça atlama, ASCII kemik adları; gruplar; ayna her şekil türü tek/çift segment, birebir loft; count; düşük çözünürlükte kapalılık; check game, 45° yanlış z-fighting düzeltmesi). three GLTFLoader ile Node'da yükleniyor. **Unreal'e gerçek içe aktarım ve glTF Validator denenmedi**; yeni Op şemaları gerçek Claude ile denenmedi |
+| Kullanım rehberi | ✅ `tests/guide.test.ts`: her Op `ops.md`'de, her CLI komutu `cli.md`'de, skill yalnızca var olan konulara yönlendirir |
 | Claude Code köprüsü | ✅ Gerçek tarayıcı sekmesiyle: `ops` (oluşturma, üstüne koyma, renk), hatalı işlem → çıkış kodu 1, `undo`, `scene`; `text/plain` ile yazma reddi; geçersiz girdi. Birden çok sekme davranışı denenmedi |
 | Başlatıcı / ayarlar | ✅ `start --llm=api` anahtarsız → uyarı + Claude kapalı, köprü 404; `start --llm=claude-cli --bridge`; bilinmeyen parametre → kullanım metni; `dev:claude` |
 | Dışa aktarılan dosyalar | ⚠️ İçerik testlerle doğrulandı (STL/3MF/OBJ okunup aynı üçgen sayısı); tarayıcıdan gerçek indirme ve dilimleyicide (PrusaSlicer/Cura/Bambu/Orca) açma **denenmedi** — özellikle 3MF renkleri |
@@ -117,8 +142,12 @@
 - Sahnede büyük referans ağ (ör. 80 bin üçgen) varken tarayıcının otomatik kayıt kotası (~5 MB) dolabilir; uygulama uyarır.
 - Görünümde sürükleyerek taşıma/döndürme (gizmo) yok; konum komutla ya da panelden girilir.
 - Parçalar birbirine bağlı değil: alttaki parça kalınlaşınca üstteki onunla yükselmez (iç içe girer);
-  "X'i Y'nin üstüne koy" ile yeniden hizalanır. Gruplama yok.
-- Keyfi kenar yuvarlatma, metin, vida dişi, ayna, dizi (array) yok (pah profilde çizilebilir).
+  "X'i Y'nin üstüne koy" ile yeniden hizalanır. Gruplar yalnızca birlikte taşıma/döndürme/kopyalama/aynalama ve GLB
+  hiyerarşisi içindir (ebeveyn-çocuk izleme yok); arayüzde grup oluşturma düğmesi yok (işlemle).
+- Keyfi kenar yuvarlatma, metin, vida dişi yok (pah profilde çizilebilir).
+- Ayna: `hull` yüzeyi ~0,5 mm'ye kadar simetrik; aynalanmış loft'un geom'u yeniden yazılırsa `mirrored` bayrağı düşer
+  (aslını düzenleyip yeniden aynalayın). Dosyadan yüklenen projede parça ile grup aynı adı taşıyorsa onarılmaz.
+- `hull` düşük çözünürlükte (< 34 segment) sadeleşmez; oyun üçgen bütçesinde gövde için extrude/loft tercih edin.
 - Otomatik yerleşim tabla doluysa parçayı tablanın dışına (sağa) koyar.
 - `set_position` X/Y'yi parçanın merkezine uygular; tek kenarlı prizma/koni döndürülmüşse sınırlayıcı kutu
   merkezi ile küçük fark olabilir.
@@ -139,8 +168,13 @@
 - Maliyet/gecikme ayarı (effort) ölçülmedi; varsayılan `medium`.
 
 **Claude Code köprüsü**
-- Komutlar yalnızca **en son bağlanan** sekmeye gider; sahne de son bildiren sekmenindir. Kimlik doğrulama yok
-  (yalnızca `application/json` zorunluluğu); ağa açık sunucuda açmayın.
+- Komutlar ve sahne çalışma alanının **en son bağlanan** sekmesinindir; aynı alan iki sekmede açıksa eski sekme kayıt
+  yazmaz ama hâlâ düzenlenebilir. Kimlik doğrulama yok (yalnızca `application/json` zorunluluğu); ağa açık sunucuda açmayın.
+- Komut sırasında bağlantı koparsa (409/504) komut uygulanmış olabilir; körlemesine tekrarlamadan `p3d scene` ile bakın.
+- `open`'ın sekme denetimi ile yükleme arasında küçük bir yarış kalır (yükleme geri alınabilir). Sunucudaki ağ deposu
+  (`state.assets`) sınırsız büyür; `snapshot --file` geçici alanları `/workspaces` listesinde 0 sekmeyle kalır (en fazla 20).
+- `src` dosyası değişirse aynı kimlikli ağı zaten yüklemiş sekme/süreç eski ağı tutar. Tarayıcının **Aç…** düğmesi ağı
+  gömülü olmayan dosyada mesh parçalarını yer tutucu gösterir; bu dosyaları `p3d open` ile açın.
 - Sunucu yeniden başlayınca sekme otomatik yeniden bağlanır (EventSource), ama sahne bir değişiklik olana ya da
   bağlantı açılana kadar sunucuda yoktur (`scene` → 409).
 - Sayfa, sunucu yeniden başlarken yüklenirse sekme bağlantısız kalır ve elle yenilemek gerekir. Bu, `vite.config.ts`
@@ -152,8 +186,6 @@
 - Windows'ta arka planda başlatılan `npm run dev` durdurulunca alt node süreci açık kalabilir (port meşgul).
 - Global `p3d` komutu `npm link` ile **geliştirme klasörünü** gösterir: P3D'de yarım kalan bir değişiklik başka
   projelerdeki oturumları da etkiler (kararlı kurulum ayrımı ertelendi; tetikleyici: EXTERNAL-USE.md → Kararlar).
-- Başka projelerin betikleri P3D'yi henüz iç modül yollarıyla (`p3d/src/*.ts`) alıyor ve çalıştırmak için P3D'nin
-  tsx'ini kullanmalı; kararlı `src/api.ts` + `exports` 3. adımda. Sahnenin eski/başka sekmeden gelmesi tuzağı 2. adımda.
 
 **Uygulama**
 - Geri-al geçmişi ve seçim sayfa yenilenince sıfırlanır (proje otomatik kayıttan gelir).
@@ -164,12 +196,13 @@
 
 ## Yol haritası (öncelik sırasıyla)
 
-0. **Başka projelerden kullanım** (VibroBal, yarış oyunu): [`EXTERNAL-USE.md`](EXTERNAL-USE.md) → Adımlar. Sıradaki:
-   2. adım (sahne revizyonu, bağlı sekme yokken hata), sonra tarayıcısız çekirdek (`src/api.ts`, `--file` komutları).
-   Oyun için gruplama/pivot (2) ve ayna/dizi (7) öne çekilecek.
+0. **Başka projelerden kullanım:** adımlar 1–6 tamam ([`EXTERNAL-USE.md`](EXTERNAL-USE.md)). Sıradaki: GLB'yi Unreal'e
+   gerçekten aktarıp (araç iskeleti dahil) doğrulamak; yeni Op şemalarını gerçek Claude ile denemek; skill'i başka bir
+   oturumda kullanıp rehberi düzeltmek; gerekirse `p3d-designer` alt ajanı ve kararlı kurulum ayrımı (tetikleyiciler:
+   EXTERNAL-USE.md → Kararlar).
 1. **Dışa aktarım ve arayüz doğrulaması:** 3MF/STL'yi Bambu/Prusa/Orca'da açıp renk ve ölçek kontrolü;
    v0.2 arayüz öğelerini tarayıcıda elle deneme.
-2. **Gruplama ve ekranda birleşim:** ebeveyn-çocuk (üstteki parça alttakini takip etsin); grup içi union'ı ekranda da
+2. **Gruplama (devamı) ve ekranda birleşim:** gruplar v0.4'te var; ebeveyn-çocuk izleme, arayüzden grup; grup içi union'ı ekranda da
    gösterme (renkler orijinal parçalara göre: manifold `runOriginalID`); intersect.
 3. **Yuvarlatma:** profil köşelerinde yarıçap (extrude/revolve noktasına `r`); gerekirse OpenCascade (replicad) ile
    gerçek kenar yuvarlatma ve STEP.
@@ -180,6 +213,6 @@
    (`p3d lines`; şu an 3DBenchy için scratch betikle). Yeni şekiller: metin, vida dişi; hazır parçalar.
    Referanstan otomatik loft çıkarma aracı (`p3d lines`: istasyon kesitlerinden U/kapalı kesit üretimi; şu an
    3DBenchy için scratch betikle yapıldı).
-7. Hizala/dağıt, ayna, dizi işlemleri ("4 köşeye yerleştir").
+7. Hizala/dağıt ("4 köşeye yerleştir"); ayna ve dizi (`duplicate.count`) v0.4'te var.
 8. Geri-al geçmişini kalıcı tutma; birden çok proje listesi.
 9. three.js için kod bölme.

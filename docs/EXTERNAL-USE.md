@@ -74,12 +74,19 @@
    *Doğrulandı (2026-11-01):* `tests/cli.test.ts`; Git Bash + PowerShell'de başka klasörden `p3d`; ayrı klasörde
    `npm link p3d` sonrası `p3d/src/*.ts` P3D'nin tsx'iyle yüklendi, bağımlılıklar (three, manifold-3d, meshoptimizer)
    P3D'den çözüldü. Açık: tüketici betikleri tsx'i nereden alacak (tüketicide kurulu mu, `p3d run <betik>` mi) → 3. adım.
-2. [ ] **Eski sahne tuzağı:** sahneye revizyon sayacı + `at`; bağlı sekme yoksa `scene` eski sahneyi uyarıyla değil hatayla döner.
-3. [ ] **Tarayıcısız çekirdek:** `src/api.ts` + package.json `exports` (THREE'yi de yeniden dışa aktarır); `apply` /
+2. [x] **Eski sahne tuzağı:** sahneye revizyon sayacı + `at`; bağlı sekme yoksa `scene` eski sahneyi uyarıyla değil hatayla döner.
+   *Yapıldı (2026-11-02, 4. adımla birlikte):* sekme kimliği, sekme başına sahne, PUT `seq`, `rev`, 409 + açılacak adres.
+3. [x] **Tarayıcısız çekirdek:** `src/api.ts` + package.json `exports` (THREE'yi de yeniden dışa aktarır); `apply` /
    `check` / `measure` / `export` / `save` / `open` `--file`; referans ağların yolla anılması; `snapshot --file`
    (makinedeki Chrome'u görünmez açar); VibroBal'ın `p3d` paketine geçişi.
-4. [ ] **Çalışma alanları:** `/w/<ad>`, ws'ye göre köprü, `--ws`, `p3d.json` keşfi, IndexedDB otomatik kayıt.
-5. [ ] **Rehber + skill:** `docs/guide/*.md`, `p3d guide`, ince kullanıcı skill'i, belirsizlik protokolü; test: her Op
-   tipi ve CLI komutu rehberde geçer.
-6. [ ] **Oyun:** GLB, düz normal, düşük çözünürlük sınırı, `check --profile game`, gruplama/pivot, ayna/dizi; Unreal'de
-   kalınırsa katı iskelet dışa aktarımı.
+   *Yapıldı (2026-11-02):* tüketici betikleri `p3d run <betik>` ile çalışır; `p3d` adı bir Node çözümleme kancasıyla
+   `src/api.ts`'ye gider (tüketicide npm link/tsx gerekmez). VibroBal `build.mts` geçirildi; çıktılar bayt bayt aynı.
+4. [x] **Çalışma alanları:** `/w/<ad>`, ws'ye göre köprü, `--ws`, `p3d.json` keşfi, IndexedDB otomatik kayıt.
+   *Yapıldı (2026-11-02):* ayrıca `status`/`view`/`open`/`save` (veri kaybı korumalı), bozuk kayıt yedeği, ikinci sekme
+   salt okunur. Görünmez Chrome'da gerçek `/w/` sekmesiyle denendi.
+5. [x] **Rehber + skill:** `docs/guide/*.md`, `p3d guide`, ince kullanıcı skill'i, belirsizlik protokolü; test: her Op
+   tipi ve CLI komutu rehberde geçer. *Yapıldı (2026-11-02):* `p3d skill install` → `~/.claude/skills/p3d`; AGENTS.md
+   modelleme/doğrulama kurallarını rehbere devretti, CLAUDE.md `modeling` ve `verify` sayfalarını içe aktarır.
+6. [x] **Oyun:** GLB, düz normal, düşük çözünürlük sınırı, `check --profile game`, gruplama/pivot, ayna/dizi; Unreal'de
+   kalınırsa katı iskelet dışa aktarımı. *Yapıldı (2026-11-02):* `p3d export x.glb [--skeleton]`; Unreal'e gerçek içe
+   aktarım henüz denenmedi (STATUS.md → yol haritası 0).
