@@ -1,7 +1,7 @@
 // Oyun motoru için: GLB yazıcı, gruplar + pivot, ayna, çoklu kopya, düşük poligon ve `check` oyun profili.
 import * as THREE from 'three';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { normalizeLlmOp, type Op, type PartGeom } from '../shared/ops';
+import { normalizeLlmOp, type LoftGeom, type Op, type PartGeom } from '../shared/ops';
 import { getAsset, makeAsset } from '../src/assets';
 import { checkProject } from '../src/check';
 import { initCsg } from '../src/csg';
@@ -324,6 +324,78 @@ describe('GLB dışa aktarımı', () => {
       expect((m as THREE.SkinnedMesh).skeleton.bones.map((b) => b.name)).toEqual(['root', 'teker']);
     }
   });
+
+  it('parts süzgecinde grup adı: görünür katı üyeler (proje sırasıyla) grup düğümüyle; delik üyesi keser ama çıkmaz', () => {
+    const r90 = { rotation: { x: 90, y: 0, z: 0 } };
+    const p = project([
+      box('gövde', 40, 20, 10, { x: 0, y: 0, z: 15 }),
+      cyl('lastik', 16, 6, { x: 15, y: 13, z: 8 }, r90),
+      cyl('göbek', 6, 2, { x: 15, y: 17, z: 8 }, r90),
+      cyl('mil deliği', 3, 10, { x: 15, y: 13, z: 8 }, { ...r90, role: 'hole', cuts: ['lastik'] }),
+      box('jant ref', 2, 2, 2, { x: 15, y: 20, z: 8 }, { role: 'reference' }),
+      { op: 'group', name: 'teker', parts: ['göbek', 'lastik', 'mil deliği', 'jant ref'], pivot: { x: 15, y: 13, z: 8 } },
+    ]);
+    const names = (g: ReturnType<typeof parseGlb>) => g.json.nodes.map((n: { name: string }) => n.name);
+    const g = parseGlb(buildGlb(p, { parts: ['teker'] }));
+    expect(names(g)).toEqual(['teker', 'lastik', 'göbek']);
+    expect(g.json.scenes[0].nodes).toEqual([0]);
+    expect(g.json.nodes[0].children).toEqual([1, 2]);
+    expect(prim(g, 0).idx.length / 3).toBe(worldMesh(p, byName(p, 'lastik')).tris.length / 3); // mil deliği uygulanmış
+    expect(names(parseGlb(buildGlb(p, { parts: ['TEKER', 'gövde'] })))).toEqual(['gövde', 'teker', 'lastik', 'göbek']);
+    const rig = parseGlb(buildGlb(p, { parts: ['teker'], skeleton: true }));
+    expect(rig.json.skins[0].joints.map((j: number) => rig.json.nodes[j].name)).toEqual(['root', 'teker']);
+    expect(() => buildGlb(p, { parts: ['jant ref'] })).toThrow(/katı parça değil/);
+  });
+
+  it('delikle tamamen yenen parça atlanır (boş erişimci yok); grup düğümü/eklemi de; hiç kalmazsa hata', () => {
+    const p = project([
+      box('gövde', 20, 20, 10, { x: 0, y: 0, z: 5 }),
+      box('yenen', 6, 6, 6, { x: 30, y: 0, z: 3 }),
+      box('oyuk', 10, 10, 10, { x: 30, y: 0, z: 3 }, { role: 'hole', cuts: ['yenen'] }),
+      { op: 'group', name: 'kapak', parts: ['yenen'], pivot: null },
+    ]);
+    expect(worldMesh(p, byName(p, 'yenen')).tris).toHaveLength(0);
+    const valid = (g: ReturnType<typeof parseGlb>) => {
+      for (const a of g.json.accessors) {
+        expect(a.count).toBeGreaterThan(0);
+        for (const v of [...(a.min ?? []), ...(a.max ?? [])]) expect(Number.isFinite(v)).toBe(true);
+      }
+      for (const v of g.json.bufferViews) expect(v.byteLength).toBeGreaterThan(0);
+    };
+    const plain = parseGlb(buildGlb(p));
+    valid(plain);
+    expect(plain.json.nodes.map((n: { name: string }) => n.name)).toEqual(['gövde']);
+    expect(plain.json.meshes).toHaveLength(1);
+    const rig = parseGlb(buildGlb(p, { skeleton: true }));
+    valid(rig);
+    expect(rig.json.skins[0].joints.map((j: number) => rig.json.nodes[j].name)).toEqual(['root']);
+    expect(prim(rig, 0).idx.length / 3).toBe(12); // yalnızca gövde
+    for (const skeleton of [false, true]) {
+      expect(() => buildGlb(p, { parts: ['kapak'], skeleton })).toThrow(/görünür katı parça yok/);
+      expect(() => buildGlb(p, { parts: ['yenen'], skeleton })).toThrow(/görünür katı parça yok/);
+    }
+  });
+
+  it('iskelet adları Unreal için güvenli: ASCII, geçersiz karakter _, harf duyarsız çakışmada sonek; özgün ad extras.name', () => {
+    const groups = ['Sağ Teker', 'sag-teker', 'ön/arka (1)', 'Root', '???', 'Çığ_Öşü'];
+    const ops: Op[] = groups.flatMap((name, i): Op[] => [box(`p${i}`, 2, 2, 2, { x: i * 5, y: 0, z: 1 }), { op: 'group', name, parts: [`p${i}`], pivot: null }]);
+    const p = project([...ops, box('gövde', 4, 4, 4, { x: -10, y: 0, z: 2 })]);
+    p.name = 'Araç #1';
+    const { json } = parseGlb(buildGlb(p, { skeleton: true }));
+    const joints = json.skins[0].joints.map((j: number) => json.nodes[j]);
+    expect(joints.map((n: { name: string }) => n.name)).toEqual(['root_2', 'Sag_Teker', 'sag_teker_2', 'on_arka_1', 'Root', 'grup', 'Cig_Osu']);
+    expect(joints.slice(1).map((n: { extras: { name: string } }) => n.extras.name)).toEqual(groups);
+    expect(joints[0].extras).toBeUndefined();
+    const meshNode = json.nodes.find((n: { skin?: number }) => n.skin === 0);
+    expect(meshNode.name).toBe('Arac_1');
+    expect(meshNode.extras).toEqual({ name: 'Araç #1' });
+    expect(json.meshes[0].name).toBe('Arac_1');
+    for (const n of json.nodes) expect(n.name).toMatch(/^[A-Za-z0-9_]+$/);
+    // İskeletsiz modda adlar olduğu gibi, extras yok
+    const plain = parseGlb(buildGlb(p)).json;
+    expect(plain.nodes.filter((n: { children?: number[] }) => n.children).map((n: { name: string }) => n.name)).toEqual(groups);
+    expect(plain.nodes.every((n: { extras?: unknown }) => n.extras === undefined)).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -454,6 +526,91 @@ describe('gruplar ve pivot', () => {
     expect(r3.errors.join(' ')).toMatch(/üye parçalar/);
   });
 
+  it('parça ve grup adları çakışmaz: açık ad hata, otomatik ad benzersizleşir', () => {
+    const p = project(wheel());
+    const count = () => p.parts.length;
+    const errs = (ops: Op[]) => applyOps(p, ops, null).errors.join(' ');
+    const n0 = count();
+    // Açık ad bir grubun adı (büyük/küçük harf ve aksan duyarsız): hata, parça eklenmez/değişmez
+    expect(errs([box('Teker', 5, 5, 5, { x: 50, y: 0, z: 2.5 })])).toMatch(/'teker' bir grubun adı/);
+    expect(errs([{ op: 'update', part: 'gövde', name: 'teker' }])).toMatch(/bir grubun adı/);
+    expect(errs([{ op: 'update', part: 'lastik', name: 'teker' }])).toMatch(/bir grubun adı/); // kendi grubunun adı da olmaz
+    expect(errs([{ op: 'duplicate', part: 'gövde', new_name: 'teker' }])).toMatch(/bir grubun adı/);
+    expect(errs([{ op: 'mirror', part: 'gövde', plane: 'y', name: 'TEKER' }])).toMatch(/bir grubun adı/);
+    const asset = makeAsset('teker', new Float32Array([0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0, 10]), new Uint32Array([0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3]));
+    expect(errs([{ op: 'import_mesh', asset, name: 'teker' }])).toMatch(/bir grubun adı/);
+    expect(count()).toBe(n0);
+    expect(byName(p, 'gövde').name).toBe('gövde');
+    expect(byName(p, 'lastik').group).toBe('teker');
+    // Çoklu kopyada üretilen adlardan biri grup adıysa hiç kopya eklenmez
+    applyOps(p, [{ op: 'group', name: 'dilim 2', parts: ['cıvata'], pivot: null }], null);
+    expect(errs([{ op: 'duplicate', part: 'gövde', new_name: 'dilim', offset: { x: 0, y: 30, z: 0 }, count: 3 }])).toMatch(/'dilim 2' bir grubun adı/);
+    expect(count()).toBe(n0);
+    // Otomatik adlar grup adını atlar: ağ adı, varsayılan ad, kopya ve ayna adı
+    expect(errs([{ op: 'import_mesh', asset, name: '' }])).toBe('');
+    expect(p.parts[p.parts.length - 1].name).toBe('teker 2');
+    applyOps(p, [{ op: 'group', name: 'Kutu 1', parts: ['teker 2'], pivot: null }], null);
+    expect(errs([{ op: 'create', shape: 'box' }])).toBe('');
+    expect(p.parts[p.parts.length - 1].name).toBe('Kutu 2');
+    applyOps(p, [{ op: 'group', name: 'gövde kopya', parts: ['Kutu 2'], pivot: null }, { op: 'group', name: 'gövde ayna', parts: ['teker 2'], pivot: null }], null);
+    expect(p.groups!.map((g) => g.name)).toEqual(['teker', 'dilim 2', 'gövde kopya', 'gövde ayna']);
+    expect(errs([{ op: 'duplicate', part: 'gövde' }, { op: 'mirror', part: 'gövde', plane: 'y', at: 30 }])).toBe('');
+    expect(p.parts.slice(-2).map((x) => x.name)).toEqual(['gövde kopya 2', 'gövde ayna 2']);
+    // Grup kopyası/aynası: üye adı yeni grubun adıyla çakışmaz
+    expect(errs([{ op: 'duplicate', part: 'teker', new_name: 'lastik kopya' }])).toBe('');
+    expect(p.groups!.some((g) => g.name === 'lastik kopya')).toBe(true);
+    expect(p.parts.filter((x) => x.group === 'lastik kopya').map((x) => x.name)).toEqual(['lastik kopya 2']);
+    // group işlemi mevcut grubu güncellemeye devam eder (üyeler, pivot)
+    expect(errs([{ op: 'group', name: 'teker', parts: ['lastik', 'gövde'], pivot: { x: 1, y: 2, z: 3 } }])).toBe('');
+    expect(p.parts.filter((x) => x.group === 'teker').map((x) => x.name)).toEqual(['gövde', 'lastik']);
+    expect(p.groups!.find((g) => g.name === 'teker')!.pivot).toEqual({ x: 1, y: 2, z: 3 });
+    expect(errs([{ op: 'set_pivot', group: 'teker', pivot: { x: 0, y: 0, z: 0 } }])).toBe('');
+    // Tüm adlar (parça + grup) katlanmış biçimde benzersiz
+    const all = [...p.parts.map((x) => x.name), ...p.groups!.map((g) => g.name)].map((s) => s.toLocaleLowerCase('tr'));
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it('parseProject grup onarımı: bilinmeyen gruba üyelik, yinelenen grup adı, bozuk pivot, üyesiz/adsız grup', () => {
+    const part = (id: string, group: unknown) => ({ id, name: id, shape: 'box', group });
+    const raw = {
+      format: 'p3d',
+      version: 1,
+      name: 'onarım',
+      parts: [part('a', 'teker'), part('b', 'yok'), part('c', 'Teker'), part('d', 'kol'), part('e', 42)],
+      groups: [
+        { name: ' teker ', pivot: { x: 'a', y: null, z: 1e9 } }, // ad kırpılır; sayı olmayan → 0, sınır ±1e5
+        { name: 'Teker', pivot: { x: 1, y: 2, z: 3 } }, // katlanmış adı yineleniyor → atlanır (üyesi 'c' gruptan düşer)
+        { name: 'kol', pivot: 'bozuk' }, // pivot nesne değil → orijin
+        { name: 'boş', pivot: { x: 1, y: 1, z: 1 } }, // üyesiz → atılır
+        { name: '', pivot: {} },
+        null,
+        'x',
+        { pivot: { x: 1, y: 1, z: 1 } },
+      ],
+    };
+    const p = parseProject(raw);
+    expect(p.groups).toEqual([
+      { name: 'teker', pivot: { x: 0, y: 0, z: 1e5 } },
+      { name: 'kol', pivot: { x: 0, y: 0, z: 0 } },
+    ]);
+    expect(p.parts.map((x) => [x.name, x.group])).toEqual([
+      ['a', 'teker'],
+      ['b', undefined],
+      ['c', undefined],
+      ['d', 'kol'],
+      ['e', undefined],
+    ]);
+    expect(p.parts.filter((x) => 'group' in x).map((x) => x.name)).toEqual(['a', 'd']);
+    expect(parseProject(JSON.parse(projectToJson(p)))).toEqual(p); // onarılmış dosya kararlı
+    // Onarılmış gruplar işlem görür
+    expect(applyOps(p, [{ op: 'move', part: 'teker', dx: 1, dy: 0, dz: 0 }], null).errors).toEqual([]);
+    expect(p.groups![0].pivot).toEqual({ x: 1, y: 0, z: 1e5 });
+    // groups dizi değilse yok sayılır; üyelikler düşer
+    const q = parseProject({ ...raw, groups: { teker: { pivot: { x: 0, y: 0, z: 0 } } } });
+    expect('groups' in q).toBe(false);
+    expect(q.parts.every((x) => !('group' in x))).toBe(true);
+  });
+
   it('update ile grup rengi ve görünürlüğü; diğer alanlar reddedilir', () => {
     const p = project(wheel());
     applyOps(p, [{ op: 'update', part: 'teker', color: '#112233', visible: false }], null);
@@ -506,6 +663,8 @@ describe('duplicate count', () => {
 describe('ayna', () => {
   const L: [number, number][] = [[0, 0], [30, 0], [30, 6], [6, 6], [6, 20], [0, 20]];
   const sq = (h: number, dx = 0): [number, number][] => [[-h + dx, -h], [h + dx, -h], [h + dx, h], [-h + dx, h]];
+  const hex = (r: number, dx: number): [number, number][] =>
+    Array.from({ length: 6 }, (_, i) => [Number((dx + r * Math.cos((Math.PI * i) / 3 + 0.3)).toFixed(4)), Number((r * Math.sin((Math.PI * i) / 3 + 0.3)).toFixed(4))]);
   const geomOps: [string, Op][] = [
     ['box', box('box', 10, 6, 4, { x: 0, y: 0, z: 0 })],
     ['cylinder', cyl('cylinder', 10, 6, { x: 0, y: 0, z: 0 })],
@@ -526,6 +685,25 @@ describe('ayna', () => {
         geom: { kind: 'loft', axis: 'y', sections: [{ at: 0, points: sq(5) }, { at: 8, points: sq(3, 2) }, { at: 12, points: [[3, 1]] }], smooth: true, sharp: [0, 1] } as PartGeom,
       },
     ],
+    // Farklı nokta sayılı kesitler (kare → altıgen; karede alttaki iki nokta ortaya eşit uzak): kopyada ortak sayıya örneklenir
+    [
+      'loft 4/6',
+      {
+        op: 'create',
+        shape: 'loft',
+        name: 'loft 4/6',
+        geom: { kind: 'loft', axis: 'z', sections: [{ at: 0, points: sq(5) }, { at: 10, points: hex(4, 1) }] } as PartGeom,
+      },
+    ],
+    [
+      'loft 4/6 yumuşak',
+      {
+        op: 'create',
+        shape: 'loft',
+        name: 'loft 4/6 yumuşak',
+        geom: { kind: 'loft', axis: 'x', sections: [{ at: 0, points: hex(4, 0) }, { at: 6, points: sq(5, 1) }, { at: 14, points: hex(3, 2) }], smooth: true } as PartGeom,
+      },
+    ],
     ['hull', { op: 'create', shape: 'hull', name: 'hull' }],
   ];
 
@@ -544,15 +722,35 @@ describe('ayna', () => {
   }
 
   /**
-   * exact: köşeler birebir yansımış, hacim eşit. loft: köşeler yansımış ama dörtgenlerin köşegeni ters (eğri yüzeyde
-   * hacim ~%0,1 oynar). hull: örtük yüzey ağı tam simetrik değil (kenar ~1 mm), aynı ağ döndürülür.
+   * Yüzey de yansımış: kopyanın her üçgeninin ağırlık merkezi, yansıtılınca özgün yüzeyin üstünde. Köşeler aynı olsa da
+   * bükülmüş dörtgen öbür köşegenden bölünürse merkez yüzeyden ayrılır (düzlemsel kapakta bölünüş farkı önemsizdir).
    */
-  function checkMirror(p: Project, orig: Part, copy: Part, plane: 'x' | 'y' | 'z', at: number, mode: 'exact' | 'loft' | 'hull') {
+  function onReflectedSurface(a: { pos: Float32Array; tris: number[] }, b: { pos: Float32Array; tris: number[] }, plane: 'x' | 'y' | 'z', at: number, tol: number) {
+    const k = { x: 0, y: 1, z: 2 }[plane];
+    const v = (m: typeof a, i: number) => new THREE.Vector3(m.pos[3 * i], m.pos[3 * i + 1], m.pos[3 * i + 2]);
+    const tris = Array.from({ length: a.tris.length / 3 }, (_, t) => new THREE.Triangle(v(a, a.tris[3 * t]), v(a, a.tris[3 * t + 1]), v(a, a.tris[3 * t + 2])));
+    const q = new THREE.Vector3();
+    let worst = 0;
+    for (let t = 0; t < b.tris.length; t += 3) {
+      const c = v(b, b.tris[t]).add(v(b, b.tris[t + 1])).add(v(b, b.tris[t + 2])).divideScalar(3);
+      c.setComponent(k, 2 * at - c.getComponent(k));
+      let best = Infinity;
+      for (const tri of tris) best = Math.min(best, tri.closestPointToPoint(c, q).distanceTo(c));
+      worst = Math.max(worst, best);
+    }
+    expect(worst, 'yüzey yansımış').toBeLessThan(tol);
+  }
+
+  /**
+   * exact: köşeler birebir yansımış, hacim eşit (loft dahil: aynalanmış loft yan dörtgenleri öbür köşegenden böler).
+   * hull: örtük yüzey ağı tam simetrik değil (kenar ~1 mm), aynı ağ döndürülür.
+   */
+  function checkMirror(p: Project, orig: Part, copy: Part, plane: 'x' | 'y' | 'z', at: number, mode: 'exact' | 'hull') {
     const a = worldMesh(p, orig);
     const b = worldMesh(p, copy);
     const cb = closed(b.pos, b.tris);
     expect(cb.bad, `${orig.shape}: kapalı`).toBe(0);
-    expect(cb.vol / closed(a.pos, a.tris).vol, `${orig.shape}: hacim`).toBeCloseTo(1, mode === 'loft' ? 2 : 5);
+    expect(cb.vol / closed(a.pos, a.tris).vol, `${orig.shape}: hacim`).toBeCloseTo(1, 5);
     const ba = partBox(orig, p.settings.resolution);
     const bb = partBox(copy, p.settings.resolution);
     const tol = mode === 'hull' ? 0.6 : 2e-3;
@@ -567,12 +765,13 @@ describe('ayna', () => {
       expect(b.pos.length).toBe(a.pos.length);
       sameUnderReflection(a.pos, b.pos, plane, at, 2e-3);
     }
+    if (orig.shape === 'loft') onReflectedSurface(a, b, plane, at, 2e-3);
     // det(R') = +1: geçerli döndürme
     expect(new THREE.Matrix4().extractRotation(partMatrix(copy)).determinant()).toBeCloseTo(1, 6);
   }
 
   it.each(geomOps)('%s: aynalanmış kopya — hacim aynı, kutu ve köşeler yansımış, ağ kapalı (döndürülmüş ve düz, üç düzlem)', (label, op) => {
-    const mode = label === 'hull' ? 'hull' : label === 'loft' ? 'loft' : 'exact';
+    const mode = label === 'hull' ? 'hull' : 'exact';
     for (const rotation of [{ x: 20, y: 35, z: 50 }, { x: 0, y: 0, z: 0 }]) {
       const p = project([{ ...(op as Extract<Op, { op: 'create' }>), position: { x: 3, y: -4, z: 12 }, rotation }]);
       const orig = byName(p, label);
@@ -608,6 +807,54 @@ describe('ayna', () => {
     checkMirror(p, byName(p, 'ağ'), copy, 'y', 3, 'exact');
     applyOps(p, [{ op: 'mirror', part: 'ağ ayna', plane: 'y', at: 0, name: 'geri' }], null);
     expect(byName(p, 'geri').geom).toEqual({ kind: 'mesh', asset: asset.id });
+  });
+
+  it.each([7, 9, 13])('ilkel şekiller tek segment sayısında (%i) birebir aynalanır', (seg) => {
+    const prims = ['cylinder', 'tube', 'cone', 'sphere', 'torus', 'prism'];
+    for (const [label, op] of geomOps.filter(([l]) => prims.includes(l))) {
+      for (const rotation of [{ x: 20, y: 35, z: 50 }, { x: 0, y: 0, z: 0 }]) {
+        const create = { ...(op as Extract<Op, { op: 'create' }>), position: { x: 3, y: -4, z: 12 }, rotation };
+        if (label === 'prism') create.params = [{ name: 'sides', value: seg }];
+        const p = project([create], seg);
+        for (const [plane, at] of [['x', 7], ['y', -2], ['z', 0]] as const) {
+          const r = applyOps(p, [{ op: 'mirror', part: label, plane, at, name: `${label} ${plane}` }], null);
+          expect(r.errors).toEqual([]);
+          checkMirror(p, byName(p, label), byName(p, `${label} ${plane}`), plane, at, 'exact');
+        }
+      }
+    }
+  });
+
+  it('loft aynası: farklı nokta sayısı ortak sayıya örneklenir, mirrored işareti; aynanın aynası özgün ağ; dosyada korunur', () => {
+    const p = project([
+      { op: 'create', shape: 'loft', name: 'geçiş', geom: { kind: 'loft', axis: 'z', sections: [{ at: 0, points: sq(5) }, { at: 10, points: hex(4, 1) }] }, position: { x: 0, y: 20, z: 0 } },
+      { ...(geomOps.find(([l]) => l === 'loft')![1] as Extract<Op, { op: 'create' }>), position: { x: 30, y: 20, z: 6 } },
+    ]);
+    const r = applyOps(
+      p,
+      [
+        { op: 'mirror', part: 'geçiş', plane: 'y', at: 0, name: 'geçiş sağ' },
+        { op: 'mirror', part: 'geçiş sağ', plane: 'y', at: 0, name: 'geçiş geri' },
+        { op: 'mirror', part: 'loft', plane: 'y', at: 0, name: 'loft sağ' },
+        { op: 'mirror', part: 'loft sağ', plane: 'y', at: 0, name: 'loft geri' },
+      ],
+      null,
+    );
+    expect(r.errors).toEqual([]);
+    const geom = (name: string) => byName(p, name).geom as LoftGeom;
+    expect(geom('geçiş').mirrored).toBeUndefined();
+    expect(geom('geçiş sağ').mirrored).toBe(true);
+    expect(geom('geçiş sağ').sections.map((s) => s.points.length)).toEqual([6, 6]);
+    expect(geom('geçiş geri').mirrored).toBeUndefined();
+    // Eşit nokta sayısında aynanın aynası özgün geometrinin kendisi (sharp indisleri dahil)
+    expect(geom('loft sağ').sharp).toEqual([0, 3]);
+    expect(geom('loft geri')).toEqual(geom('loft'));
+    // Farklı sayıda: kesitler örneklenmiş kalır ama ağ özgünle aynı (köşe köşe)
+    const a = worldMesh(p, byName(p, 'geçiş'));
+    const b = worldMesh(p, byName(p, 'geçiş geri'));
+    expect(b.tris).toEqual(a.tris);
+    expect(Math.max(...a.pos.map((v, i) => Math.abs(v - b.pos[i])))).toBeLessThan(1e-5);
+    expect(parseProject(JSON.parse(projectToJson(p)))).toEqual(p);
   });
 
   it('grup aynası: yeni grup, pivot yansır, üye adları önekle; tek parçanın aynası gruba girmez', () => {
@@ -672,5 +919,16 @@ describe('check: oyun profili', () => {
     expect(issues.map((i) => i.message).join(' ')).toMatch(/'bozuk': 1 bozuk/);
     const q = project([box('zemin', 20, 20, 2, { x: 0, y: 0, z: 1 }), box('levha', 10, 10, 2, { x: 0, y: 0, z: 1 })]);
     expect(checkProject(q, { profile: 'game' }).some((i) => i.level === 'hata' && /z-fighting/.test(i.message))).toBe(true);
+  });
+
+  it('z-fighting: 45° yüzlerde izdüşüm kova normalinden — uzak parçalar çakışık sayılmaz, gerçek çakışma bulunur', () => {
+    // 12 segmentte silindir ve borunun 45° (|nx| = |ny|) yan yüzleri aynı kovaya düşer; aralarında 35 mm boşluk var.
+    const tube: Op = { op: 'create', shape: 'tube', name: 'boru', params: [{ name: 'height', value: 20 }], position: { x: 0, y: -25, z: 10 } };
+    const p = project([cyl('silindir', 20, 20, { x: -25, y: 0, z: 10 }), tube], 12);
+    expect(checkProject(p).filter((i) => /z-fighting/.test(i.message))).toEqual([]);
+    expect(checkProject(p, { profile: 'game' })).toEqual([]);
+    // Aynı iki parça üst üste (borunun dış yüzü silindirin yan yüzüyle çakışık): hata sürer
+    const q = project([cyl('silindir', 20, 20, { x: 0, y: 0, z: 10 }), { ...tube, position: { x: 0, y: 0, z: 10 } } as Op], 12);
+    expect(checkProject(q).some((i) => i.level === 'hata' && /z-fighting/.test(i.message))).toBe(true);
   });
 });

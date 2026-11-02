@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { findGroup, findPartExact, partMatrix } from './engine';
 import { MESH_CREASE } from './geom';
 import { exportGeometry, exportableParts } from './model';
+import { toAscii } from './text';
 import type { GroupDef, Part, Project } from './types';
 
 export interface GlbOptions {
@@ -20,6 +21,8 @@ export interface GlbOptions {
   /**
    * true: tüm parçalar tek bir skinned mesh olur (Unreal Chaos Vehicles). Kökte `root` eklemi; her grup için pivotunda,
    * root'un çocuğu olan bir eklem. Grup üyelerinin köşeleri o eklemin, gruplanmamışlar root'un (ağırlık 1).
+   * Eklem ve düğüm adları Unreal için güvenlidir (bkz. unrealName; "Sağ Teker" → "Sag_Teker", çakışmada `_2`);
+   * özgün ad düğümün `extras.name` alanındadır. İskeletsiz modda adlar olduğu gibi kalır.
    */
   skeleton?: boolean;
 }
@@ -282,6 +285,29 @@ function glb(json: object, bin: Uint8Array): Uint8Array {
 }
 
 // ---------------------------------------------------------------------------
+// İskelet adları (Unreal)
+
+/**
+ * Unreal için güvenli ad: Türkçe harfler ASCII'ye çevrilir, aksanlar atılır; harf, rakam ve `_` dışındaki karakter
+ * dizileri `_` olur (baştaki/sondakiler atılır). Hiçbir şey kalmazsa `fallback`.
+ */
+export function unrealName(s: string, fallback: string): string {
+  return toAscii(s).replace(/^[^A-Za-z0-9_]+|[^A-Za-z0-9_]+$/g, '').replace(/[^A-Za-z0-9_]+/g, '_') || fallback;
+}
+
+/** Benzersiz Unreal adı üretici: FName büyük/küçük harf duyarsız olduğundan karşılaştırma da öyle; çakışmada `_2`, `_3` … */
+function nameAllocator(): (raw: string, fallback: string) => string {
+  const used = new Set<string>();
+  return (raw, fallback) => {
+    const base = unrealName(raw, fallback);
+    let name = base;
+    for (let n = 2; used.has(name.toLowerCase()); n++) name = `${base}_${n}`;
+    used.add(name.toLowerCase());
+    return name;
+  };
+}
+
+// ---------------------------------------------------------------------------
 
 /** Dışa aktarılacak parçalar: görünür katılar; `refs` verilirse yalnızca o parçalar / grupların üyeleri (proje sırasıyla). */
 function selectParts(project: Project, refs?: string[]): Part[] {
@@ -307,11 +333,15 @@ function selectParts(project: Project, refs?: string[]): Part[] {
  * Projeyi GLB (glTF 2.0 ikili) olarak yazar. Parça başına düğüm + mesh (düğüm çevirisi parçanın merkezi, döndürme
  * köşelere gömülü); grup bir düğümdür (çevirisi pivot, üyeleri çocuk düğüm). Renk → lineer `baseColorFactor`
  * (metallic 0, roughness 0,9); aynı renkler tek malzeme. `skeleton` için bkz. GlbOptions.
+ * Delikler tarafından tamamen yenen (üçgensiz) parçalar atlanır: glTF boş erişimciye izin vermez.
  */
 export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
-  const parts = selectParts(project, opts.parts);
-  if (!parts.length) throw new Error('Dışa aktarılacak görünür katı parça yok.');
   const s = opts.units === 'mm' ? 1 : 0.001;
+  const items = selectParts(project, opts.parts)
+    .map((part) => ({ part, mesh: partTriangles(project, part, s) }))
+    .filter((it) => it.mesh.tris.length > 0);
+  if (!items.length) throw new Error('Dışa aktarılacak görünür katı parça yok.');
+  const parts = items.map((it) => it.part);
   const smooth = opts.normals === 'smooth';
   const shade = (m: TriMesh, origin: V3) => (smooth ? smoothShaded(m, origin, MESH_CREASE) : flatShaded(m, origin));
   const groupOf = (p: Part): GroupDef | undefined => (p.group ? project.groups?.find((g) => g.name === p.group) : undefined);
@@ -343,9 +373,12 @@ export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
 
   if (opts.skeleton) {
     // Eklemler: root (orijinde) + dışa aktarılan üyesi olan her grup (pivotunda, root'un çocuğu).
+    // Düğüm adları Unreal için güvenli ve benzersiz (grup adları önce: tekerlek kemikleri adlarını korusun);
+    // özgün ad düğümün extras.name alanında.
     const groups = (project.groups ?? []).filter((g) => parts.some((p) => p.group === g.name));
-    const rootName = groups.some((g) => g.name.toLowerCase() === 'root') ? 'root_' : 'root';
-    nodes.push({ name: rootName });
+    const nameOf = nameAllocator();
+    const jointNames = groups.map((g) => nameOf(g.name, 'grup'));
+    nodes.push({ name: nameOf('root', 'root') });
     const jointOf = new Map<string, number>(); // grup adı → skin.joints indisi
     const children: number[] = [];
     const ibm = new Float32Array(16 * (groups.length + 1));
@@ -353,7 +386,7 @@ export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
     groups.forEach((g, i) => {
       const t = toGl(g.pivot, s);
       children.push(nodes.length);
-      nodes.push({ name: g.name, translation: t });
+      nodes.push({ name: jointNames[i], translation: t, extras: { name: g.name } });
       jointOf.set(g.name, i + 1);
       // Bağlama pozunda eklemin dünya dönüşümü T(pivot); tersi T(−pivot) (sütun öncelikli).
       ibm.set([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -t[0] + 0, -t[1] + 0, -t[2] + 0, 1], 16 * (i + 1));
@@ -363,8 +396,8 @@ export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
 
     // Renk başına tek primitif; köşeler dünya (glTF) koordinatlarında, ağ düğümü kökte ve dönüşümsüz.
     const byColor = new Map<string, { sh: Shaded; joint: number[] }>();
-    for (const p of parts) {
-      const sh = shade(partTriangles(project, p, s), [0, 0, 0]);
+    for (const { part: p, mesh } of items) {
+      const sh = shade(mesh, [0, 0, 0]);
       const key = p.color.toLowerCase();
       let acc = byColor.get(key);
       if (!acc) byColor.set(key, (acc = { sh: { pos: [], nor: [], idx: [] }, joint: [] }));
@@ -376,13 +409,14 @@ export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
       for (let i = 0; i < sh.pos.length / 3; i++) acc.joint.push(j);
     }
     const primitives = [...byColor].map(([color, acc]) => bin.primitive(acc.sh, material(color), acc.joint, jointCount));
-    meshes.push({ name: project.name, primitives });
+    const meshName = nameOf(project.name, 'model');
+    meshes.push({ name: meshName, primitives });
     const meshNode = nodes.length;
-    nodes.push({ name: project.name, mesh: 0, skin: 0 });
+    nodes.push({ name: meshName, mesh: 0, skin: 0, extras: { name: project.name } });
     roots.push(0, meshNode);
     json.skins = [
       {
-        name: `${project.name} iskelet`,
+        name: `${meshName}_iskelet`,
         joints: [0, ...children],
         skeleton: 0,
         inverseBindMatrices: bin.accessor(ibm, 'MAT4'),
@@ -390,8 +424,7 @@ export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
     ];
   } else {
     const groupNode = new Map<string, number>();
-    for (const p of parts) {
-      const m = partTriangles(project, p, s);
+    for (const { part: p, mesh: m } of items) {
       const mesh = meshes.length;
       meshes.push({ name: p.name, primitives: [bin.primitive(shade(m, m.center), material(p.color))] });
       const g = groupOf(p);

@@ -46,6 +46,13 @@ function trianglesOverlap(a: V2[], b: V2[]): boolean {
   return true;
 }
 
+/** İzdüşümde atılacak eksen (0 = x, 1 = y, 2 = z): mutlak değeri en büyük bileşen; eşitlikte z, sonra y. */
+function dropAxis(r: number[]): 0 | 1 | 2 {
+  const [x, y, z] = r.map(Math.abs);
+  if (z >= x && z >= y) return 2;
+  return y >= x ? 1 : 0;
+}
+
 interface PlaneTri {
   part: string;
   pts: V2[];
@@ -70,9 +77,12 @@ function coplanarOverlaps(project: Project, solids: Part[], meshOf: (p: Part) =>
       if (area < 1e-3) continue;
       n.normalize();
       const d = n.dot(a);
-      const key = `${Math.round(n.x * 200)},${Math.round(n.y * 200)},${Math.round(n.z * 200)}|${Math.round(d * 50)}`;
-      // Düzleme izdüşüm: normalin en büyük bileşeni atılır.
-      const drop = Math.abs(n.x) > Math.abs(n.y) ? (Math.abs(n.x) > Math.abs(n.z) ? 0 : 2) : Math.abs(n.y) > Math.abs(n.z) ? 1 : 2;
+      const r = [Math.round(n.x * 200), Math.round(n.y * 200), Math.round(n.z * 200)];
+      const key = `${r[0]},${r[1]},${r[2]}|${Math.round(d * 50)}`;
+      // Düzleme izdüşüm: normalin en büyük bileşeni atılır. Kovadaki tüm üçgenler aynı düzleme izdüşsün diye kova
+      // anahtarındaki yuvarlanmış normalden seçilir (float normalden seçilirse |nx| ≈ |ny| iken aynı kovada iki ayrı
+      // izdüşüm olur, uzak yüzler çakışık görünür); eşitlikte sabit sıra z, y, x.
+      const drop = dropAxis(r);
       const to2 = (v: THREE.Vector3): V2 => (drop === 0 ? [v.y, v.z] : drop === 1 ? [v.x, v.z] : [v.x, v.y]);
       let list = buckets.get(key);
       if (!list) buckets.set(key, (list = []));

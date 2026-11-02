@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import { ROLES, isGeomShape, type Axis, type GroupDef, type Op, type ParamChange, type Pt2, type Role, type SceneSummary, type Side, type Vec3 } from '../shared/ops';
+import { ROLES, isGeomShape, type Axis, type GroupDef, type LoftGeom, type Op, type ParamChange, type Pt2, type Role, type SceneSummary, type Side, type Vec3 } from '../shared/ops';
 import { decodedAsset, getAsset, makeAsset, newAssetId, registerAsset } from './assets';
 import { resolveColor } from './colors';
-import { GeomError, defaultGeom, describeGeom, geometryVolume, sanitizeGeom } from './geom';
+import { GeomError, defaultGeom, describeGeom, geometryVolume, loftCommonSections, sanitizeGeom } from './geom';
 import { PALETTE, SHAPE_DEFS, buildGeometry, defaultParams, fmt, sanitizeParams, type DimWord, type Params } from './shapes';
 import { fold } from './text';
 import type { Part, Project } from './types';
@@ -109,11 +109,20 @@ export function findPart(project: Project, ref: string | undefined, ctx: RefCont
   return undefined;
 }
 
-function nameTaken(project: Project, name: string, exceptId?: string): boolean {
+function partNameTaken(project: Project, name: string, exceptId?: string): boolean {
   const f = fold(name).trim();
   return project.parts.some((p) => p.id !== exceptId && fold(p.name).trim() === f);
 }
 
+/**
+ * Ad bir parça ya da grup tarafından kullanılıyor mu. Parça ve grup adları tek ad alanıdır: işlemler adla çözülür ve
+ * aynı adda parça varken grup adla yönetilemez.
+ */
+function nameTaken(project: Project, name: string, exceptId?: string): boolean {
+  return partNameTaken(project, name, exceptId) || !!findGroup(project, name);
+}
+
+/** Benzersiz parça adı: başka bir parça ya da grup bu adı kullanıyorsa sonuna sayı eklenir. */
 export function uniqueName(project: Project, base: string, exceptId?: string): string {
   const clean = base.trim();
   if (!nameTaken(project, clean, exceptId)) return clean;
@@ -128,6 +137,16 @@ function defaultName(project: Project, label: string): string {
     const cand = `${label} ${n}`;
     if (!nameTaken(project, cand)) return cand;
   }
+}
+
+/**
+ * Kullanıcının açıkça verdiği parça adı: bir grubun adıysa hata (grup artık adla yönetilemezdi); başka bir parçanın
+ * adıysa eskisi gibi sonuna sayı eklenir.
+ */
+function explicitPartName(project: Project, name: string, exceptId?: string): string {
+  const g = findGroup(project, name);
+  if (g) throw new OpError(`'${g.name}' bir grubun adı; parçaya başka bir ad verin (parça ve grup adları aynı olamaz).`);
+  return uniqueName(project, name, exceptId);
 }
 
 export function newId(): string {
@@ -150,10 +169,9 @@ export function groupMembers(project: Project, name: string): Part[] {
 
 /** Ne bir grubun ne de bir parçanın kullandığı ad. */
 function uniqueGroupName(project: Project, base: string): string {
-  const taken = (n: string) => !!findGroup(project, n) || nameTaken(project, n);
   const clean = base.trim();
-  if (!taken(clean)) return clean;
-  for (let n = 2; ; n++) if (!taken(`${clean} ${n}`)) return `${clean} ${n}`;
+  if (!nameTaken(project, clean)) return clean;
+  for (let n = 2; ; n++) if (!nameTaken(project, `${clean} ${n}`)) return `${clean} ${n}`;
 }
 
 /** Üyesi kalmayan grupları ve var olmayan gruba işaret eden üyelikleri temizler; grup kalmazsa alan silinir. */
@@ -371,14 +389,30 @@ function mirrorGeom(part: Part, axis: Axis): void {
     g.profile = mirrorLoop(g.profile, k);
     if (g.holes) g.holes = g.holes.map((h) => mirrorLoop(h, k));
   } else if (g?.kind === 'loft') {
-    // Başlangıç noktası korunur (kesitler arası eşleşme ve "alttan başla" düzeni): [p0, p(n−1), …, p1].
-    g.sections = g.sections.map((s) => {
-      const m = s.points.map(([u, v]) => [neg(u), v] as Pt2);
-      return { ...s, points: m.length === 1 ? m : [m[0], ...m.slice(1).reverse()] };
-    });
-    if (g.sharp) {
-      const n = g.sections.find((s) => s.points.length > 1)!.points.length;
-      g.sharp = g.sharp.map((k) => (n - k) % n).sort((a, b) => a - b);
+    // Farklı nokta sayılı kesitler önce ağ üretiminin kullandığı ortak sayıya örneklenir (ağ değişmez): örneklemenin
+    // başlangıcı (alttaki nokta, eşitlikte ortaya en yakın) aynalanan kesitte simetrik seçilmeyebilir.
+    const src = loftCommonSections(g);
+    // Başlangıç noktası korunur (kesitler arası eşleşme ve "alttan başla" düzeni): [p0, p(n−1), …, p1]. Dolaşım yönü
+    // ters döndüğü için yan dörtgenler öbür köşegenden bölünmeli (mirrored); aynanın aynasında işaret kalkar.
+    const out: LoftGeom = {
+      ...src,
+      sections: src.sections.map((s) => {
+        const m = s.points.map(([u, v]) => [neg(u), v] as Pt2);
+        return { ...s, points: m.length === 1 ? m : [m[0], ...m.slice(1).reverse()] };
+      }),
+    };
+    if (src.sharp) {
+      const n = out.sections.find((s) => s.points.length > 1)!.points.length;
+      out.sharp = src.sharp.map((k) => (n - k) % n).sort((a, b) => a - b);
+    }
+    if (src.mirrored) delete out.mirrored;
+    else out.mirrored = true;
+    try {
+      part.geom = sanitizeGeom('loft', out);
+    } catch (e) {
+      if (!(e instanceof GeomError)) throw e;
+      const hint = src === g ? '' : ' (farklı nokta sayılı kesitler ortak sayıya örneklenirken bozuldu; kesitleri aynı nokta sayısıyla verin)';
+      throw new OpError(`'${part.name}' loft'u aynalanamadı${hint}: ${e.message}`);
     }
   } else if (g?.kind === 'mesh') {
     part.geom = { kind: 'mesh', asset: mirroredAsset(g.asset, axis) };
@@ -547,14 +581,15 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
       return c;
     });
     const name = uniqueGroupName(project, base);
+    // Grup önce kaydedilir: üye adları yeni grup adıyla da çakışmasın (uniqueName grup adlarını sayar).
+    const g: GroupDef = { name, pivot: roundVec(pivot) };
+    (project.groups ??= []).push(g);
     copies.forEach((c, i) => {
       c.name = uniqueName(project, memberName(members[i].name, src.name, name, explicit, suffix));
       c.group = name;
       if (c.cuts) c.cuts = c.cuts.map((id) => idMap.get(id) ?? id);
       project.parts.push(c);
     });
-    const g: GroupDef = { name, pivot: roundVec(pivot) };
-    (project.groups ??= []).push(g);
     touch(copies[copies.length - 1]);
     return g;
   };
@@ -569,7 +604,7 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           const role = roleValue(op.role);
           const part: Part = {
             id: newId(),
-            name: op.name?.trim() ? uniqueName(project, op.name) : defaultName(project, def.label),
+            name: op.name?.trim() ? explicitPartName(project, op.name) : defaultName(project, def.label),
             shape: op.shape,
             params: defaultParams(op.shape),
             position: { x: 0, y: 0, z: 0 },
@@ -612,7 +647,7 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           const role = roleValue(op.role);
           const part: Part = {
             id: newId(),
-            name: uniqueName(project, op.name?.trim() || asset.name || 'Mesh'),
+            name: op.name?.trim() ? explicitPartName(project, op.name) : uniqueName(project, asset.name || 'Mesh'),
             shape: 'mesh',
             params: defaultParams('mesh'),
             position: { x: 0, y: 0, z: 0 },
@@ -653,7 +688,7 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           const part = t.part;
           const notes: string[] = [];
           if (op.name?.trim()) {
-            const nn = uniqueName(project, op.name, part.id);
+            const nn = explicitPartName(project, op.name, part.id);
             if (nn !== part.name) notes.push(`ad '${part.name}' → '${nn}'`);
             part.name = nn;
           }
@@ -845,11 +880,13 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
             const b = partBox(part, seg);
             return { x: round(b.max.x - b.min.x + 5), y: 0, z: 0 };
           })();
+          // Verilen ad bir grubun adıysa hiç kopya eklenmeden hata (yarım işlem kalmasın).
+          if (given) for (let i = 1; i <= count; i++) explicitPartName(project, nameFor('', i));
           const copies: Part[] = [];
           for (let i = 1; i <= count; i++) {
             const copy: Part = structuredClone(part); // grup üyeliği korunur (kopya aynı grupta)
             copy.id = newId();
-            copy.name = uniqueName(project, nameFor(`${part.name} kopya`, i));
+            copy.name = given ? explicitPartName(project, nameFor('', i)) : uniqueName(project, `${part.name} kopya`);
             translate(copy, step.x * i, step.y * i, step.z * i);
             project.parts.push(copy);
             copies.push(copy);
@@ -861,7 +898,7 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
         case 'group': {
           const name = (op.name ?? '').trim();
           if (!name) throw new OpError('Grup adı (name) gerekli.');
-          if (nameTaken(project, name)) throw new OpError(`'${name}' adında bir parça var; gruba başka bir ad verin.`);
+          if (partNameTaken(project, name)) throw new OpError(`'${name}' adında bir parça var; gruba başka bir ad verin.`);
           let g = findGroup(project, name);
           const refs = (op.parts ?? []).filter((r) => typeof r === 'string' && r.trim());
           if (!g && !refs.length) throw new OpError(`Yeni grup '${name}' için üye parçalar (parts) gerekli.`);
@@ -933,11 +970,12 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
             break;
           }
           const part = t.part;
+          const copyName = given ? explicitPartName(project, given) : uniqueName(project, `${part.name} ayna`);
           const copy: Part = structuredClone(part);
           copy.id = newId();
           delete copy.group; // aynalanan kopya (ör. sağ taraf) özgün grubun parçası değildir
           mirrorPart(copy, plane, at);
-          copy.name = uniqueName(project, given || `${part.name} ayna`);
+          copy.name = copyName;
           project.parts.push(copy);
           touch(copy);
           res.messages.push(`'${part.name}' ${where} aynalandı → '${copy.name}'.`);

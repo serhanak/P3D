@@ -61,6 +61,11 @@ export interface LoftGeom {
   smooth?: boolean;
   /** Yumuşatmada keskin kalacak nokta indisleri (tüm kesitlerde nokta sayısı aynıyken). */
   sharp?: number[];
+  /**
+   * Ayna işleminin ürettiği loft: kesitler ters yönde dolaşıldığından yan dörtgenler öbür köşegenden bölünür ve ağ
+   * özgünün birebir aynası olur. Elle verilmez (Claude şemasında yok); aynanın aynasında kalkar.
+   */
+  mirrored?: boolean;
 }
 /** Endaze istasyonu: x'teki enine kesit. `breadth` omurgadan (ilk) küpeşteye (son) eşit aralıklı yarı genişlikler. */
 export interface HullStation {
