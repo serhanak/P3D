@@ -144,3 +144,20 @@ export function resolveWorkspace(o: { flag?: string; env?: string; cwd: string; 
   if (config) return pick(config.config.workspace, 'p3d.json');
   return pick(ROOT_WS, 'varsayılan');
 }
+
+/**
+ * Sahneyi değiştiren komut, kullanıcının kök alanına (kişisel sahnesi) yanlışlıkla mı gidiyor? P3D deposu dışından,
+ * --ws / P3D_WS / p3d.json olmadan çalışan komut köke gitmez; köke bilerek göndermek için `--ws ""` gerekir.
+ * Engel yoksa null, varsa Türkçe hata metni döner.
+ */
+export function rootGuardError(choice: WorkspaceChoice, callerDir: string, repoRoot: string, platform: string = process.platform): string | null {
+  if (choice.ws !== ROOT_WS || choice.source !== 'varsayılan') return null;
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const rel = p.relative(p.resolve(repoRoot), p.resolve(callerDir));
+  if (samePath(callerDir, repoRoot, platform) || (rel.split(/[\\/]/)[0] !== '..' && !p.isAbsolute(rel))) return null;
+  return [
+    `Bu komut kök çalışma alanına (kullanıcının kişisel sahnesi) gidecekti: ${callerDir} ve üst klasörlerinde p3d.json yok, --ws de verilmedi.`,
+    'Kendi alanınızı seçin: proje kökünde p3d.json → {"workspace": "<ad>"} ya da --ws <ad> (tarayıcıda http://localhost:5173/w/<ad>).',
+    'Köke bilerek göndermek için --ws "" verin.',
+  ].join('\n');
+}

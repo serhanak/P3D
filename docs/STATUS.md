@@ -8,7 +8,7 @@
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (213 test, ~25 sn) — hepsi temiz olmalı. Global komut için bir kez `npm link`.
+1. `npm install` · `npm run typecheck` · `npm test` (217 test, ~25 sn) — hepsi temiz olmalı. Global komut için bir kez `npm link`.
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
    yok → kullanıcıdan F5 isteyin). Kullanıcı kök sekmede değişiklik yapılmasına izin verdi ve ilerlemeyi orada izlemeyi seviyor;
@@ -65,7 +65,7 @@
   klasöre göre (`npm run p3d` altında `INIT_CWD`). Tam komut listesi: `docs/guide/cli.md`.
 - **Çalışma alanları (v0.4):** `/w/<ad>`; komut ve sahne alanın en son bağlanan sekmesinden (sekme kimliği, PUT `seq`,
   `rev`); bağlı sekme yoksa 409. Kök localStorage'da (anahtarlar aynı), alanlar IndexedDB'de; okunamayan/parça düşen kayıt
-  yedeğe alınır; aynı alan ikinci sekmede salt okunur. Alan seçimi `--ws` > `P3D_WS` > `p3d.json` > kök. `status`, `view`,
+  yedeğe alınır; aynı alan ikinci sekmede salt okunur. Alan seçimi `--ws` > `P3D_WS` > `p3d.json` > kök; P3D dışından alan seçilmeden sahneyi değiştiren komutlar köke gitmez (`--ws ""` gerekir). `status`, `view`,
   `open` (geri alınabilir, kaydedilmemiş işi korur), `save` (atomik; başka dosyaya bağlı/boş sekme/P3D olmayan dosya
   korumaları, içerik özetiyle "kaydedildi"). Sekmede `<alan> · <dosya> ●` rozeti.
 - **Tarayıcısız çekirdek (v0.4):** `src/api.ts` kararlı yüzey (`package.json` exports) + `src/files.ts`

@@ -147,5 +147,5 @@ describe('örnek projeler (examples/)', () => {
     const { verts, objects } = parseObj(buildObj(p.parts, p, null).obj);
     expect(objects).toHaveLength(p.parts.filter((x) => x.visible).length);
     for (const o of objects) expect(checkSolid(verts, o.faces).bad, o.name).toBe(0);
-  });
+  }, 30_000); // tekne (hull) üretimi yüklü makinede 5 sn'yi aşabilir
 });

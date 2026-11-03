@@ -51,7 +51,7 @@ import { spawn, type SpawnOptions } from 'node:child_process';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   contentDigest,
   wsLabel,
@@ -67,7 +67,7 @@ import {
 } from '../shared/ops.ts';
 import type { CheckOptions } from '../src/check.ts';
 import type { Project } from '../src/types.ts';
-import { resolveWorkspace, samePath, type WorkspaceChoice } from './config.ts';
+import { resolveWorkspace, rootGuardError, samePath, type WorkspaceChoice } from './config.ts';
 
 const base = (process.env.P3D_URL || 'http://localhost:5173').replace(/\/$/, '');
 
@@ -103,6 +103,14 @@ function workspace(): WorkspaceChoice {
   return (choice ??= resolveWorkspace({ flag: wsFlag, env: process.env.P3D_WS, cwd: callerDir }));
 }
 const ws = () => workspace().ws;
+
+/** Sahneyi (ya da sekmenin dosya bağını) değiştiren sekme komutları: P3D dışından köke yanlışlıkla gitmesin. */
+const TAB_MUTATING = new Set(['ops', 'undo', 'redo', 'open', 'save', 'import']);
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+function guardRoot(): void {
+  const err = rootGuardError(workspace(), callerDir, REPO_ROOT);
+  if (err) throw new Error(err);
+}
 
 /** Değer alan bayrağın değeri; bayrak yoksa undefined, değeri eksikse Error. */
 function flag(name: string): string | undefined {
@@ -691,6 +699,7 @@ const USAGE = [
 ].join('\n');
 
 async function main(): Promise<void> {
+  if (TAB_MUTATING.has(cmd)) guardRoot();
   switch (cmd) {
     case 'status':
       return status();

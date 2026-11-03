@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { contentDigest, normalizeWs, wsFromPathname, wsNameError, wsPath } from '../shared/ops';
-import { findConfig, insideDir, parseConfig, resolveWorkspace, samePath } from '../scripts/config';
+import { findConfig, insideDir, parseConfig, resolveWorkspace, rootGuardError, samePath } from '../scripts/config';
 import { ASSETS_KEY, AUTOSAVE_KEY, CORRUPT_KEY, META_KEY, claimAutosave, localStorageBackend } from '../src/autosave';
 import { makeAsset } from '../src/assets';
 import { Store } from '../src/store';
@@ -292,5 +292,27 @@ describe('aynı çalışma alanı iki sekmede', () => {
     expect(await claimAutosave('iki-sekme')).toBe(true);
     expect(await claimAutosave('iki-sekme')).toBe(false);
     expect(await claimAutosave('baska-sekme')).toBe(true);
+  });
+});
+
+describe('kök koruması (P3D dışından p3d.json/--ws olmadan köke yazma yok)', () => {
+  const repo = 'C:/Users/u/Projects/P3D';
+  const choice = (ws: string, source: '--ws' | 'P3D_WS' | 'p3d.json' | 'varsayılan') => ({ ws, source, config: null });
+  it('dışarıdan, varsayılan kökte engeller; mesaj alan seçmeyi ve --ws "" yolunu söyler', () => {
+    const err = rootGuardError(choice('', 'varsayılan'), 'C:/Users/u/Projects/Boltrush', repo, 'win32');
+    expect(err).toContain('kök çalışma alanına');
+    expect(err).toContain('C:/Users/u/Projects/Boltrush');
+    expect(err).toContain('--ws ""');
+  });
+  it('P3D deposunun içinden (alt klasör ve büyük/küçük harf farkı dahil) serbest', () => {
+    expect(rootGuardError(choice('', 'varsayılan'), repo, repo, 'win32')).toBeNull();
+    expect(rootGuardError(choice('', 'varsayılan'), 'c:/users/u/projects/p3d/examples', repo, 'win32')).toBeNull();
+    expect(rootGuardError(choice('', 'varsayılan'), 'C:/Users/u/Projects/P3D-baska', repo, 'win32')).not.toBeNull();
+  });
+  it('alan açıkça seçildiyse (kök bile olsa) ya da kök değilse serbest', () => {
+    expect(rootGuardError(choice('', '--ws'), 'C:/x', repo, 'win32')).toBeNull();
+    expect(rootGuardError(choice('', 'P3D_WS'), 'C:/x', repo, 'win32')).toBeNull();
+    expect(rootGuardError(choice('boltrush', 'p3d.json'), 'C:/x', repo, 'win32')).toBeNull();
+    expect(rootGuardError(choice('', 'varsayılan'), '/home/u/oyun', '/home/u/P3D', 'linux')).not.toBeNull();
   });
 });

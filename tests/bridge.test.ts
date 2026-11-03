@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -742,5 +742,34 @@ describe('p3d: --ops dosyası, import kaynağı, sekmeden export/check, save ve 
     expect(k.code).toBe(1);
     expect(k.stderr).toContain(`${src} 'ref' parçasının kaynak ağ dosyası (src); üzerine yazılmadı`);
     expect(readFileSync(src, 'utf8')).toBe(CUBE_OBJ);
+  }, 60_000);
+});
+
+describe('kök koruması (CLI)', () => {
+  let dir: string;
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'p3d-rootguard-')); // p3d.json yok, P3D deposu dışında
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('P3D dışından p3d.json/--ws olmadan sahneyi değiştiren komut köke gitmez; --ws "" ile gider; okuma serbest', async () => {
+    const t = await openTab('');
+    await t.put(['kok']);
+    t.auto(['kok']);
+    const ops = JSON.stringify([{ op: 'create', shape: 'box', name: 'yanlis' }]);
+    const before = t.commands.length;
+    for (const args of [['ops'], ['undo'], ['open', 'yok.p3d.json'], ['save', 'x.p3d.json']]) {
+      const r = await p3d(args, dir, args[0] === 'ops' ? ops : undefined);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('kök çalışma alanına (kullanıcının kişisel sahnesi) gidecekti');
+    }
+    expect(t.commands.length).toBe(before);
+    expect(existsSync(path.join(dir, 'x.p3d.json'))).toBe(false);
+
+    const scene = await p3d(['scene'], dir);
+    expect(scene.code).toBe(0);
+    const ok = await p3d(['ops', '--ws', ''], dir, ops);
+    expect(ok.code).toBe(0);
+    expect(t.commands.at(-1)).toMatchObject({ ops: [{ op: 'create', name: 'yanlis' }] });
   }, 60_000);
 });

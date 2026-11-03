@@ -11,6 +11,8 @@
 ## Alan seçimi
 Öncelik: `--ws <ad>` > `P3D_WS` ortam değişkeni > çalışılan klasörden yukarı doğru aranan ilk `p3d.json` > kök.
 Git Bash `/` yolunu çevirdiği için kökü açıkça seçmek gerekirse `--ws ""` yazın.
+**Koruma:** P3D klasörü dışından, `p3d.json` ve `--ws`/`P3D_WS` olmadan sahneyi değiştiren komutlar (`ops`, `undo`, `redo`,
+`open`, `save`, `import`) köke gitmez, hata verir; okuma komutları serbesttir. Köke bilerek göndermek için `--ws ""`.
 
 ```json
 // <proje>/p3d.json  (ya da alt klasörde, ör. tasarım başına bir tane)
