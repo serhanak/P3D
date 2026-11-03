@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as api from '../src/api';
 import { fileStamp, projectFileText, writeFileAtomic } from '../src/files';
-import { guideText, installSkill } from '../scripts/guide';
+import { guideText, installSkill, renderSkill, skillState } from '../scripts/guide';
 
 let dir: string;
 
@@ -432,5 +432,21 @@ describe('p3d guide / skill install (fonksiyonlar)', () => {
     writeFileSync(dest, 'elle düzenlenmiş');
     expect(installSkill(skills, src).status).toBe('güncellendi');
     expect(readFileSync(`${dest}.bak`, 'utf8')).toBe('elle düzenlenmiş');
+  });
+
+  it('skill: {{P3D_DIR}} kurulurken depo yoluyla dolar; skillState kurulu kopyanın güncel/eski/yok olduğunu söyler', () => {
+    const src = path.join(dir, 'SKILL-tpl.md');
+    writeFileSync(src, 'depo: {{P3D_DIR}} · sunucu: p3d dev\n');
+    const repo = path.join(dir, 'baska', 'P3D');
+    expect(renderSkill('a {{P3D_DIR}} b {{P3D_DIR}}', repo)).toBe(`a ${path.resolve(repo)} b ${path.resolve(repo)}`);
+    const skills = path.join(dir, 'skills-durum');
+    expect(skillState(skills, src, repo).state).toBe('yok');
+    const r = installSkill(skills, src, repo);
+    expect(readFileSync(r.dest, 'utf8')).toBe(`depo: ${path.resolve(repo)} · sunucu: p3d dev\n`);
+    expect(skillState(skills, src, repo).state).toBe('güncel');
+    writeFileSync(src, 'yeni sürüm {{P3D_DIR}}\n'); // P3D güncellendi (git pull)
+    expect(skillState(skills, src, repo).state).toBe('eski');
+    installSkill(skills, src, repo);
+    expect(skillState(skills, src, repo).state).toBe('güncel');
   });
 });

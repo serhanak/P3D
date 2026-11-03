@@ -65,13 +65,41 @@ export function skillsDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.P3D_SKILLS_DIR ? path.resolve(env.P3D_SKILLS_DIR) : path.join(homedir(), '.claude', 'skills');
 }
 
-/**
- * SKILL.md'yi `<skills>/p3d/SKILL.md`'ye kopyalar (klasörü oluşturur). Hedef farklı içerikle varsa (kullanıcı elle
- * düzenlemiş olabilir) önce `SKILL.md.bak`'a yedeklenir.
- */
-export function installSkill(dir = skillsDir(), source = SKILL_SOURCE): SkillInstall {
+/** Skill kaynağındaki yer tutucu: kurulurken bu makinedeki P3D deposunun yoluyla değiştirilir (sabit yol yok). */
+export const P3D_DIR_TOKEN = '{{P3D_DIR}}';
+
+/** Kaynak metindeki `{{P3D_DIR}}` → depo yolu (sondaki ayraçsız). */
+export function renderSkill(text: string, repo: string = REPO): string {
+  return text.split(P3D_DIR_TOKEN).join(path.resolve(repo));
+}
+
+/** Kurulması gereken skill metni (yer tutucu doldurulmuş). */
+function skillText(source: string, repo: string): string {
   const text = readIfFile(source);
   if (text === null) throw new Error(`Skill kaynağı bulunamadı: ${source}`);
+  return renderSkill(text, repo);
+}
+
+export interface SkillState {
+  dest: string;
+  /** güncel: kurulu = kaynak · eski: farklı (P3D güncellenmiş ya da elle düzenlenmiş) · yok: kurulu değil. */
+  state: 'güncel' | 'eski' | 'yok';
+}
+
+/** Kurulu skill'in depodaki kaynakla karşılaştırması (`p3d status` uyarısı için). */
+export function skillState(dir = skillsDir(), source = SKILL_SOURCE, repo: string = REPO): SkillState {
+  const dest = path.join(dir, 'p3d', 'SKILL.md');
+  const installed = readIfFile(dest);
+  if (installed === null) return { dest, state: 'yok' };
+  return { dest, state: installed === skillText(source, repo) ? 'güncel' : 'eski' };
+}
+
+/**
+ * SKILL.md'yi `<skills>/p3d/SKILL.md`'ye kurar (klasörü oluşturur; `{{P3D_DIR}}` bu deponun yoluyla doldurulur). Hedef
+ * farklı içerikle varsa (kullanıcı elle düzenlemiş olabilir) önce `SKILL.md.bak`'a yedeklenir.
+ */
+export function installSkill(dir = skillsDir(), source = SKILL_SOURCE, repo: string = REPO): SkillInstall {
+  const text = skillText(source, repo);
   const dest = path.join(dir, 'p3d', 'SKILL.md');
   const before = readIfFile(dest);
   if (before === text) return { dest, status: 'aynı' };

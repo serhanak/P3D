@@ -9,7 +9,7 @@ Hata olursa çıkış kodu 1.
 ## Sekme gerektirenler (sunucu çalışıyor, alanın sekmesi açık)
 | Komut | Ne yapar |
 |---|---|
-| `status` | Sunucu, alan ve adresi, bağlı sekme, rev, parça sayısı, `p3d.json`, dosya bağı, diğer alanlar |
+| `status` | Sunucu, kurulu skill güncel mi, alan ve adresi, bağlı sekme, rev, parça sayısı, `p3d.json`, dosya bağı, diğer alanlar |
 | `view` | Alanın adresini varsayılan tarayıcıda açar |
 | `scene [--full] [--stale]` | Sahne özeti (parça, şekil, parametre, merkez, bbox, renk, grup); `--full` proje JSON'u (stdout yalnızca JSON) |
 | `ops [--ops ops.json] [--label "metin"]` | İşlem listesini uygular (ya da stdin); tek geri-al adımı |
@@ -38,8 +38,9 @@ Hata olursa çıkış kodu 1.
 | Komut | Ne yapar |
 |---|---|
 | `run <betik> [arg…]` | Betiği P3D'nin TypeScript desteğiyle çalıştırır; betikte `import { … } from 'p3d'` kurulumsuz çalışır (`p3d guide scripts`) |
+| `dev [--port N …]` | P3D sunucusunu (`npm run dev`) hangi klasörden çağrılırsa çağrılsın P3D deposunda başlatır; zaten çalışıyorsa söyler. Uzun süre çalışır: Claude Code'da arka planda başlatın |
 | `guide [konu]` | Bu rehber; konu yoksa giriş ve konu listesi |
-| `skill install` | Kullanıcı düzeyindeki Claude Code skill'ini (`~/.claude/skills/p3d`) kurar/günceller |
+| `skill install` | Kullanıcı düzeyindeki Claude Code skill'ini (`~/.claude/skills/p3d`) kurar/günceller; içine bu makinedeki P3D yolunu yazar. P3D güncellenip skill kaynağı değişince yeniden çalıştırın (`status` uyarır) |
 
 ## Referans ağlar ve dosyalar
 - `import` ettiğiniz ağın dosya yolu parçada saklanır. `save`/`apply` kaynağı varsa ağı **gömmez**, yolu proje dosyasına göre

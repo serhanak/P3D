@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unzipSync, strFromU8 } from 'fflate';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { GUIDE_DIR, SKILL_SOURCE, guideTopics } from '../scripts/guide';
+import { GUIDE_DIR, SKILL_SOURCE, guideTopics, renderSkill } from '../scripts/guide';
 import { findChrome, launchHeadless } from '../scripts/headless';
 import { makeAsset } from '../src/assets';
 
@@ -363,14 +363,17 @@ describe('p3d guide / skill install', () => {
     const env = { P3D_SKILLS_DIR: skills };
     const dest = path.join(skills, 'p3d', 'SKILL.md');
     expect(p3dRun(['skill', 'install'], dir, { env }).stdout).toContain(`✓ Skill kuruldu: ${dest}`);
-    expect(readFileSync(dest, 'utf8')).toBe(readFileSync(SKILL_SOURCE, 'utf8'));
+    expect(readFileSync(dest, 'utf8')).toBe(renderSkill(readFileSync(SKILL_SOURCE, 'utf8')));
     expect(p3dRun(['skill', 'install'], dir, { env }).stdout).toContain('zaten güncel');
     writeFileSync(dest, 'eski');
     const upd = p3dRun(['skill', 'install'], dir, { env }).stdout;
     expect(upd).toContain('üzerine yazıldı');
     expect(upd).toContain(`önceki içerik yedeklendi: ${dest}.bak`);
-    expect(readFileSync(dest, 'utf8')).toBe(readFileSync(SKILL_SOURCE, 'utf8'));
+    expect(readFileSync(dest, 'utf8')).toBe(renderSkill(readFileSync(SKILL_SOURCE, 'utf8')));
     expect(readFileSync(`${dest}.bak`, 'utf8')).toBe('eski');
+    // Kurulu skill'de sabit yer tutucu kalmaz; bu makinedeki depo yolu yazılır.
+    expect(readFileSync(dest, 'utf8')).not.toContain('{{P3D_DIR}}');
+    expect(readFileSync(dest, 'utf8')).toContain(path.resolve(ROOT));
     expect(p3dRun(['skill'], dir).code).toBe(1);
   }, 60_000);
 });

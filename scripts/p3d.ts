@@ -8,7 +8,8 @@
 // p3d.json: { "workspace": "ad", "file": "model.p3d.json", "onAmbiguity": "ask-critical" } (file, p3d.json'a göre).
 //
 // Sekme (geliştirme sunucusu ve ws sekmesi açık olmalı):
-//   p3d status                         sunucu, ws ve adresi, bağlı sekme, p3d.json, diğer çalışma alanları
+//   p3d status                         sunucu, skill güncel mi, ws ve adresi, bağlı sekme, p3d.json, diğer çalışma alanları
+//   p3d dev [--port N …]               sunucuyu her klasörden P3D deposunda başlatır (npm run dev); çalışıyorsa söyler
 //   p3d view                           ws adresini varsayılan tarayıcıda açar
 //   p3d scene [--full] [--stale]       sahne özeti (--full: tüm proje JSON'u; --stale: sekme yoksa son bilinen)
 //   p3d ops [--ops ops.json] [--label "metin"]  Op[] JSON'u (ya da {"ops": [...]}) stdin'den ya da --ops dosyasından
@@ -44,7 +45,8 @@
 // Diğer:
 //   p3d run <betik.mts|ts|mjs|js> [arg…]   betiği çağıranın klasöründe çalıştırır; `from 'p3d'` src/api.ts'ye çözülür
 //   p3d guide [konu]                   rehber (docs/guide); konu yoksa giriş + konu listesi
-//   p3d skill install                  tools/skill/p3d/SKILL.md → ~/.claude/skills/p3d/SKILL.md (P3D_SKILLS_DIR)
+//   p3d skill install                  tools/skill/p3d/SKILL.md → ~/.claude/skills/p3d/SKILL.md (P3D_SKILLS_DIR);
+//                                      {{P3D_DIR}} bu makinedeki depo yoluyla doldurulur
 //
 // Adres: P3D_URL (varsayılan http://localhost:5173). Göreli dosya yolları komutun yazıldığı klasöre göre çözülür.
 import { spawn, type SpawnOptions } from 'node:child_process';
@@ -335,8 +337,15 @@ async function status(): Promise<void> {
     row('Sunucu:', `${base} — erişilebilir, köprü açık`);
   } catch (e) {
     const err = e as CallError;
-    row('Sunucu:', err.status === 404 ? `${base} — erişilebilir ama köprü kapalı (sunucu --bridge ile başlatılmalı; npm run dev'de açıktır)` : `${base} — ERİŞİLEMİYOR. P3D klasöründe "npm run dev" ile başlatın.`);
+    row('Sunucu:', err.status === 404 ? `${base} — erişilebilir ama köprü kapalı (sunucu --bridge ile başlatılmalı; npm run dev'de açıktır)` : `${base} — ERİŞİLEMİYOR. Başlatın: p3d dev (arka planda).`);
     process.exitCode = 1;
+  }
+  try {
+    const { skillState } = await import('./guide.ts');
+    const sk = skillState();
+    row('Skill:', sk.state === 'güncel' ? `güncel (${sk.dest})` : sk.state === 'eski' ? `GÜNCEL DEĞİL — p3d skill install (${sk.dest})` : 'kurulu değil — p3d skill install');
+  } catch (e) {
+    row('Skill:', `denetlenemedi — ${(e as Error).message}`);
   }
   if (!c) return;
   row('Çalışma alanı:', `${wsLabel(c.ws)} (kaynak: ${c.source})`);
@@ -675,7 +684,7 @@ const USAGE = [
   'Kullanım: p3d [--ws <ad>] <komut>   (depo içinde: npm run -s p3d -- <komut>)',
   '  Çalışma alanı: --ws <ad> (kök: --ws "" ya da --ws /) > P3D_WS > üst klasörlerdeki ilk p3d.json ("workspace") > kök',
   '',
-  'Sekme (sunucu: P3D klasöründe npm run dev; ws sekmesi açık):',
+  'Sekme (sunucu: p3d dev; ws sekmesi açık):',
   '  status · view · scene [--full] [--stale] · undo · redo · fit',
   '  ops [--ops ops.json] [--label "metin"]   (ya da stdin: … < ops.json)',
   '  open [dosya.p3d.json] [--force] · save [dosya.p3d.json] [--force] [--embed]   (dosya verilmezse p3d.json → "file")',
@@ -695,7 +704,8 @@ const USAGE = [
   '',
   'Diğer:',
   '  run <betik.mts|ts|mjs|js> [arg…]   (betikte: import { applyOps, THREE } from \'p3d\')',
-  '  guide [konu] · skill install',
+  '  dev [npm run dev bayrakları]   (sunucuyu P3D klasöründe başlatır; çalışıyorsa söyler)',
+  '  guide [konu] · skill install   (status, kurulu skill eskiyse uyarır)',
 ].join('\n');
 
 async function main(): Promise<void> {
@@ -984,6 +994,28 @@ async function main(): Promise<void> {
       const r = guideText(positionals()[0]);
       console.log(r.text);
       if (!r.ok) process.exitCode = 1;
+      return;
+    }
+    case 'dev': {
+      // Sunucuyu hangi klasörden çağrılırsa çağrılsın P3D deposunda başlatır (npm run dev; bayraklar aynen geçer).
+      if (!rest.some((a) => a.startsWith('--port'))) {
+        const up = await fetch(base + '/api/status').then(() => true, () => false);
+        if (up) {
+          console.log(`P3D sunucusu zaten çalışıyor: ${base}`);
+          return;
+        }
+      }
+      // Başlatıcı `--port=5198` biçimini ister; `--port 5198` de kabul edilsin.
+      const VALUE_FLAGS = ['--port', '--host', '--llm', '--model', '--effort', '--claude-bin'];
+      const args: string[] = [];
+      for (let i = 0; i < rest.length; i++) args.push(VALUE_FLAGS.includes(rest[i]) && i + 1 < rest.length ? `${rest[i]}=${rest[++i]}` : rest[i]);
+      console.log(`P3D sunucusu başlatılıyor (${REPO_ROOT}): npm run dev${args.length ? ' -- ' + args.join(' ') : ''}`);
+      const win = process.platform === 'win32';
+      const child = spawn(win ? 'npm.cmd' : 'npm', ['run', 'dev', ...(args.length ? ['--', ...args] : [])], { cwd: REPO_ROOT, stdio: 'inherit', shell: win });
+      await new Promise<void>((resolve) => child.on('exit', (code) => {
+        process.exitCode = code ?? 0;
+        resolve();
+      }));
       return;
     }
     case 'skill': {

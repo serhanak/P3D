@@ -29,6 +29,8 @@ npm run typecheck  # tsc --noEmit
 npm run build      # typecheck + vite build → dist/
 npm start          # üretim: dist/ + /api → http://127.0.0.1:8080 (köprü kapalı)
 npm link           # bir kez: global `p3d` komutu (her klasörden; göreli yollar o klasöre göre)
+p3d skill install  # bir kez (ve skill kaynağı değişince): ~/.claude/skills/p3d; {{P3D_DIR}} → bu makinedeki depo yolu
+p3d dev            # sunucuyu her klasörden başlatır (npm run dev; bayraklar aynen, --port 5180 de olur)
 p3d <komut>        # köprü + tarayıcısız CLI; depo içinde `npm run -s p3d -- <komut>` de olur. Tam liste: docs/guide/cli.md
 ```
 

@@ -5,12 +5,13 @@ description: P3D ile 3D yazıcı parçası ya da düşük poligonlu oyun varlı�
 
 # P3D
 
-P3D bu makinede çalışan, Türkçe doğal dille parça modelleme aracıdır (depo: `C:\Users\serha\Projects\P3D`). Her klasörden
+P3D bu makinede çalışan, Türkçe doğal dille parça modelleme aracıdır (depo: `{{P3D_DIR}}`). Her klasörden
 global `p3d` komutuyla kullanılır. **Bu dosya yalnızca giriş kapısıdır; ayrıntılar kurulu sürümle eşleşen rehberdedir.**
 
 ## Başlarken
-1. `p3d status` → sunucu, çalışma alanı, bağlı sekme, `p3d.json`. Sunucu kapalıysa kullanıcıya P3D klasöründe `npm run dev`
-   başlatmasını önerin (ya da arka planda: `npm --prefix C:/Users/serha/Projects/P3D run dev`).
+1. `p3d status` → sunucu, skill, çalışma alanı, bağlı sekme, `p3d.json`. Sunucu kapalıysa `p3d dev` ile arka planda
+   başlatın (bu oturum kapanınca sunucu da kapanır; kullanıcıya söyleyin). "Skill: GÜNCEL DEĞİL" görürseniz kullanıcıya
+   `p3d skill install` önerin.
 2. **Önce rehberi okuyun:** `p3d guide` (iş akışı ve konu listesi), sonra işe göre `p3d guide <konu>`:
    `cli`, `ops`, `modeling`, `verify`, `ambiguity`, `workspaces`, `scripts`, `game`.
 3. Çalışma alanı: proje kökünde `p3d.json` yoksa kullanıcıya sorup oluşturun:

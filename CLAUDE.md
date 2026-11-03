@@ -29,6 +29,10 @@ Hepsini içe aktarıyoruz:
 - Eğri/eğik yüzeyleri ilkel şekillerle basamaklamayın; `extrude` / `revolve` / `loft` ve `role: "hole"` kullanın.
 - Bir model bittiğinde `p3d check` çalıştırın; çakışan yüzey (z-fighting) kalmasın. Delikleri `cuts` ile
   hedef parçaya bağlayın.
+- **Kurulum (yeni makine):** `npm install` · `npm link` (global `p3d`) · `p3d skill install` (kullanıcı skill'i; içine bu
+  makinedeki depo yolu yazılır). `tools/skill/p3d/SKILL.md`'yi değiştirirseniz kurulu kopyayı da `p3d skill install` ile
+  güncelleyin (`p3d status` eskiyse uyarır); skill kaynağına makineye özgü yol yazmayın, `{{P3D_DIR}}` kullanın.
+- Sunucuyu her klasörden `p3d dev` başlatır (arka planda çalıştırın; zaten çalışıyorsa söyler).
 - Windows'ta `TaskStop` arka plandaki `npm run dev`'in alt node sürecini kapatmayabilir; port meşgul kalırsa
   `Get-NetTCPConnection -LocalPort 5173` ile süreci bulup kapatın.
 

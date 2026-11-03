@@ -7,11 +7,47 @@ olarak dışa aktarılır.
 
 ## Kurulum ve çalıştırma
 
+Gerekenler: Node 22+, git; görünmez görüntü alma (`p3d snapshot --file`) için Chrome, Chromium ya da Edge.
+
+**Yeni bilgisayarda (bir kez):**
+
 ```bash
+git clone https://github.com/serhanak/P3D.git && cd P3D
 npm install
-npm run dev          # http://localhost:5173 (yalnızca yerel ayrıştırıcı; API anahtarı varsa Claude da açık)
-npm run dev:claude   # aynısı, serbest komutlar bu bilgisayardaki Claude Code hesabınızla (bkz. Claude modu)
+npm link             # global `p3d` komutu: her klasörden p3d status, p3d dev, p3d guide …
+p3d skill install    # Claude Code kullanıcı skill'i → ~/.claude/skills/p3d (bu makinedeki P3D yolu yazılır)
+p3d status           # sunucu, skill, çalışma alanı durumu
 ```
+
+- Linux/macOS'ta npm'in global klasörü sistem dizinindeyse `npm link` sudo ister; nvm kullanın ya da
+  `npm config set prefix ~/.npm-global` (ve `~/.npm-global/bin`'i PATH'e ekleyin).
+- Tarayıcı bulunamazsa yolunu `P3D_CHROME` ile verin (ör. `export P3D_CHROME=/usr/bin/chromium`).
+- Claude modu için `.env` (aşağıda) gerekiyorsa `cp .env.example .env`.
+
+**P3D güncellenince:** `git pull && npm install`; skill kaynağı değiştiyse `p3d status` "Skill: GÜNCEL DEĞİL" der →
+`p3d skill install`. Ayrıntılı kullanım kuralları (`p3d guide`) doğrudan depodan okunduğu için ayrıca kurulmaz.
+
+**Çalıştırma:**
+
+```bash
+npm run dev          # http://localhost:5173 (yalnızca yerel ayrıştırıcı; API anahtarı varsa Claude da açık)
+p3d dev              # aynısı, ama her klasörden (sunucu zaten çalışıyorsa söyler)
+npm run dev:claude   # serbest komutlar bu bilgisayardaki Claude Code hesabınızla (bkz. Claude modu)
+```
+
+### Başka projelerden kullanım (Claude Code)
+
+Başka bir depodaki Claude Code oturumu P3D'yi `p3d` komutuyla kullanır; kurulu skill (`p3d skill install`) oturuma
+P3D'yi tanıtır ve `p3d guide`'a yönlendirir.
+
+- Projenin kökünde `p3d.json`: `{"workspace": "<ad>", "file": "model.p3d.json", "onAmbiguity": "ask-critical"}`. Proje
+  kendi çalışma alanında (`http://localhost:5173/w/<ad>`) çalışır; kök `/` sizin kişisel alanınızdır ve P3D dışından
+  alan seçilmeden köke işlem gitmez.
+- Tarayıcısız çalışma: `p3d apply|check|measure|export|snapshot --file model.p3d.json`; betikle üretim:
+  `p3d run betik.mts` (betikte `import { applyOps, THREE } from 'p3d'`, kurulum gerekmez).
+- Oyun varlıkları: `p3d export araba.glb [--skeleton]`, `p3d check --profile game` (`p3d guide game`).
+- Kullanım rehberi: [`docs/guide/`](docs/guide/index.md) (`p3d guide [konu]`); tasarım kararları:
+  [`docs/EXTERNAL-USE.md`](docs/EXTERNAL-USE.md).
 
 Üretim derlemesi:
 
@@ -36,8 +72,8 @@ Yerel ayrıştırıcı internet ve API anahtarı olmadan çalışır. Serbest an
   `claude` ile giriş yapmış kullanıcının hesabından gider (yanıt ~10 sn). Claude Code kurulu ve giriş yapılmış
   olmalı. **Yalnızca kişisel kullanım içindir**: Claude.ai/Claude Code hesabı başkalarına sunulan bir hizmette
   kullanılamaz; sunucu kurulumunda API anahtarı kullanın. `auto` modu bu yolu asla kendiliğinden seçmez.
-- **Köprü**: açık sekme sahnesini sunucuya bildirir; terminaldeki Claude Code `npm run -s p3d -- scene` ile
-  sahneyi okur, `npm run -s p3d -- ops` ile işlem gönderir. Değişiklikler sekmede canlı görünür, günlükte
+- **Köprü**: açık sekme sahnesini sunucuya bildirir; terminaldeki Claude Code `p3d scene` ile
+  sahneyi okur, `p3d ops` ile işlem gönderir (depo içinde `npm run -s p3d -- …` de olur). Değişiklikler sekmede canlı görünür, günlükte
   “Claude Code” etiketiyle yazılır ve Ctrl+Z ile geri alınabilir. `npm run dev`'de açık, `npm start`'ta kapalıdır
   (`--bridge` / `--no-bridge`).
 - API anahtarı yalnızca sunucuda kullanılır, tarayıcıya gönderilmez. İstekler `fallbacks: "default"` ile gider
@@ -69,6 +105,8 @@ npm start   -- --model=claude-opus-5-5 --effort=low
 | Tekne / gövde | **Tekne** (`hull`, endaze tablosu): istasyon başına omurga, küpeşte ve yarı genişlikler; yüzeyi uygulama üretir, küpeşte/taban/ayna keskin, uçlar sivrilir — tekne, kano, gövde |
 | Yüzeye oturtma | `place_on_surface`: parça, başka bir parçanın (eğri) yüzeyine dik oturur — flanş, perçin, düğme |
 | Ağ içe aktarma | **İçe aktar…** ile STL / OBJ / 3MF; katı, delik ya da yarı saydam **referans** olarak (gerekirse sadeleştirilir) |
+| Gruplar, ayna, dizi | `group` (pivot = dönme merkezi), `mirror` (geometri de yansır), `duplicate` + `count` (sıra halinde kopyalar) |
+| Oyun motoru (GLB) | **GLB** dışa aktarım (Y-yukarı/metre, düz ya da yumuşak normal, grup düğümleri; **GLB + iskelet** Unreal araç fiziği için), düşük poligon (6 segmentten), tabla 20 m'ye kadar |
 
 Şekiller: kutu, silindir, boru (iç/dış çap), koni (kesik koni), küre, torus, prizma (altıgen vb.), ekstrüzyon,
 döndürme, loft, tekne (endaze), mesh. Roller: katı (varsayılan), delik, referans (dışa aktarılmaz).
@@ -102,17 +140,18 @@ Nasıl çizildiği: [`examples/README.md`](examples/README.md).
 
 ### Terminalden yapay zekâ ile tasarım ve doğrulama
 
-Köprü açıkken (`npm run dev`) Claude Code (ya da siz) terminalden çalışan sekmeyi okuyup değiştirebilir:
+Köprü açıkken (`npm run dev` / `p3d dev`) Claude Code (ya da siz) terminalden çalışan sekmeyi okuyup değiştirebilir
+(tam liste: `p3d guide cli`; çoğu komut `--file model.p3d.json` ile sekmesiz de çalışır):
 
 ```bash
-npm run -s p3d -- scene                       # parça listesi, kutular, roller
-npm run -s p3d -- ops < islemler.json         # işlem uygula (tek geri-al adımı)
-npm run -s p3d -- snapshot --views iso,front,top --out ./goruntu   # PNG görüntüler (dik izdüşüm + izometrik)
-npm run -s p3d -- measure                     # parça başına kutu ve delikli hacim, birleşik toplam hacim
-npm run -s p3d -- check                       # çakışan yüzeyler (z-fighting), boolean hataları, ince parça, tabla teması
-npm run -s p3d -- section --axis x --at -10,0,10        # sahnede kesit çokgenleri
-npm run -s p3d -- section --file ref.stl --axis z --at 5  # bir dosyada kesit (sahne gerekmez)
-npm run -s p3d -- import ref.stl --role reference --keep-position   # referans ağ
+p3d scene                       # parça listesi, kutular, roller
+p3d ops < islemler.json         # işlem uygula (tek geri-al adımı)
+p3d snapshot --views iso,front,top --out ./goruntu   # PNG görüntüler (dik izdüşüm + izometrik)
+p3d measure                     # parça başına kutu ve delikli hacim, birleşik toplam hacim
+p3d check                       # çakışan yüzeyler (z-fighting), boolean hataları, ince parça, tabla teması
+p3d section --axis x --at -10,0,10        # sahnede kesit çokgenleri
+p3d section --file ref.stl --axis z --at 5  # bir dosyada kesit (sahne gerekmez)
+p3d import ref.stl --role reference --keep-position   # referans ağ
 ```
 
 ## Koordinatlar ve birimler

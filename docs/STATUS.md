@@ -8,7 +8,8 @@
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (218 test, ~25 sn) — hepsi temiz olmalı. Global komut için bir kez `npm link`.
+1. `npm install` · `npm run typecheck` · `npm test` (220 test, ~25 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
+   (README → Kurulum; `p3d status` kurulu skill eskiyse uyarır).
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
    yok → kullanıcıdan F5 isteyin). Kullanıcı kök sekmede değişiklik yapılmasına izin verdi ve ilerlemeyi orada izlemeyi seviyor;
@@ -61,7 +62,8 @@
   sadeleştirme), `sliceMany` (bir ağda çok kesit, tek dönüşüm). İçe aktarma sadeleştirmesi `Regularize` ile.
   Testler her örneğin onarımsız yüklendiğini ve kapalı ağ olarak dışa aktarıldığını doğrular.
 - **Başlatıcı** (`scripts/launch.ts`): `npm run dev|start -- --llm --bridge --port --host --model --effort --claude-bin`.
-- **Global `p3d` komutu** (`bin/p3d.mjs`, depoda bir kez `npm link`): her klasörden; göreli yollar komutun yazıldığı
+- **Global `p3d` komutu** (`bin/p3d.mjs`, depoda bir kez `npm link`): her klasörden; `p3d dev` sunucuyu her klasörden
+  başlatır; `p3d skill install` skill'e bu makinedeki depo yolunu yazar (kaynakta `{{P3D_DIR}}`), `status` eskiyse uyarır; göreli yollar komutun yazıldığı
   klasöre göre (`npm run p3d` altında `INIT_CWD`). Tam komut listesi: `docs/guide/cli.md`.
 - **Çalışma alanları (v0.4):** `/w/<ad>`; komut ve sahne alanın en son bağlanan sekmesinden (sekme kimliği, PUT `seq`,
   `rev`); bağlı sekme yoksa 409. Kök localStorage'da (anahtarlar aynı), alanlar IndexedDB'de; okunamayan/parça düşen kayıt

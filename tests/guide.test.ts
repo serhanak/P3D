@@ -40,5 +40,8 @@ describe('rehber kapsamı (docs/guide)', () => {
     for (const t of topics) expect(index).toContain(`| \`${t}\``);
     const skill = read('../tools/skill/p3d/SKILL.md');
     for (const m of skill.matchAll(/p3d guide ([a-z]+)/g)) expect(topics).toContain(m[1]);
+    // Skill kaynağında makineye özgü yol olmaz: depo yolu kurulurken {{P3D_DIR}} yerine yazılır.
+    expect(skill).toContain('{{P3D_DIR}}');
+    expect(skill).not.toMatch(/[A-Za-z]:[\\/]Users|\/home\/|\/Users\//);
   });
 });

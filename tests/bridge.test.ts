@@ -773,3 +773,16 @@ describe('kök koruması (CLI)', () => {
     expect(t.commands.at(-1)).toMatchObject({ ops: [{ op: 'create', name: 'yanlis' }] });
   }, 60_000);
 });
+
+describe('p3d dev', () => {
+  it('sunucu zaten çalışıyorsa yenisini başlatmaz, adresi söyler', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'p3d-dev-'));
+    try {
+      const r = await p3d(['dev'], dir);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain(`P3D sunucusu zaten çalışıyor: ${base}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
