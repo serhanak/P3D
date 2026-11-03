@@ -39,6 +39,7 @@ export class Viewer {
   private labelsRoot = new THREE.Group();
   private bed = new THREE.Group();
   private bedKey = '';
+  private bedSize = 220;
   private selBox: THREE.Box3Helper;
   private entries = new Map<string, Entry>();
   private raycaster = new THREE.Raycaster();
@@ -90,9 +91,11 @@ export class Viewer {
     });
 
     new ResizeObserver(() => this.resize()).observe(container);
+    this.fitClipPlanes();
     this.resize();
     this.renderer.setAnimationLoop(() => {
       this.controls.update();
+      this.fitClipPlanes();
       this.renderer.render(this.scene, this.camera);
       this.labelRenderer.render(this.scene, this.camera);
     });
@@ -274,6 +277,21 @@ export class Viewer {
   // -------------------------------------------------------------------------
   // Tabla
 
+  /**
+   * Kırpma düzlemleri kamera–hedef mesafesine göre. Sabit 0,5 mm yakın düzlem, oyun ölçeğinde (10 m) derinlik
+   * çözünürlüğünü ~12 mm'ye düşürüyor ve ince bir panelin arkasındaki parçayı öne çiziyordu; d × 0,002 ile ~0,3 mm.
+   */
+  private fitClipPlanes(): void {
+    const d = this.camera.position.distanceTo(this.controls.target);
+    const near = Math.max(0.05, d * 0.002);
+    const far = Math.max(d * 50, this.bedSize * 8, 2000);
+    if (Math.abs(near - this.camera.near) > near * 0.05 || Math.abs(far - this.camera.far) > far * 0.05) {
+      this.camera.near = near;
+      this.camera.far = far;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
   private syncBed(x: number, y: number): void {
     const key = `${x}x${y}`;
     if (key === this.bedKey) return;
@@ -317,9 +335,8 @@ export class Viewer {
     this.bed.add(lines(minor, 0x2e3441), lines(major, 0x3f4759));
     this.bed.add(lines([-hx, -hy, 0, hx, -hy, 0, hx, -hy, 0, hx, hy, 0, hx, hy, 0, -hx, hy, 0, -hx, hy, 0, -hx, -hy, 0], 0x5b6680));
 
-    // Büyük tablada (oyun ölçeği) kamera kırpma mesafesi ve eksen göstergesi de büyür.
-    this.camera.far = Math.max(20000, Math.max(x, y) * 8);
-    this.camera.updateProjectionMatrix();
+    // Büyük tablada (oyun ölçeği) eksen göstergesi büyür; kırpma düzlemleri fitClipPlanes()'te.
+    this.bedSize = Math.max(x, y);
     const k = Math.max(1, Math.max(x, y) / 2000);
 
     // Eksen göstergesi (sol ön köşe)
@@ -426,9 +443,11 @@ export class Viewer {
     const center = box.getCenter(new THREE.Vector3());
     const radius = Math.max(box.getBoundingSphere(new THREE.Sphere()).radius, 5);
     if (view === 'iso') {
-      const cam = new THREE.PerspectiveCamera(30, aspect, 0.1, radius * 100);
+      // Yakın düzlem mesafeyle orantılı: sabit 0,1 mm, 4 m'lik araçta derinlik çözünürlüğünü ~50 mm'ye düşürüyordu.
+      const dist = (radius / Math.sin(15 * DEG)) * 1.05;
+      const cam = new THREE.PerspectiveCamera(30, aspect, Math.max(0.1, dist * 0.05), dist * 2 + this.bedSize * 1.5);
       cam.up.copy(up);
-      cam.position.copy(center).addScaledVector(dir, (radius / Math.sin(15 * DEG)) * 1.05);
+      cam.position.copy(center).addScaledVector(dir, dist);
       cam.lookAt(center);
       cam.updateMatrixWorld();
       return cam;
