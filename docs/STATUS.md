@@ -8,7 +8,7 @@
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (217 test, ~25 sn) — hepsi temiz olmalı. Global komut için bir kez `npm link`.
+1. `npm install` · `npm run typecheck` · `npm test` (218 test, ~25 sn) — hepsi temiz olmalı. Global komut için bir kez `npm link`.
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
    yok → kullanıcıdan F5 isteyin). Kullanıcı kök sekmede değişiklik yapılmasına izin verdi ve ilerlemeyi orada izlemeyi seviyor;
@@ -90,7 +90,7 @@
 - **Durum:** tüm değişiklikler işlem (Op) olarak; geri al/yinele (200 adım); localStorage otomatik kayıt.
 - **Dosya:** proje kaydet/aç (`.p3d.json`, doğrulama ve onarım ile); dışa aktarım: 3MF (renkli, parça başına
   nesne), STL (tümü / seçili), OBJ, OBJ+MTL (ZIP), her parça ayrı OBJ. Yalnızca görünür katılar; delikler uygulanmış.
-- **Ayarlar:** tabla boyutu, yuvarlak yüzey çözünürlüğü (6–192 segment; ekran + dışa aktarım).
+- **Ayarlar:** tabla boyutu (20–20 000 mm; 2 m üstünde ızgara 100/500 mm, oyun ölçeği için), yuvarlak yüzey çözünürlüğü (6–192 segment; ekran + dışa aktarım).
 - **Sunucu:** Vite ara katmanı (geliştirme) ve `server/index.ts` (üretim) aynı `/api` işleyicisini kullanır.
 
 ## Doğrulama durumu

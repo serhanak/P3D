@@ -297,13 +297,17 @@ export class Viewer {
     plate.position.z = -0.02;
     this.bed.add(plate);
 
+    // Izgara aralığı tabla boyutuyla büyür (2 m'ye kadar 10/50 mm): eksen başına en fazla ~400 ince çizgi.
+    let step = 10;
+    while (Math.max(x, y) / step > 400) step *= 10;
+    const majorStep = step * 5;
     const minor: number[] = [];
     const major: number[] = [];
-    for (let gx = 0; gx <= hx; gx += 10) {
-      for (const sx of gx === 0 ? [0] : [gx, -gx]) (gx % 50 === 0 ? major : minor).push(sx, -hy, 0, sx, hy, 0);
+    for (let gx = 0; gx <= hx; gx += step) {
+      for (const sx of gx === 0 ? [0] : [gx, -gx]) (gx % majorStep === 0 ? major : minor).push(sx, -hy, 0, sx, hy, 0);
     }
-    for (let gy = 0; gy <= hy; gy += 10) {
-      for (const sy of gy === 0 ? [0] : [gy, -gy]) (gy % 50 === 0 ? major : minor).push(-hx, sy, 0, hx, sy, 0);
+    for (let gy = 0; gy <= hy; gy += step) {
+      for (const sy of gy === 0 ? [0] : [gy, -gy]) (gy % majorStep === 0 ? major : minor).push(-hx, sy, 0, hx, sy, 0);
     }
     const lines = (pts: number[], color: number) => {
       const g = new THREE.BufferGeometry();
@@ -313,21 +317,26 @@ export class Viewer {
     this.bed.add(lines(minor, 0x2e3441), lines(major, 0x3f4759));
     this.bed.add(lines([-hx, -hy, 0, hx, -hy, 0, hx, -hy, 0, hx, hy, 0, hx, hy, 0, -hx, hy, 0, -hx, hy, 0, -hx, -hy, 0], 0x5b6680));
 
+    // Büyük tablada (oyun ölçeği) kamera kırpma mesafesi ve eksen göstergesi de büyür.
+    this.camera.far = Math.max(20000, Math.max(x, y) * 8);
+    this.camera.updateProjectionMatrix();
+    const k = Math.max(1, Math.max(x, y) / 2000);
+
     // Eksen göstergesi (sol ön köşe)
-    const origin = new THREE.Vector3(-hx - 6, -hy - 6, 0);
+    const origin = new THREE.Vector3(-hx - 6 * k, -hy - 6 * k, 0);
     const axes: [THREE.Vector3, number, string][] = [
       [new THREE.Vector3(1, 0, 0), 0xe5534b, 'X'],
       [new THREE.Vector3(0, 1, 0), 0x57ab5a, 'Y'],
       [new THREE.Vector3(0, 0, 1), 0x539bf5, 'Z'],
     ];
     for (const [dir, color, name] of axes) {
-      this.bed.add(new THREE.ArrowHelper(dir, origin, 22, color, 5, 3));
+      this.bed.add(new THREE.ArrowHelper(dir, origin, 22 * k, color, 5 * k, 3 * k));
       const el = document.createElement('div');
       el.className = 'axis-label';
       el.textContent = name;
       el.style.color = '#' + color.toString(16).padStart(6, '0');
       const lbl = new CSS2DObject(el);
-      lbl.position.copy(origin).addScaledVector(dir, 27);
+      lbl.position.copy(origin).addScaledVector(dir, 27 * k);
       this.bed.add(lbl);
     }
   }

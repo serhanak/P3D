@@ -15,6 +15,8 @@ import { newProject, type GroupDef, type Part, type Project } from './types';
 
 /** Yuvarlak yüzey çözünürlüğünün alt sınırı (düşük poligonlu oyun modelleri için 6). */
 export const MIN_RESOLUTION = 6;
+/** Tabla kenarı üst sınırı (mm): baskı tablaları için 2000 yeterliydi; oyun varlıkları (araba, pist) gerçek ölçüde çizilir. */
+export const MAX_BED = 20000;
 
 // ---------------------------------------------------------------------------
 // Proje dosyası (.p3d.json)
@@ -55,8 +57,8 @@ export function parseProject(data: unknown, dropped?: string[]): Project {
   base.view.showDimensions = view.showDimensions !== false;
   base.view.showHoles = view.showHoles !== false;
   base.settings.resolution = Math.round(num(settings.resolution, base.settings.resolution, MIN_RESOLUTION, 256));
-  base.settings.bedX = num(settings.bedX, base.settings.bedX, 20, 2000);
-  base.settings.bedY = num(settings.bedY, base.settings.bedY, 20, 2000);
+  base.settings.bedX = num(settings.bedX, base.settings.bedX, 20, MAX_BED);
+  base.settings.bedY = num(settings.bedY, base.settings.bedY, 20, MAX_BED);
 
   // Ağ verisi depoya alınır; proje nesnesinde tutulmaz (bkz. assets.ts).
   if (d.assets && typeof d.assets === 'object') {

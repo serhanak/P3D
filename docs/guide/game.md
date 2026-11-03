@@ -5,8 +5,8 @@ renkli, sert yüzeyli (hard-surface) varlıklar. **Kapsam dışı:** UV açma, d
 biçimler. Bunlar gerekiyorsa GLB'yi Blender'da sürdürün.
 
 ## Modelleme
-- Birimler yine mm, Z yukarı, önü −Y. Gerçek ölçüde çizin (araba ≈ 4000 mm); tabla yalnızca görseldir, `check` oyun
-  profilinde tabla kurallarına bakmaz.
+- Birimler yine mm, Z yukarı, önü −Y. Gerçek ölçüde çizin (araba ≈ 4000 mm). Tabla en fazla 20 000 × 20 000 mm
+  (`settings.bedX/bedY`; 2 m üstünde ızgara 100/500 mm); yalnızca görseldir, `check` oyun profilinde tabla kurallarına bakmaz.
 - **Düşük poligon:** proje çözünürlüğü (yuvarlak yüzey segmenti) 6–16 arası seçilebilir (arayüz → Ayarlar). `hull` şekli
   düşük çözünürlükte sadeleşmez; poligon bütçesi önemliyse gövdeyi `extrude`/`loft` ile kurun.
 - **Simetri:** bir tarafı kurun, `mirror` ile kopyalayın (`p3d guide ops`).

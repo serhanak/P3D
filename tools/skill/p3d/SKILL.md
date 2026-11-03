@@ -21,7 +21,9 @@ global `p3d` komutuyla kullanılır. **Bu dosya yalnızca giriş kapısıdır; a
 - **Belirsizlik protokolü** (`p3d guide ambiguity`): çizmeye başlamadan kritik/kozmetik belirsizlikleri çıkarın; varsayılan
   `ask-critical` — kritikte durup sorun, kozmetikte varsayın ve raporlayın.
 - **Model dosyada yaşar:** `p3d open` (dosya → sekme), `p3d save` (sekme → dosya); tarayıcısız `p3d apply|check|measure|export
-  --file model.p3d.json`. Betikle üretim: `p3d run betik.mts` (`import { applyOps } from 'p3d'`).
+  --file model.p3d.json`. Betikle üretim: `p3d run betik.mts` (`import { applyOps } from 'p3d'`). Verimli olan dosya
+  modudur; kullanıcı canlı izlemek istemedikçe adım adım sekmeye göndermeyin, bitince sonucu kendi alanınızda `p3d open`
+  ile açıp adresini söyleyin.
 - **Kör çizmeyin:** anlamlı her adımdan sonra `p3d snapshot --out <scratchpad>` ve görüntüye Read ile bakın; bitince
   `p3d check` temiz olsun (oyun için `--profile game`).
 - Eğri/eğik yüzey: `extrude` / `revolve` / `loft` / `hull`; delik: `role: "hole"` + `cuts`. Ham mesh üretmeyin.

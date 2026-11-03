@@ -4,7 +4,7 @@ import { SHAPES } from '../shared/ops';
 import { getAsset } from '../src/assets';
 import { initCsg, manifoldVolume } from '../src/csg';
 import { applyOps, partVolume } from '../src/engine';
-import { buildObj, parseProject, projectToJson } from '../src/io';
+import { MAX_BED, buildObj, parseProject, projectToJson } from '../src/io';
 import { exportGeometry } from '../src/model';
 import { newProject } from '../src/types';
 
@@ -148,4 +148,14 @@ describe('örnek projeler (examples/)', () => {
     expect(objects).toHaveLength(p.parts.filter((x) => x.visible).length);
     for (const o of objects) expect(checkSolid(verts, o.faces).bad, o.name).toBe(0);
   }, 30_000); // tekne (hull) üretimi yüklü makinede 5 sn'yi aşabilir
+});
+
+describe('tabla boyutu', () => {
+  it('oyun ölçeğinde (20 m’ye kadar) korunur, sınır dışı kırpılır', () => {
+    const p = parseProject({ ...newProject('t'), settings: { resolution: 96, bedX: 6000, bedY: 7000 } });
+    expect([p.settings.bedX, p.settings.bedY]).toEqual([6000, 7000]);
+    const q = parseProject({ ...newProject('t'), settings: { resolution: 96, bedX: 30000, bedY: 5 } });
+    expect([q.settings.bedX, q.settings.bedY]).toEqual([MAX_BED, 20]);
+    expect(MAX_BED).toBe(20000);
+  });
 });

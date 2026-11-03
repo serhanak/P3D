@@ -3,7 +3,7 @@ import wasmUrl from 'manifold-3d/manifold.wasm?url';
 import { wsFromPathname, wsLabel, wsPath, type Op } from '../shared/ops';
 import { claimAutosave, indexedDbBackend, localStorageBackend, type AutosaveRecord } from './autosave';
 import { sceneSummary, type ApplyResult } from './engine';
-import { exportModel, meshPartsWithoutData, parseProject, projectToJson, download, safeFileName, type ExportKind } from './io';
+import { MAX_BED, exportModel, meshPartsWithoutData, parseProject, projectToJson, download, safeFileName, type ExportKind } from './io';
 import { connectBridge } from './bridge';
 import { initCsg } from './csg';
 import { meshAssetFromSoup, meshFormatOf, parseMeshFile } from './meshio';
@@ -571,7 +571,7 @@ dlg.addEventListener('close', () => {
   if (dlg.returnValue !== 'ok') return;
   const clamp = (v: string, def: number) => {
     const n = parseFloat(v);
-    return Number.isFinite(n) ? Math.min(2000, Math.max(20, n)) : def;
+    return Number.isFinite(n) ? Math.min(MAX_BED, Math.max(20, n)) : def;
   };
   store.mutate((p) => {
     p.settings.bedX = clamp($<HTMLInputElement>('set-bedx').value, p.settings.bedX);
