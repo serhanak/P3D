@@ -131,19 +131,44 @@ export function sliceMany(g: THREE.BufferGeometry, axis: 'x' | 'y' | 'z', ats: n
   }
 }
 
+type Bounds = { min: [number, number, number]; max: [number, number, number] };
+
+/** Örtük yüzey ızgarasının nokta sayısı (manifold `levelSet`: eksen başına boy / kenar + 1). */
+export function levelSetCells(bounds: Bounds, edge: number): number {
+  return [0, 1, 2].reduce((n, i) => n * (Math.floor((bounds.max[i] - bounds.min[i]) / edge) + 1), 1);
+}
+
+/**
+ * Izgara üst sınırı: manifold her noktaya double ayırır (2'nin kuvvetine yuvarlanmış); sınır aşılınca WASM "memory access
+ * out of bounds" ile çöker ve modül sonraki her çağrıda bozuk kalır. Çağırmadan önce burada reddedilir.
+ */
+export const LEVEL_SET_MAX_CELLS = 30e6;
+
+/** manifold `levelSet` (ızgara bütçesi denetimli). */
+function levelSet(sdf: (p: [number, number, number]) => number, bounds: Bounds, edge: number, tolerance: number): Manifold {
+  if (!wasm) throw new CsgError('Boolean çekirdeği yüklenmedi.');
+  const cells = levelSetCells(bounds, edge);
+  if (!(cells <= LEVEL_SET_MAX_CELLS)) {
+    throw new CsgError(
+      `Örtük yüzey ızgarası çok büyük (${(cells / 1e6).toFixed(0)} milyon nokta, sınır ${LEVEL_SET_MAX_CELLS / 1e6} milyon): ` +
+        'kenar boyunu büyütün ya da çözünürlüğü düşürün.',
+    );
+  }
+  return wasm.Manifold.levelSet((p) => sdf([p[0], p[1], p[2]]), bounds, edge, 0, tolerance);
+}
+
 /**
  * Örtük yüzeyden kapalı ağ (marching tetrahedra): `sdf` içeride pozitif, dışarıda negatif (yaklaşık mm).
  * `edge` üçgen kenar boyu (çözünürlük), `tolerance` > 0 köşeleri gerçek yüzeye yaklaştırır.
  */
 export function levelSetGeometry(
   sdf: (p: [number, number, number]) => number,
-  bounds: { min: [number, number, number]; max: [number, number, number] },
+  bounds: Bounds,
   edge: number,
   tolerance = -1,
   simplify = 0,
 ): THREE.BufferGeometry {
-  if (!wasm) throw new CsgError('Boolean çekirdeği yüklenmedi.');
-  const man = wasm.Manifold.levelSet((p) => sdf([p[0], p[1], p[2]]), bounds, edge, 0, tolerance);
+  const man = levelSet(sdf, bounds, edge, tolerance);
   // simplify > 0: manifold'un kendi sadeleştirmesi (yüzey < simplify mm oynar, iğne üçgenler temizlenir, kapalı kalır)
   const out = simplify > 0 ? man.simplify(simplify) : man;
   try {
@@ -226,7 +251,7 @@ function regularized(m: Manifold, target: number): Manifold {
  */
 export function hullSolid(
   sdf: (p: [number, number, number]) => number,
-  bounds: { min: [number, number, number]; max: [number, number, number] },
+  bounds: Bounds,
   edge: number,
   profile: Pt2[],
   halfWidth: number,
@@ -236,7 +261,7 @@ export function hullSolid(
   const keep: { delete(): void }[] = [];
   const track = <T extends { delete(): void }>(x: T) => (keep.push(x), x);
   try {
-    const raw = track(wasm.Manifold.levelSet((p) => sdf([p[0], p[1], p[2]]), bounds, edge, 0, 0.02));
+    const raw = track(levelSet(sdf, bounds, edge, 0.02));
     // Önce örtük gövdeyi düzgün üçgenlerle sadeleştir (iğne üçgen bırakmaz), sonra keskin profille kes: kesişim
     // kenarları tam kalır, yüzeyde gölge/kenar gürültüsü olmaz.
     const body = track(regularized(raw, targetTris));

@@ -323,6 +323,16 @@ export function buildGeometry(shape: ShapeType, p: Params, seg: number, geom?: P
   }
 }
 
+/** Geometri üretilemiyorsa (yerine yer tutucu küp çizilecekse) hata mesajı, üretilebiliyorsa null. */
+export function geometryError(shape: ShapeType, p: Params, seg: number, geom?: PartGeom): string | null {
+  try {
+    SHAPE_DEFS[shape].build(p, seg, geom).dispose();
+    return null;
+  } catch (e) {
+    return (e as Error).message;
+  }
+}
+
 /** Sınırlayıcı kutudan genişlik / derinlik / yükseklik ölçü çizgileri (geom şekilleri için). */
 export function bboxDims(b: THREE.Box3): DimLine[] {
   const { min, max } = b;

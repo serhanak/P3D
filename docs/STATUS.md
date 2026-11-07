@@ -1,6 +1,7 @@
 # Proje durumu
 
-> Son güncelleme: **2026-11-02** — v0.4: başka projelerden kullanım ([`EXTERNAL-USE.md`](EXTERNAL-USE.md)): global `p3d`
+> Son güncelleme: **2026-11-07** — `hull` her boyutta üretiliyor (BoltRush raporu: 1 m'lik gövde WASM'ı çökertiyordu; ızgara
+> bütçesi + sınır boşluğu), üretilemeyen geometri artık işlem hatası ve `check` hatası. Önceki: **2026-11-02** — v0.4: başka projelerden kullanım ([`EXTERNAL-USE.md`](EXTERNAL-USE.md)): global `p3d`
 > komutu, `/w/<ad>` çalışma alanları, tarayıcısız çekirdek (`src/api.ts`, `--file`, `apply`, `export`, `p3d run`,
 > görünmez Chrome ile `snapshot --file`), kullanım rehberi (`docs/guide/`) + kullanıcı skill'i; oyun dışa aktarımı (GLB,
 > gruplar/pivot, ayna, `count`, düşük poligon, `check --profile game`). Önceki: v0.3 (2026-10-29) `hull`, çerçeve,
@@ -8,7 +9,7 @@
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (220 test, ~25 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
+1. `npm install` · `npm run typecheck` · `npm test` (223 test, ~25 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
    (README → Kurulum; `p3d status` kurulu skill eskiyse uyarır).
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
@@ -58,6 +59,14 @@
   uygulamanın kendi şekilleriyle** kuruldu (mesh ve loft yok): `hull` tekne + `hull` güverte kuyusu deliği, çerçeveli
   kapı/pencere, yüzeye oturan loça boruları, çatı ekstrüzyon + yan kesimler; 27 parça, 150 kB, `check` temiz,
   birleşik hacim 15,25 cm³ (orijinal 15,55; −%1,9).
+- **Büyük `hull` düzeltmesi (2026-11-07):** ızgara kenarı mutlak mm olduğundan nokta sayısı hacimle büyüyordu (60 mm 1,6 sn,
+  240 mm 56 sn, 1 m'de "memory access out of bounds" + sonraki çağrılarda "null function or function signature mismatch";
+  parça sessizce 5 mm küpe düşüyordu). Şimdi `HULL_MAX_CELLS` (2,5 milyon) aşılınca tablo küçültülüp üretilir, ağ geri
+  büyütülür (60 mm–3 m arası ~1–4 sn). Ayrıca manifold 3.5 `levelSet`'in bir hatası bulundu: yüzey ızgara sınırına bir hücreden
+  yakınken (eski pay 0,2 mm) bazı boyutlarda (ör. 60 × 31 × 27 kutu) WASM içinde çöküyor; sınır boşluğu iki hücreye çıkarıldı
+  (`hullGap`), ızgara `LEVEL_SET_MAX_CELLS` (30 milyon) üstündeyse WASM'a verilmeden reddedilir. Benchy teknesi değişmedi
+  (hacim 10,69 cm³ aynı, kutu farkı 0,04 mm). Üretilemeyen geometri: geom veren `create`/`update` hata döndürür (çekirdek
+  hazırsa), `check` yer tutucuya düşen parçayı hata sayar.
 - **Örtük yüzey ve ölçüm yardımcıları** (`csg.ts`): `levelSetGeometry` (sdf → kapalı ağ, isteğe bağlı manifold
   sadeleştirme), `sliceMany` (bir ağda çok kesit, tek dönüşüm). İçe aktarma sadeleştirmesi `Regularize` ile.
   Testler her örneğin onarımsız yüklendiğini ve kapalı ağ olarak dışa aktarıldığını doğrular.
@@ -104,6 +113,7 @@
 | Görüntü alma (`snapshot`) | ✅ Gerçek sekmede: iso/ön/üst/arka; delik kesimi üstten görüntüde doğrulandı |
 | Claude yeni şema (`geom`, `role`) | ✅ `claude -p` ile: "ortasına 5 mm delik aç + vazo" → silindir `role: hole` + içi boş `revolve` profili (~10 sn). API anahtarıyla denenmedi |
 | 3DBenchy kabul testi | ✅ Orijinal STL referans alınarak çizildi; kutu 60 × 31 × 48 (orijinal 60 × 31 × 48), birleşik hacim −%1,9; `check` temiz; tekne ağında <3° iğne üçgen 19/45 000. Son sürüm sahnede görüntülerle (izo/ön/yan/arka) doğrulandı |
+| Büyük `hull` | ✅ 3 test (`tests/geom.test.ts`: 1 m kutu tablosu tam hacim + `check` temiz, 10 kat eğri tablo = ölçekli kopya, ızgara sınırı WASM'ı bozmadan reddeder). Elle: kutu/eğri tablo 20 mm–3 m, çözünürlük 12/96/192, her biri ayrı süreçte temiz; BoltRush'ın birebir tekrarı (`p3d apply --new` → `scene` → `check`) doğru kutu; 1 m gövdenin görüntüsü tabloya uyuyor. Tarayıcı sekmesinde büyük gövde **denenmedi** |
 | v0.3 özellikleri | ✅ 67 test (tekne şekli: kutu tablosu tam hacim, sıfır genişlikte kapanma, doğrulama; dışa aktarılan örnek tekne kapalı ağ dahil) (örtük yüzey küre hacmi, `sliceMany` = `sliceGeometry`, Regularize iğne üçgen <%1 dahil): yumuşak loft hacmi (daireye yakınsama), uç (koni ≈ πr²h/3), sharp (tam kutu), cuts, çerçeve (kapalı/açık alan), eğik yüzeye dik oturtma, birleşim hacmi, `check` çakışma bulur/temizde susar |
 | OBJ çıktısı | ✅ Her şekil için kapalı/doğru yönlü ağ ve hacim ≈ analitik değer (`tests/io.test.ts`) |
 | Proje kaydet/yükle | ✅ Gidiş-dönüş ve bozuk dosya onarımı testleri; `examples/` dosyaları onarımsız yüklenir |
@@ -137,7 +147,11 @@
 - `place_on_surface` deliksiz yüzeye göre çalışır ve en yakın noktayı kaba kuvvetle arar (çok büyük ağlarda yavaş).
 - Loft, ucunda sıfıra inen ya da topolojisi değişen gövdelerde (tekne başı/kıçı, küpeşte + kuyu) bozuk sonuç verir;
   bu gövdeler için `hull` şekli kullanılmalı.
-- `hull` üretimi yaklaşık 2 sn sürer (tarayıcıda ana iş parçacığında; açılışta ve tablo değişince). Yüzeydeki yumuşak
+- `hull` üretimi ~1–4 sn sürer (tarayıcıda ana iş parçacığında; açılışta ve tablo değişince). Büyük gövdelerde ayrıntı
+  bütçeyle sınırlı (1 m gövdede ızgara ~4 mm; ağ zaten ~60 bin üçgene sadeleşir) ve y'de ~%0,3 asimetri olabilir.
+- manifold WASM'ı bir kez çökerse (`RuntimeError`) modül sekme/süreç boyunca bozuk kalır; tüm boolean/delik/tekne
+  işlemleri sayfa yenilenene (ya da süreç yeniden başlayana) kadar başarısız olur. Kendiliğinden yeniden yükleme yok.
+  Bilinen tetikleyiciler (`levelSet` sınır boşluğu, dev ızgara) kapatıldı. Yüzeydeki yumuşak
   kırılımlar (ör. küpeşte altındaki dikey bant başlangıcı) hafif dalgalı çıkar; birkaç tek tük kısa kenar izi kalabilir.
 - `hull` y'de simetrik ve x boyuncadır (eksen seçimi yok); istasyon kesitleri tek parça (iç boşluk tabloyla değil,
   ikinci bir `hull` delikle).

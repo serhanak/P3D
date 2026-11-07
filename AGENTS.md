@@ -76,8 +76,14 @@ Köprü `server/bridge.ts` (sunucu) ↔ `src/bridge.ts` (tarayıcı, SSE + PUT s
   çöker ve kenarlar bozulur. Konuma göre kaynaklama yalnız three.js ilkellerinin (indissiz) dikiş kopyaları içindir.
 - `hull` tabloyu örtük yüzeye çevirir (`geom.ts` → `hullSdf`, `csg.hullSolid`: önce `Regularize` sadeleştirme, sonra
   yan profil ekstrüzyonuyla kesişim → keskin küpeşte/taban/ayna). Taban yarı genişliği ≥ 1,5 mm olan istasyonda taban
-  keskin kesilir, V istasyonda (≤ 0,5) bodoslama örtük yüzeyin kendisidir. Ağı pahalıdır (~2 sn); `geom.ts` aynı tablo +
+  keskin kesilir, V istasyonda (≤ 0,5) bodoslama örtük yüzeyin kendisidir. Ağı pahalıdır (~1–4 sn); `geom.ts` aynı tablo +
   çözünürlük için önbellekler; çözünürlük 34 segmentin altında sadeleşmez.
+- `hull` ızgarasının kenarı mutlak mm'dir (çözünürlük 96 → 0,35 mm), nokta sayısı hacimle büyür: `HULL_MAX_CELLS`
+  (2,5 milyon) aşılırsa tablo küçültülerek üretilip ağ geri büyütülür (taşma payları ve düz taban/V eşikleri gövdeyle orantılı).
+  Izgara sınırı gövdeden iki hücre uzakta tutulur (`hullGap`): yüzey sınıra bir hücreden yakınken manifold 3.5 `levelSet`
+  bazı hizalamalarda WASM içinde çöker. `csg.levelSet` `LEVEL_SET_MAX_CELLS` üstündeki ızgarayı WASM'a hiç vermez.
+  **WASM çökmesi (`RuntimeError`) modülü süreç/sekme boyunca bozar** ("null function or function signature mismatch");
+  yeni bir örtük yüzey/boolean kullanımı eklerken bu sınırlara uyun.
 - Ağ sadeleştirme `meshoptimizer` + `Regularize` (iğne üçgen bırakmaz); `initCsg()` meshoptimizer'ı da hazırlar.
   `mesh` ve `hull` parçalarında gölge kırılımı ve kenar çizgisi eşiği 50°'dir.
 - Loft: farklı nokta sayılı kesitler yeniden örneklenir, başlangıç alttaki noktaya hizalanır (`loftRings`). Aynalanmış
@@ -191,7 +197,8 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
   `reference`: yalnızca görsel, dışa aktarılmaz, kesilmez. Parça `visible: false` ise delik kesmez;
   `view.showHoles` yalnızca delik görüntüsünü kapatır, kesme sürer.
 - Çerçeve (`frame`) de manifold-3d ister. Geometri üretilemezse `buildGeometry` 5 mm'lik yer tutucu küp döndürür
-  (sahne çizilmeye devam eder, konsola uyarı yazılır).
+  (sahne çizilmeye devam eder, konsola uyarı yazılır). Sessiz kalmaz: çekirdek hazırken geom veren `create`/`update`
+  işlemi üretimi dener ve hata döndürür (`engine.ts` → `geomFor`), `check` yer tutucuya düşen parçayı hata olarak bildirir.
 - manifold-3d WASM'ı kullanılmadan önce `initCsg()` beklenmelidir (tarayıcıda `main.ts` üst düzey await +
   `manifold.wasm?url`; Node'da testler `beforeAll(() => initCsg())`). Yüklenemezse delikler uygulanmaz, uyarı verilir.
   Manifold nesneleri JS çöp toplayıcısına bırakılmaz: `delete()` edin (bkz. `csg.ts`).

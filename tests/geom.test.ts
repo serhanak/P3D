@@ -448,6 +448,41 @@ describe('tekne (endaze) şekli', () => {
     expect(s.box.max.x).toBeLessThanOrEqual(16.01);
   });
 
+  it('büyük gövde (1 m) ızgara bütçesiyle üretilir: kutu tablosu tam hacim, yer tutucuya düşmez', () => {
+    // Eskiden kenar boyu mutlak (0,35 mm) olduğundan ızgara milyarlarca noktaya çıkıp WASM belleğini aşıyordu.
+    const p = project([hull([-500, 0, 500].map((x) => ({ x, keel: 0, sheer: 300, breadth: [250, 250, 250] })))]);
+    const s = solid(p, 'tekne');
+    expect(s.bad).toBe(0);
+    expect(s.vol / (1000 * 500 * 300)).toBeCloseTo(1, 2);
+    expect([s.box.min.x, s.box.max.x, s.box.min.y, s.box.max.y, s.box.min.z, s.box.max.z]).toEqual(
+      [-500, 500, -250, 250, 0, 300].map((v) => expect.closeTo(v, 0)),
+    );
+    expect(checkProject(p).filter((i) => i.level === 'hata')).toEqual([]);
+  }, 30000);
+
+  it('büyük gövde küçüğünün ölçekli kopyasıdır (eğri tablo, 10 kat)', () => {
+    const st = (k: number) => [
+      { x: 0, keel: 1 * k, sheer: 8 * k, breadth: [0, 0, 0] },
+      { x: 15 * k, keel: 0, sheer: 7 * k, breadth: [3 * k, 7 * k, 9 * k] },
+      { x: 45 * k, keel: 0, sheer: 7 * k, breadth: [4 * k, 8 * k, 10 * k] },
+      { x: 60 * k, keel: 0.5 * k, sheer: 7.5 * k, breadth: [3 * k, 6 * k, 7 * k] },
+    ];
+    const small = solid(project([hull(st(1))]), 'tekne');
+    const big = solid(project([hull(st(10))]), 'tekne');
+    expect(big.bad).toBe(0);
+    expect(big.vol / small.vol / 1000).toBeCloseTo(1, 1);
+    const [a, b] = [small.box.getSize(new THREE.Vector3()), big.box.getSize(new THREE.Vector3())];
+    expect([b.x / a.x, b.y / a.y, b.z / a.z]).toEqual([10, 10, 10].map((v) => expect.closeTo(v, 0)));
+  }, 30000);
+
+  it('örtük yüzey ızgarası sınırı aşarsa WASM çağrılmadan reddedilir, çekirdek bozulmaz', () => {
+    const ball = (r: number) => (p: [number, number, number]) => r - Math.hypot(...p);
+    expect(() => levelSetGeometry(ball(500), { min: [-501, -501, -501], max: [501, 501, 501] }, 0.35)).toThrow(/ızgarası çok büyük/);
+    const g = levelSetGeometry(ball(5), { min: [-6, -6, -6], max: [6, 6, 6] }, 0.5);
+    expect(g.getIndex()!.count).toBeGreaterThan(0);
+    g.dispose();
+  });
+
   it('doğrulama: eşit olmayan genişlik sayısı, ters omurga/küpeşte reddedilir', () => {
     const err = (st: { x: number; keel: number; sheer: number; breadth: number[] }[]) => applyOps(newProject(), [hull(st)], null).errors.join(' ');
     expect(err([{ x: 0, keel: 0, sheer: 5, breadth: [1, 2] }, { x: 5, keel: 0, sheer: 5, breadth: [1, 2, 3] }])).toMatch(/aynı \(2\)/);

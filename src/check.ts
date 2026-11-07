@@ -6,6 +6,7 @@ import { partBox } from './engine';
 import { worldMesh } from './io';
 import type { WorldMesh } from './meshio';
 import { exportableParts, holesFor, roleOf, solidGeometry } from './model';
+import { PLACEHOLDER_SIZE, geometryError } from './shapes';
 import type { Part, Project } from './types';
 
 export interface CheckIssue {
@@ -179,6 +180,11 @@ export function checkProject(project: Project, opts: CheckOptions = {}): CheckIs
   const meshes = new Map<string, WorldMesh>();
   const meshOf = (p: Part) => meshes.get(p.id) ?? meshes.set(p.id, worldMesh(project, p)).get(p.id)!;
 
+  // Üretilemeyen geometri yerine çizilen yer tutucu küp ekranda/dosyada parça gibi görünür; açıkça hata olarak bildirilir.
+  for (const p of project.parts.filter((x) => x.visible)) {
+    const err = geometryError(p.shape, p.params, seg, p.geom);
+    if (err) out.push({ level: 'hata', message: `'${p.name}': geometri üretilemedi, yerine ${PLACEHOLDER_SIZE} mm'lik yer tutucu küp çiziliyor (${err}).` });
+  }
   for (const p of solids) {
     const r = solidGeometry(project, p);
     r.geometry.dispose();

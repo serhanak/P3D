@@ -48,7 +48,8 @@ noktalar çevre boyunca sıralıdır. Nokta sayısını makul tutun (çokgen ba�
 - **`hull`** `{kind, stations: [{x, keel, sheer, breadth[]}]}`: x boyunca, y'de simetrik gövde (endaze). `breadth` omurgadan
   küpeşteye eşit aralıklı yarı genişliklerdir, her istasyonda aynı sayı; x artan sırada. İlk/son istasyon düz ayna ile kapanır;
   tüm genişlikleri 0 olan istasyon sivri uçtur. Tekne, kano, gövde, araç kaportası gibi sivrilen gövdeler için. Oyuk (güverte)
-  için ikinci bir `hull` delik. Üretimi ~2 sn sürer.
+  için ikinci bir `hull` delik. Üretimi ~1–4 sn sürer; her boyutta çalışır (1 m üstü gövdeler aynı ızgara bütçesiyle,
+  ayrıntı gövde boyunun ~%0,4'ü). Üretilemeyen geometri işlem hatası olarak döner, `check` de bildirir.
 - Hepsinde `scale` parametresi tüm geometriyi büyütür.
 
 ## Roller ve delikler

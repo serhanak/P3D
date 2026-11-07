@@ -638,26 +638,77 @@ function hullSdf(g: HullGeom): (p: [number, number, number]) => number {
   };
 }
 
-/** Tekne ağı (önbellekli: örtük yüzey pahalıdır; aynı tablo ve çözünürlük için bir kez üretilir). */
+/**
+ * Tekne ızgarasının nokta bütçesi. Kenar boyu mutlak mm olduğundan nokta sayısı gövde hacmiyle büyür (3DBenchy teknesi
+ * çözünürlük 96'da 1,4 milyon, ~1,5 sn; 240 mm'lik gövde 50 milyon, ~1 dk; 1 m'lik gövde WASM belleğini aşıyordu). Çıktı
+ * zaten ~60 bin üçgene sadeleştirildiği için bütçenin üstündeki ayrıntı yalnızca süre ekler; bütçede bile göreli
+ * çözünürlük (kenar / gövde boyu) Benchy'ninkinden incedir.
+ */
+export const HULL_MAX_CELLS = 2.5e6;
+
+/** Tablonun her uzunluğu 1/k ile çarpılmış kopyası. */
+const scaledHull = (g: HullGeom, k: number): HullGeom => ({
+  ...g,
+  stations: g.stations.map((s) => ({ ...s, x: s.x * k, keel: s.keel * k, sheer: s.sheer * k, breadth: s.breadth.map((b) => b * k) })),
+});
+
+/**
+ * Örtük gövde ile ızgara sınırı arasındaki boşluk (mm). Gövde kendi taşma düzlemlerinde kapanır, sınıra gerek yoktur; yüzey
+ * sınıra bir hücreden yakın kalınca (eski düzen: taşma 1 mm, pay 1,2 mm → 0,2 mm) manifold 3.5 `levelSet` bazı
+ * hizalamalarda WASM içinde "memory access out of bounds" ile çöküyordu. İki hücrelik boşlukta çökme görülmedi.
+ */
+const hullGap = (edge: number) => 2 * edge;
+
+/** Tablodan tekne ağı; `edge` örtük yüzey ızgarasının kenar boyu (mm). */
+function hullMesh(g: HullGeom, edge: number): THREE.BufferGeometry {
+  const st = g.stations;
+  const maxB = Math.max(...st.flatMap((s) => s.breadth));
+  const minZ = Math.min(...st.map((s) => s.keel));
+  const maxZ = Math.max(...st.map((s) => s.sheer));
+  const X0 = st[0].x;
+  const X1 = st[st.length - 1].x;
+  // Yan profil: omurga çizgisi kıçtan başa, küpeşte çizgisi geri. V biçimli istasyonlarda omurga çizgisi 1.5 mm
+  // aşağıda (kesmez); düz tabanda tam omurgada (keskin taban kenarı).
+  const profile: Pt2[] = [
+    // taşma olan her istasyonda tam omurgadan keser; yalnız hiç taşmayan V istasyonda aşağıda kalır (en düşük omurgaya kadar)
+    ...st.map((s) => [s.x, Math.max(minZ, s.keel - (bottomOvershoot(s.breadth[0]) > 0 ? 0 : 1.5))] as Pt2),
+    ...st.slice().reverse().map((s) => [s.x, s.sheer] as Pt2),
+  ];
+  // Gövdenin taşma dahil kutusu: x [X0 − 1, X1 + 1], y [−maxB, maxB], z [minZ − 1, maxZ + 1]; ızgara bundan `gap` büyük.
+  const gap = hullGap(edge);
+  const bounds = {
+    min: [X0 - 1 - gap, -maxB - gap, minZ - 1 - gap] as [number, number, number],
+    max: [X1 + 1 + gap, maxB + gap, maxZ + 1 + gap] as [number, number, number],
+  };
+  return hullSolid(hullSdf(g), bounds, edge, profile, maxB + 2);
+}
+
+/**
+ * Tekne ağı (önbellekli: örtük yüzey pahalıdır; aynı tablo ve çözünürlük için bir kez üretilir). Izgara bütçeyi aşan büyük
+ * gövde, tablo küçültülerek aynı kenar boyuyla üretilip geri büyütülür: sonuç küçük gövdenin birebir ölçekli kopyasıdır
+ * (mm cinsinden taşma payları ve düz taban/V eşikleri de gövdeyle orantılı büyür).
+ */
 function hullGeometry(g: HullGeom, seg: number): THREE.BufferGeometry {
   const key = `${seg}|${JSON.stringify(g)}`;
   let cached = hullCache.get(key);
   if (!cached) {
     const st = g.stations;
-    const maxB = Math.max(...st.flatMap((s) => s.breadth));
-    const minZ = Math.min(...st.map((s) => s.keel));
-    const maxZ = Math.max(...st.map((s) => s.sheer));
-    const X0 = st[0].x;
-    const X1 = st[st.length - 1].x;
-    // Yan profil: omurga çizgisi kıçtan başa, küpeşte çizgisi geri. V biçimli istasyonlarda omurga çizgisi 1.5 mm
-    // aşağıda (kesmez); düz tabanda tam omurgada (keskin taban kenarı).
-    const profile: Pt2[] = [
-      // taşma olan her istasyonda tam omurgadan keser; yalnız hiç taşmayan V istasyonda aşağıda kalır (en düşük omurgaya kadar)
-      ...st.map((s) => [s.x, Math.max(minZ, s.keel - (bottomOvershoot(s.breadth[0]) > 0 ? 0 : 1.5))] as Pt2),
-      ...st.slice().reverse().map((s) => [s.x, s.sheer] as Pt2),
-    ];
     const edge = Math.min(1, Math.max(0.15, 34 / seg)); // çözünürlük 96 → 0.35 mm
-    cached = hullSolid(hullSdf(g), { min: [X0 - 1.2, -maxB - 1, minZ - 1.2], max: [X1 + 1.2, maxB + 1, maxZ + 1.2] }, edge, profile, maxB + 2);
+    const size = [
+      st[st.length - 1].x - st[0].x,
+      2 * Math.max(...st.flatMap((s) => s.breadth)),
+      Math.max(...st.map((s) => s.sheer)) - Math.min(...st.map((s) => s.keel)),
+    ];
+    // Küçültülmüş tablonun ızgarası (taşma ve boşluk dahil, bkz. hullMesh) bütçeye sığana kadar büyüt.
+    const gap = hullGap(edge);
+    const cells = (k: number) => ((size[0] / k + 2 + 2 * gap) * (size[1] / k + 2 * gap) * (size[2] / k + 2 + 2 * gap)) / edge ** 3;
+    let k = Math.max(1, Math.cbrt(cells(1) / HULL_MAX_CELLS));
+    while (cells(k) > HULL_MAX_CELLS) k *= 1.05;
+    if (k === 1) cached = hullMesh(g, edge);
+    else {
+      cached = hullMesh(scaledHull(g, 1 / k), edge);
+      cached.scale(k, k, k);
+    }
     if (hullCache.size > 16) hullCache.clear();
     hullCache.set(key, cached);
   }

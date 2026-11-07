@@ -3,7 +3,8 @@ import { ROLES, isGeomShape, type Axis, type GroupDef, type LoftGeom, type MeshG
 import { decodedAsset, getAsset, makeAsset, newAssetId, registerAsset } from './assets';
 import { resolveColor } from './colors';
 import { GeomError, defaultGeom, describeGeom, geometryVolume, loftCommonSections, meshSource, sanitizeGeom } from './geom';
-import { PALETTE, SHAPE_DEFS, buildGeometry, defaultParams, fmt, sanitizeParams, type DimWord, type Params } from './shapes';
+import { csgReady } from './csg';
+import { PALETTE, SHAPE_DEFS, buildGeometry, defaultParams, fmt, geometryError, sanitizeParams, type DimWord, type Params } from './shapes';
 import { fold } from './text';
 import type { Part, Project } from './types';
 
@@ -523,14 +524,23 @@ function cutsFor(part: Part, refs: string[], find: (ref: string) => Part): strin
 }
 
 /** geom doğrulama hatalarını işlem hatasına çevirir. */
-function geomFor(part: Part, raw: unknown): void {
+function geomFor(part: Part, raw: unknown, seg: number): void {
   if (!isGeomShape(part.shape)) throw new OpError(`${SHAPE_DEFS[part.shape].label} şekli geom almaz; ölçüleri params ile verin.`);
+  let geom;
   try {
-    part.geom = sanitizeGeom(part.shape, raw);
+    geom = sanitizeGeom(part.shape, raw);
   } catch (e) {
     if (e instanceof GeomError) throw new OpError(`'${part.name}': ${e.message}`);
     throw e;
   }
+  // Doğrulamadan geçip üretilemeyen geometri (tekne, çerçeve: boolean çekirdeği) sessizce yer tutucu küpe düşmesin. Çekirdek
+  // yüklenmemişse (Node'da initCsg beklenmedi) denenmez: parça sonra tarayıcıda/başka süreçte üretilebilir. Tekne ağı
+  // önbelleğe girer, görünüm yeniden üretmez.
+  if (geom.kind !== 'mesh' && csgReady()) {
+    const err = geometryError(part.shape, part.params, seg, geom);
+    if (err) throw new OpError(`'${part.name}': ${SHAPE_DEFS[part.shape].label.toLocaleLowerCase('tr')} geometrisi üretilemedi: ${err}`);
+  }
+  part.geom = geom;
 }
 
 export function applyOps(project: Project, ops: Op[], selectedId: string | null): ApplyResult {
@@ -613,9 +623,9 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
             visible: true,
           };
           if (isGeomShape(op.shape)) {
-            if (op.geom) geomFor(part, op.geom);
+            if (op.geom) geomFor(part, op.geom, seg);
             else part.geom = defaultGeom(op.shape);
-          } else if (op.geom) geomFor(part, op.geom);
+          } else if (op.geom) geomFor(part, op.geom, seg);
           if (role) setRole(part, role);
           if (op.cuts?.length) {
             const cuts = cutsFor(part, op.cuts, must);
@@ -717,7 +727,7 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           const rot = checkVec(op.rotation, 'döndürme');
           if (op.geom) {
             // Geometri mutlak koordinatlarla verilir; konum korunur (taban sabitleme yok).
-            geomFor(part, op.geom);
+            geomFor(part, op.geom, seg);
             notes.push(`geometri: ${describeGeom(part.geom)}`);
           }
           if (op.params?.length || rot) {
