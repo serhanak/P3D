@@ -27,6 +27,7 @@ Hata olursa çıkış kodu 1.
 | `measure [--file] [--parts a,b]` | Kutu, delikli hacim, birleşik hacim, PLA |
 | `section --axis x\|y\|z --at v1,v2 [--parts] [--file m.p3d.json \| ağ.stl] [--tol 0.1]` | Kesit çokgenleri |
 | `export <çıktı.stl\|3mf\|obj\|glb> [--file] [--parts a,b] [--merge] [--skeleton] [--units m\|mm] [--normals flat\|smooth]` | Dışa aktarım; GLB seçenekleri `p3d guide game` |
+| `sketch [--file] [--json] [--sample 8]` · `sketch --clear [ad] [--file] [--label]` | Kullanıcının ekranda çizdiği eskiz yollarını listeler (tür, nokta, düzlem, kutu, not; `--json` sahne özetindeki gibi, stdout yalnızca JSON) / adı verilen yolu ya da (ad yoksa) tüm eskizi siler; dosyada hata varsa yazmaz (`p3d guide sketch`) |
 | `snapshot --file m.p3d.json [--views] [--size] [--out]` | Görünmez Chrome/Edge ile görüntü (sunucu gerekir; tarayıcı yolu `P3D_CHROME`); ~8 sn |
 
 ## Yalnızca dosya

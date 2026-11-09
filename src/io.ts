@@ -9,6 +9,7 @@ import { build3mf, buildStl, type WorldMesh } from './meshio';
 import { unionGeometries } from './csg';
 import { exportGeometry, exportableParts } from './model';
 import { PALETTE, defaultParams, sanitizeParams } from './shapes';
+import { sanitizeSketch } from './sketch';
 import { buildGlb } from './gltf';
 import { fold } from './text';
 import { newProject, type GroupDef, type Part, type Project } from './types';
@@ -41,8 +42,10 @@ export function meshPartsWithoutData(project: Project): Part[] {
 /**
  * Dosyadan/otomatik kayıttan gelen veriyi doğrular; bilinmeyen alanları atar, eksikleri tamamlar.
  * Okunamayan parçalar atlanır; `dropped` verilirse her biri için "ad: neden" eklenir (sessiz kayıp olmasın).
+ * Okunamayan eskiz yolları da atlanır ama parça kaybı sayılmaz (niyet verisidir; yükleme durmasın): "eskiz 'ad' atlandı:
+ * neden" `warnings` verilmişse oraya, verilmemişse `console.warn`'a yazılır.
  */
-export function parseProject(data: unknown, dropped?: string[]): Project {
+export function parseProject(data: unknown, dropped?: string[], warnings?: string[]): Project {
   if (!data || typeof data !== 'object') throw new Error('Geçersiz proje dosyası.');
   const d = data as Record<string, unknown>;
   if (d.format !== 'p3d') throw new Error('Bu bir P3D proje dosyası değil.');
@@ -133,6 +136,12 @@ export function parseProject(data: unknown, dropped?: string[]): Project {
   });
   const used = groups.filter((g) => base.parts.some((p) => p.group === g.name));
   if (used.length) base.groups = used;
+  // Eskiz yolları (niyet verisi): okunamayan yol atlanır ve uyarı olarak bildirilir; alan yalnızca yol varsa eklenir.
+  const sketch = sanitizeSketch(d.sketch, (msg) => {
+    if (warnings) warnings.push(msg);
+    else console.warn(`[p3d] ${msg}`);
+  });
+  if (sketch.length) base.sketch = sketch;
   return base;
 }
 

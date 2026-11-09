@@ -50,6 +50,11 @@
           <label class="switch" title="Delik parçalarının yarı saydam görüntüsü (gizliyken de keserler)"><input type="checkbox" id="tg-holes" /><span>Delikler</span></label>
         </div>
 
+        <div class="tb-group">
+          <button id="btn-pen" title="Eskiz çiz: kalem aracı (P)">✎ Kalem</button>
+          <label class="switch" title="Eskiz katmanını göster/gizle"><input type="checkbox" id="tg-sketch" checked /><span>Eskiz</span></label>
+        </div>
+
         <div class="tb-group views">
           <button data-view="iso" title="İzometrik görünüm">İzo</button>
           <button data-view="top" title="Üstten görünüm">Üst</button>
@@ -68,6 +73,10 @@
         <div class="panel-head">Parçalar <span id="part-count" class="muted"></span></div>
         <div class="add-row" id="add-row"></div>
         <ul id="part-list" class="part-list"></ul>
+        <div id="sketch-section" class="sketch-section" hidden>
+          <div class="panel-head">Eskiz <span id="sketch-count" class="muted"></span></div>
+          <ul id="sketch-list" class="part-list sketch-list"></ul>
+        </div>
       </aside>
 
       <main class="center">

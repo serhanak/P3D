@@ -13,7 +13,7 @@ global `p3d` komutuyla kullanılır. **Bu dosya yalnızca giriş kapısıdır; a
    başlatın (bu oturum kapanınca sunucu da kapanır; kullanıcıya söyleyin). "Skill: GÜNCEL DEĞİL" görürseniz kullanıcıya
    `p3d skill install` önerin.
 2. **Önce rehberi okuyun:** `p3d guide` (iş akışı ve konu listesi), sonra işe göre `p3d guide <konu>`:
-   `cli`, `ops`, `modeling`, `verify`, `ambiguity`, `workspaces`, `scripts`, `game`.
+   `cli`, `ops`, `modeling`, `verify`, `ambiguity`, `workspaces`, `scripts`, `game`, `sketch`.
 3. Çalışma alanı: proje kökünde `p3d.json` yoksa kullanıcıya sorup oluşturun:
    `{ "workspace": "<proje-adı>", "file": "<model>.p3d.json", "onAmbiguity": "ask-critical" }`. Kök alan (`/`) kullanıcının
    kişisel alanıdır; başka projeler kendi `/w/<ad>` alanında çalışır (`p3d view` tarayıcıda açar).
@@ -28,6 +28,9 @@ global `p3d` komutuyla kullanılır. **Bu dosya yalnızca giriş kapısıdır; a
 - **Kör çizmeyin:** anlamlı her adımdan sonra `p3d snapshot --out <scratchpad>` ve görüntüye Read ile bakın; bitince
   `p3d check` temiz olsun (oyun için `--profile game`).
 - Eğri/eğik yüzey: `extrude` / `revolve` / `loft` / `hull`; delik: `role: "hole"` + `cuts`. Ham mesh üretmeyin.
+- **Eskiz** (`p3d guide sketch`): kullanıcı ekranda kalemle çizdiyse `p3d scene` sonunda `eskiz (N):` satırları ve `p3d snapshot`
+  görüntüsünde yollar görünür. Ayrıntı `p3d sketch` (`--json`). Yollar niyettir, geometri değil: koordinatları konum/yön/profil olarak
+  kullanıp parçaları var olan işlemlerle kurun; iş bitince `p3d sketch --clear "Yol 1"`.
 - Model dosyalarını kullanıcı istemedikçe repoya commit'lemeyin.
 - Başka bir çalışma alanına (özellikle kök `/`) işlem göndermeyin; P3D'nin kaynak kodunu bu projeden değiştirmeyin — araçta
   eksik ya da hata görürseniz kullanıcıya bildirin.

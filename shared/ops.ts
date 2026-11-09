@@ -133,6 +133,47 @@ export interface GroupDef {
   pivot: Vec3;
 }
 
+// ---------------------------------------------------------------------------
+// Eskiz (sketch): kullanıcının 3B görünümde çizdiği yollar. Yalnızca niyet verisidir: geometri üretmez, dışa aktarılmaz,
+// `check`'e girmez. Claude (sahne özeti) ve Claude Code (`p3d scene` / `p3d sketch`) parçaları bu yolları okuyarak var
+// olan işlemlerle kurar.
+
+export interface SketchPoint {
+  /** Dünya koordinatı (mm). */
+  p: Vec3;
+  /** Bezier tutamaçları: `p`'ye GÖRELİ ofset (mm). İkisi de yoksa köşe noktası. */
+  hIn?: Vec3;
+  hOut?: Vec3;
+}
+
+/** Çizim düzlemi: `axis` eksenine dik, o eksende `at` konumunda (ör. {axis: 'z', at: 0} üstten, tabla). */
+export interface SketchPlane {
+  axis: GeomAxis;
+  at: number;
+}
+
+export interface SketchPath {
+  id: string;
+  /** Varsayılan "Yol N"; eskiz yolları arasında benzersiz (büyük/küçük harf ve aksan duyarsız). Parça adlarıyla çakışabilir. */
+  name: string;
+  closed: boolean;
+  plane: SketchPlane;
+  /** 1…1000 nokta. */
+  points: SketchPoint[];
+  /** Kullanıcının kısa notu (≤ 200 karakter); yoksa alan bulunmaz. */
+  note?: string;
+}
+
+/** marker: tek nokta · arrow: açık, iki nokta (p0 → p1) · polygon: kapalı, ≥ 3 nokta · line: diğerleri. */
+export type SketchKind = 'marker' | 'arrow' | 'line' | 'polygon';
+
+export const SKETCH_KIND_LABELS: Record<SketchKind, string> = {
+  marker: 'işaret',
+  arrow: 'ok',
+  line: 'çizgi',
+  polygon: 'kapalı çokgen',
+};
+
 /**
  * Parametre değişikliği. `mode` yalnızca yerel ayrıştırıcı tarafından kullanılır:
  * set = mutlak değer, add = mevcut değere ekle, mul = mevcut değerle çarp.
@@ -212,7 +253,27 @@ export type Op =
       maxTris?: number;
       srcSize?: number;
       srcHash?: string;
-    };
+    }
+  // Eskiz işlemleri yalnızca yerel/köprü kullanım içindir (Claude şemasında yok). `path`: yolun kimliği ya da tam adı.
+  /**
+   * Eskiz yolu ekler. `name` ""/yok = "Yol N". `plane` yoksa noktalardan türetilir (tüm z eşit → z; tüm y eşit → y;
+   * tüm x eşit → x; değilse {axis: 'z', at: en küçük z}).
+   */
+  | { op: 'sketch_add'; name?: string; closed?: boolean; plane?: SketchPlane | null; points: SketchPoint[]; note?: string }
+  /** Alanları değiştirir; verilmeyen (undefined/null) alan değişmez. `note: ""` notu siler. `points` verilirse tamamı değişir. */
+  | {
+      op: 'sketch_update';
+      path: string;
+      name?: string;
+      closed?: boolean | null;
+      plane?: SketchPlane | null;
+      points?: SketchPoint[] | null;
+      note?: string | null;
+    }
+  /** Seçili noktaları (`indices`; yok/boş = tümü) dx, dy, dz kadar taşır; tutamaçlar göreli olduğundan birlikte gider. */
+  | { op: 'sketch_move'; path: string; indices?: number[] | null; dx: number; dy: number; dz: number }
+  /** `path` yok/"" = tüm eskiz yolları silinir. */
+  | { op: 'sketch_delete'; path?: string };
 
 export type OpName = Op['op'];
 
@@ -387,6 +448,25 @@ export interface SceneSummaryPart {
   geom?: PartGeom | { kind: 'mesh'; asset: string; triangles: number; src?: string };
 }
 
+/** Eskiz yolunun sahne özeti (dünya mm, 2 ondalık). */
+export interface SceneSummarySketch {
+  id: string;
+  name: string;
+  kind: SketchKind;
+  closed: boolean;
+  plane: SketchPlane;
+  /** Noktalar (tutamaçlar varsa onlar da, `p`'ye göreli). */
+  points: SketchPoint[];
+  /** Yalnızca eğri (tutamaçlı) yollarda: örneklenmiş noktalar (kapalı yolda ilk nokta tekrarlanmaz). */
+  polyline?: Vec3[];
+  /** arrow/line: uzunluk (mm); polygon: çevre. */
+  length?: number;
+  /** Yalnızca arrow: birim yön (p0 → p1). */
+  direction?: Vec3;
+  bbox: { min: Vec3; max: Vec3 };
+  note?: string;
+}
+
 export interface SceneSummary {
   units: 'mm';
   bed: { x: number; y: number };
@@ -394,6 +474,8 @@ export interface SceneSummary {
   parts: SceneSummaryPart[];
   /** Gruplar ve pivotları (varsa). */
   groups?: GroupDef[];
+  /** Kullanıcının çizdiği eskiz yolları (varsa): niyet verisi, parça değil. */
+  sketch?: SceneSummarySketch[];
 }
 
 export interface NlRequest {

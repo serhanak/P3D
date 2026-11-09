@@ -100,6 +100,10 @@ src/types.ts         Part / Project tipleri, newProject()
 src/shapes.ts        Şekil tanımları: parametreler, takma adlar, geometri, ölçü çizgileri, analitik hacim, kısıtlar
 src/geom.ts          extrude/revolve/loft/mesh: geom doğrulama (sanitizeGeom), kapalı ağ üretimi, varsayılanlar
 src/assets.ts        İçe aktarılmış ağ deposu (base64 Float32/Uint32); projede yalnızca kimlik tutulur
+src/sketch.ts        Eskiz (niyet verisi) saf yardımcıları: tür, Bezier örnekleme, düzlem, profil eşlemesi, dosya doğrulama, özet
+src/sketch-edit.ts   Kalem aracının saf matematiği: ışın–düzlem, eksen kilidi, yakalama, tutamaç, nokta taşıma (test edilir)
+src/sketch-view.ts   Eskizin three.js çizimi (yollar, oklar, ad sprite'ları, düzlem ızgarası); snapshot'a girer
+src/sketch-tool.ts   Kalem aracı (DOM): çizim, nokta seçme/taşıma, eksen kilidi, sayısal giriş, yüzen eskiz çubuğu
 src/csg.ts           manifold-3d: başlatma (initCsg), çıkarma (delik), hacim, düzlem kesiti
 src/model.ts         Parçanın son geometrisi (delikler çıkarılmış): görünüm, dışa aktarım ve hacim ortak
 src/meshio.ts        STL/OBJ/3MF okuma (+ kaynak, sadeleştirme, merkezleme), STL/3MF yazma
@@ -138,7 +142,8 @@ tests/               parser.test.ts (ayrıştırıcı+motor), io.test.ts (OBJ ma
                      game.test.ts (GLB, gruplar/pivot, ayna, count, check game), api.test.ts (kararlı yüzey, dosya
                      yardımcıları, ağ src), cli.test.ts (p3d komutu alt süreçle: run, apply, export, --file, guide),
                      bridge.test.ts (köprü protokolü gerçek http sunucusuyla, open/save korumaları),
-                     workspace.test.ts (ws adı, p3d.json keşfi, kök kayıt biçimi, Store), guide.test.ts (rehber kapsamı)
+                     workspace.test.ts (ws adı, p3d.json keşfi, kök kayıt biçimi, Store), guide.test.ts (rehber kapsamı),
+                     sketch.test.ts (eskiz Op'ları, özet, örnekleme, dosya, Store seçimi), sketch-edit.test.ts (kalem matematiği)
 examples/            Örnek .p3d.json projeleri (Aç… ile yüklenir); io.test.ts hepsinin onarımsız yüklendiğini doğrular
 examples/tools/      Örnek üreteçleri (tsx ile çalışır, tsconfig dışı): build-3dbenchy.ts referans STL'den Benchy'yi kurar
 docs/STATUS.md       Güncel durum, doğrulama durumu, bilinen sorunlar, yol haritası
@@ -215,6 +220,13 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
   değişmiş" uyarısı (gömülü ağ varsa o kullanılır). Sahne özetine (Claude/köprü) `src`'nin yalnızca dosya adı girer.
   `export` bir parçanın kaynak dosyasının üzerine yazmaz.
 
+**Eskiz (`Project.sketch`)**
+- Niyet verisidir: geometri üretmez, dışa aktarılmaz, `check`'e girmez. Boşken alan hiç bulunmaz (gruplar gibi); adlar ("Yol N")
+  yalnızca eskiz yolları arasında benzersizdir. Eskiz işlemleri (`sketch_add/update/move/delete`) yalnızca yerel/köprüdür,
+  `RESPONSE_SCHEMA`'da yoktur; Claude ve köprü eskizi `SceneSummary.sketch` ile okur. Tutamaçlar noktaya görelidir.
+  Eskiz görünürlüğü yalnızca bellektedir (`Project.view`'a alan eklenmez). Eskiz → geometri dönüşümü bilinçli olarak yok
+  (STATUS yol haritası 10).
+
 **Gruplar**
 - Üyelik parçada tutulur (`Part.group`), grup tanımı `Project.groups` (`{name, pivot}`); ikisi de opsiyoneldir, yoksa
   `parseProject` alan eklemez. Boş grup tutulmaz (`pruneGroups`). Parça ve grup adları tek ad alanıdır (çakışamaz).
@@ -278,6 +290,8 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
 - `CSS2DObject` DOM öğeleri, nesnenin ebeveyni sahneden çıkarılınca kendiliğinden silinmez;
   `viewer.ts` bunları `clearDims()` / `disposeEntry()` içinde elle siler. Yeni etiket eklerken aynısını yapın.
 - Geometri/malzeme `dispose()` edilmeden atılmaz.
+- Eskiz adları WebGL `Sprite`'tır (CSS etiketi değil; `snapshot` görüntüsüne girsin diye), piksel ölçeği `onBeforeRender`'da
+  kameradan hesaplanır. Doku önbelleği `SketchView` içinde temizlenir; sprite'ların paylaşılan geometrisi dispose edilmez.
 
 ## Nasıl yapılır
 

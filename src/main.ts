@@ -9,6 +9,7 @@ import { initCsg } from './csg';
 import { meshAssetFromSoup, meshFormatOf, parseMeshFile } from './meshio';
 import { askClaude, fetchLlmStatus, type LlmStatus } from './nlp/llm';
 import { HELP_TEXT, parseCommand } from './nlp/parser';
+import { SketchTool } from './sketch-tool';
 import { Store } from './store';
 import { newProject, type Project } from './types';
 import { mountPanels } from './ui';
@@ -62,9 +63,11 @@ let initial: Project | null = null;
 let unreadable = restored?.error ?? '';
 /** Kayıt okundu ama bazı parçaları atlandı ("ad: neden"). */
 const droppedOnRestore: string[] = [];
+/** Kayıttan atlanan eskiz yolları (yalnızca bilgi: kayıt yedeğe alınmaz, sekme kirli sayılmaz). */
+const restoreNotes: string[] = [];
 if (restored && !unreadable) {
   try {
-    initial = parseProject(restored.project, droppedOnRestore);
+    initial = parseProject(restored.project, droppedOnRestore, restoreNotes);
     const raw = (restored.project as { parts?: unknown } | null)?.parts;
     const lost = (Array.isArray(raw) ? raw.length : 0) - initial.parts.length;
     if (lost > 0 && !droppedOnRestore.length) droppedOnRestore.push(`${lost} parça (neden bilinmiyor)`);
@@ -178,15 +181,24 @@ function logResult(res: ApplyResult, badge?: Badge): void {
 // ---------------------------------------------------------------------------
 // Paneller ve senkronizasyon
 
-const applyFromUi = (ops: Op[]) => {
+const applyFromUi = (ops: Op[]): ApplyResult => {
   const res = store.apply(ops);
   if (res.errors.length) toast(res.errors[0], true);
+  return res;
 };
-const renderPanels = mountPanels(store, applyFromUi);
+// Kalem aracı (eskiz): görünümde çizim/düzenleme; değişiklikler işlem olarak applyFromUi'den geçer.
+const sketchTool = new SketchTool(viewer, store, {
+  apply: applyFromUi,
+  log: addLog,
+  onActiveChange: (active) => $('btn-pen').classList.toggle('active', active),
+});
+const renderPanels = mountPanels(store, applyFromUi, { onPen: () => sketchTool.open() });
 
 function render(): void {
+  sketchTool.refresh(); // eskiz seçim durumu viewer.sync'ten önce
   viewer.sync(store.project, store.selectedId);
   renderPanels();
+  $('btn-pen').classList.toggle('active', sketchTool.active);
   ($('tg-names') as HTMLInputElement).checked = store.project.view.showNames;
   ($('tg-dims') as HTMLInputElement).checked = store.project.view.showDimensions;
   ($('tg-holes') as HTMLInputElement).checked = store.project.view.showHoles;
@@ -362,7 +374,8 @@ const startBridge = () => connectBridge(store, viewer, ws, {
   onLoad: (cmd) => {
     if (cmd.label) addLog('user', cmd.label, 'Claude Code');
     const dropped: string[] = [];
-    const project = parseProject({ ...(cmd.project as object), assets: cmd.assets ?? {} }, dropped);
+    const notes: string[] = [];
+    const project = parseProject({ ...(cmd.project as object), assets: cmd.assets ?? {} }, dropped, notes);
     // Dosyadaki her şey yüklenemediyse (`p3d open --force`) sekme dosyayla aynı değildir: kirli kalır.
     const partial = cmd.dirty === true || dropped.length > 0;
     store.replace(project, cmd.file, partial);
@@ -377,6 +390,8 @@ const startBridge = () => connectBridge(store, viewer, ws, {
       clearSelection: true,
     };
     logResult(res, cmd.label ? undefined : 'Claude Code');
+    // Atlanan eskiz yolları yalnızca bilgidir: sekme bu yüzden "kaydedilmemiş" sayılmaz.
+    for (const w of notes) addLog('warn', `⚠ ${w}`);
     return res;
   },
   onMarkSaved: (file, digest, label) => {
@@ -402,6 +417,7 @@ viewer.onWarning = (m) => addLog('warn', '⚠ ' + m);
 // (yenilenen sayfa boş açılmasın).
 if (droppedOnRestore.length && autosaveOn) autosave.save({ project: store.project, file: store.file, dirty: true }, store.onWarning);
 if (restoreWarning) addLog('warn', '⚠ ' + restoreWarning);
+for (const w of restoreNotes) addLog('warn', `⚠ Otomatik kayıt: ${w}`);
 if (unreadable) toast('Otomatik kayıt okunamadı; ayrıntı günlükte.', true);
 if (droppedOnRestore.length) toast(`Otomatik kayıttaki ${droppedOnRestore.length} parça okunamadı; ayrıntı günlükte.`, true);
 if (csgError) addLog('warn', `⚠ Delik (boolean) çekirdeği yüklenemedi; delik parçaları kesmeyecek. (${csgError})`);
@@ -443,6 +459,8 @@ $('tg-dims').addEventListener('change', (e) =>
 $('tg-holes').addEventListener('change', (e) =>
   store.apply([{ op: 'view', show_holes: (e.target as HTMLInputElement).checked }]),
 );
+$('btn-pen').addEventListener('click', () => sketchTool.toggle());
+$('tg-sketch').addEventListener('change', (e) => sketchTool.setVisible((e.target as HTMLInputElement).checked));
 document.querySelectorAll<HTMLButtonElement>('[data-view]').forEach((b) =>
   b.addEventListener('click', () => viewer.setPreset(b.dataset.view as ViewPreset, store.project)),
 );
@@ -498,12 +516,14 @@ fileInput.addEventListener('change', async () => {
   if (!file) return;
   try {
     const dropped: string[] = [];
-    const project = parseProject(JSON.parse(await file.text()), dropped);
+    const notes: string[] = [];
+    const project = parseProject(JSON.parse(await file.text()), dropped, notes);
     const prev = store.file;
     store.load(project);
     viewer.fit(store.project);
     addLog('info', `“${file.name}” yüklendi (${project.parts.length} parça).`);
     for (const d of dropped) addLog('warn', `⚠ Yüklenemedi: ${d}`);
+    for (const w of notes) addLog('warn', `⚠ ${w}`);
     // Ağı yolla anılan (src) parçalar tarayıcıda okunamaz: yer tutucu küp sessiz kalmasın.
     const noData = meshPartsWithoutData(project).map((p) => {
       const src = p.geom?.kind === 'mesh' ? p.geom.src : undefined;
@@ -601,10 +621,15 @@ document.addEventListener('keydown', (e) => {
   } else if (ctrl && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) {
     e.preventDefault();
     redo();
+  } else if (e.key === 'Delete' && store.selectedSketchId) {
+    // Kalem açıkken Delete'i kalem aracı tüketir (sketch-tool.ts, yakalama aşaması).
+    applyFromUi([{ op: 'sketch_delete', path: store.selectedSketchId }]);
   } else if (e.key === 'Delete' && store.selectedId) {
     store.apply([{ op: 'delete', part: store.selectedId }]);
   } else if (e.key === 'Escape') {
-    store.select(null);
+    store.select(null); // parça ve eskiz seçimini kaldırır
+  } else if ((e.key === 'p' || e.key === 'P') && !ctrl && !e.altKey) {
+    sketchTool.toggle();
   } else if (e.key === 'f' || e.key === 'F') {
     viewer.fit(store.project);
   } else if (e.key === '/') {

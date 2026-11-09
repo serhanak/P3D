@@ -34,6 +34,10 @@
 //              [--normals flat|smooth]   --merge STL/3MF için; --skeleton/--units/--normals GLB için
 //   p3d snapshot --file m.p3d.json [--views …] [--size …] [--dims] [--out klasör]   makinedeki Chrome/Edge'i
 //                                      (P3D_CHROME) görünmez açar, geçici bir ws'de görüntü alır; sunucu açık olmalı
+//   p3d sketch [--file m.p3d.json] [--json] [--sample 8]   kullanıcının çizdiği eskiz yollarını listeler (dünya mm;
+//                                      --json: sahne özetindeki gibi, --sample eğri kenar başına örnek)
+//   p3d sketch --clear [ad] [--file m.p3d.json] [--label "metin"]   adı verilen yolu / tüm eskizi siler (dosyada:
+//                                      hata varsa yazılmaz)
 //
 // Yalnızca dosya:
 //   p3d apply --file m.p3d.json [--ops ops.json] [--out başka.p3d.json] [--force] [--dry-run] [--new] [--embed] [--label "metin"]
@@ -55,6 +59,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
+  SKETCH_KIND_LABELS,
   contentDigest,
   wsLabel,
   wsPath,
@@ -65,6 +70,7 @@ import {
   type Pt2,
   type SceneSummary,
   type SceneSummaryPart,
+  type SceneSummarySketch,
   type SnapshotView,
 } from '../shared/ops.ts';
 import type { CheckOptions } from '../src/check.ts';
@@ -126,7 +132,7 @@ const list = (name: string) => flag(name)?.split(',').map((s) => s.trim()).filte
 
 const VALUE_FLAGS = new Set([
   '--label', '--views', '--size', '--out', '--name', '--role', '--color', '--max-tris', '--parts', '--axis', '--at', '--file',
-  '--tol', '--ops', '--profile', '--units', '--normals',
+  '--tol', '--ops', '--profile', '--units', '--normals', '--sample',
 ]);
 /** Bayrak olmayan argümanlar (dosya yolları). */
 function positionals(): string[] {
@@ -410,6 +416,120 @@ function printScene(s: SceneSummary): void {
     console.log(`gruplar (${s.groups.length}):`);
     for (const g of s.groups) console.log(`  ${g.name} pivot=${vec(g.pivot)} · ${s.parts.filter((p) => p.group === g.name).length} parça`);
   }
+  // Kullanıcının çizdiği eskiz yolları (niyet verisi; ayrıntı: p3d sketch).
+  if (s.sketch?.length) {
+    console.log(`eskiz (${s.sketch.length}):`);
+    for (const k of s.sketch) {
+      const note = k.note ? ` · ${JSON.stringify(k.note)}` : '';
+      console.log(`  ${k.name} · ${SKETCH_KIND_LABELS[k.kind]} · ${k.points.length} nokta · ${k.plane.axis} = ${n(k.plane.at)}${note}`);
+    }
+  }
+}
+
+/** Eskiz noktası / yönü: (x, y, z). */
+const pt = (v: { x: number; y: number; z: number }) => `(${n(v.x)}, ${n(v.y)}, ${n(v.z)})`;
+const span = (lo: number, hi: number) => (n(lo) === n(hi) ? n(lo) : `${n(lo)}…${n(hi)}`);
+/** Metin listesinde yol başına gösterilen en çok nokta (tümü: --json). */
+const SKETCH_POINTS_SHOWN = 40;
+
+/** `p3d sketch` metin çıktısı: yol başına özet satırı, çizgi/çokgende nokta satırı, eğride polyline notu. */
+function printSketch(list: SceneSummarySketch[] | undefined): void {
+  if (!list?.length) {
+    console.log('eskiz yok.');
+    return;
+  }
+  console.log(`eskiz (${list.length} yol):`);
+  for (const s of list) {
+    const bits = [s.name, SKETCH_KIND_LABELS[s.kind]];
+    if (s.kind === 'marker') bits.push(pt(s.points[0].p));
+    else if (s.kind === 'arrow') {
+      bits.push(`${n(s.length ?? 0)} mm`);
+      if (s.direction) bits.push(`yön ${pt(s.direction)}`);
+      bits.push(`${pt(s.points[0].p)} → ${pt(s.points[1].p)}`);
+    } else {
+      const b = s.bbox;
+      bits.push(
+        `${s.points.length} nokta`,
+        `${s.kind === 'polygon' ? 'çevre' : 'uzunluk'} ${n(s.length ?? 0)} mm`,
+        `düzlem ${s.plane.axis} = ${n(s.plane.at)}`,
+        `kutu x ${span(b.min.x, b.max.x)}, y ${span(b.min.y, b.max.y)}, z ${span(b.min.z, b.max.z)}`,
+      );
+    }
+    if (s.note) bits.push(`not: ${JSON.stringify(s.note)}`);
+    console.log(`  ${bits.join(' · ')}`);
+    if (s.kind === 'line' || s.kind === 'polygon') {
+      const more = s.points.length - SKETCH_POINTS_SHOWN;
+      console.log(`    ${s.points.slice(0, SKETCH_POINTS_SHOWN).map((q) => pt(q.p)).join(' ')}${more > 0 ? ` … (+${more} nokta; tümü: --json)` : ''}`);
+    }
+    if (s.polyline) console.log(`    eğri (tutamaçlı); polyline ${s.polyline.length} nokta — tümü: p3d sketch --json`);
+  }
+}
+
+/** `p3d sketch [--file] [--json] [--sample N]`: eskiz yollarını listeler (dosya ya da çalışma alanı sekmesi). */
+async function listSketch(): Promise<void> {
+  const json = has('--json');
+  const raw = flag('--sample');
+  const seg = raw === undefined ? undefined : Number(raw);
+  if (seg !== undefined && (!Number.isInteger(seg) || seg < 1 || seg > 64)) throw new Error(`--sample 1–64 arası bir tam sayı olmalı ('${raw}').`);
+  // --json'da stdout yalnızca JSON kalsın (betikler okuyabilsin); başlık ve notlar stderr'e.
+  const out = json ? console.error : console.log;
+  let list: SceneSummarySketch[] | undefined;
+  const file = projectFileFlag('sketch');
+  if (file) {
+    const loaded = await readProjectFile(file, false);
+    out(`dosya: ${file}`);
+    printLoadNotes(loaded, json);
+    const { sketchSummary } = await import('../src/sketch.ts');
+    list = sketchSummary(loaded.project, seg);
+  } else if (seg === undefined) {
+    // Sekmenin bildirdiği sahne özeti (varsayılan örnekleme) yeter.
+    const r = await getScene();
+    out(sceneHeader(r));
+    list = (r.scene as SceneSummary).sketch;
+  } else {
+    const r = await getScene({ full: true });
+    out(sceneHeader(r));
+    const { project, dropped } = await parseTabProject(r.scene);
+    printLoadNotes({ dropped, warnings: [] }, json);
+    const { sketchSummary } = await import('../src/sketch.ts');
+    list = sketchSummary(project, seg);
+  }
+  if (json) console.log(JSON.stringify(list ?? [], null, 2));
+  else printSketch(list);
+}
+
+/** `p3d sketch --clear [ad]`: yolu / tüm eskizi siler. Dosyada `apply` kuralları: hata ya da okunamayan parça varsa yazılmaz. */
+async function clearSketch(): Promise<void> {
+  const ref = positionals()[0] ?? '';
+  const ops: Op[] = [{ op: 'sketch_delete', ...(ref ? { path: ref } : {}) }];
+  const file = projectFileFlag('sketch');
+  if (!file) {
+    printResult(await post({ ops, label: flag('--label') ?? (ref ? `Eskiz yolunu sil: ${ref}` : 'Eskizi temizle') }));
+    return;
+  }
+  if (!statOf(file)?.isFile()) throw new Error(`Dosya bulunamadı: ${file}`);
+  const loaded = await readProjectFile(file, true);
+  printLoadNotes(loaded);
+  const label = flag('--label');
+  if (label) console.log(`İşlem: ${label}`);
+  const { applyOps } = await import('../src/engine.ts');
+  const before = JSON.stringify(loaded.project);
+  const res = applyOps(loaded.project, ops, null);
+  for (const m of res.messages) console.log(`✓ ${m}`);
+  for (const m of res.errors) console.log(`✕ ${m}`);
+  if (res.errors.length) {
+    process.exitCode = 1;
+    console.log(`✕ ${file} yazılmadı (dosya değişmedi).`);
+    return;
+  }
+  if (JSON.stringify(loaded.project) === before) {
+    console.log(`Değişiklik yok; ${file} yazılmadı.`);
+    return;
+  }
+  const { saveProjectFile } = await import('../src/files.ts');
+  const saved = saveProjectFile(loaded.project, file);
+  for (const w of saved.warnings) console.log(`⚠ ${w}`);
+  console.log(`✓ Kaydedildi: ${saved.file} (${saved.parts} parça${saveNote(saved)})`);
 }
 
 function printResult(r: BridgeResult): void {
@@ -698,6 +818,8 @@ const USAGE = [
   '  section --axis x|y|z --at v1,v2 [--parts a,b] [--file m.p3d.json | ağ.stl|obj|3mf] [--tol 0.1]',
   '  export <çıktı.stl|3mf|obj|glb> [--file m.p3d.json] [--parts a,b] [--merge] [--skeleton] [--units m|mm] [--normals flat|smooth]',
   '  snapshot --file m.p3d.json [--views …] [--size …] [--dims] [--out klasör]   (görünmez Chrome/Edge; P3D_CHROME)',
+  '  sketch [--file m.p3d.json] [--json] [--sample 8]   (kullanıcının çizdiği eskiz yolları)',
+  '  sketch --clear [ad] [--file m.p3d.json] [--label "metin"]   (ad yoksa tüm eskiz silinir)',
   '',
   'Yalnızca dosya:',
   '  apply --file m.p3d.json [--ops ops.json | stdin] [--out başka.p3d.json] [--force] [--dry-run] [--new] [--embed] [--label "metin"]',
@@ -709,7 +831,8 @@ const USAGE = [
 ].join('\n');
 
 async function main(): Promise<void> {
-  if (TAB_MUTATING.has(cmd)) guardRoot();
+  // `sketch` yalnızca --clear ile ve sekmeye giderken sahneyi değiştirir.
+  if (TAB_MUTATING.has(cmd) || (cmd === 'sketch' && has('--clear') && flag('--file') === undefined)) guardRoot();
   switch (cmd) {
     case 'status':
       return status();
@@ -947,6 +1070,8 @@ async function main(): Promise<void> {
     case 'measure':
     case 'section':
       return measureOrSection(cmd);
+    case 'sketch':
+      return has('--clear') ? clearSketch() : listSketch();
     case 'export': {
       const outArg = positionals()[0];
       if (!outArg) throw new Error('Çıktı dosyası gerekli: export <çıktı.stl|3mf|obj|glb> [--file m.p3d.json]');

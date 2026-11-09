@@ -710,3 +710,211 @@ dialog::backdrop {
 .geom-input:invalid {
   border-color: var(--err);
 }
+
+/* ---------------------------------------------------------------- eskiz (kalem aracı) */
+
+button.active {
+  border-color: var(--accent);
+  background: #22344f;
+  color: var(--accent-2);
+}
+button.active:hover:not(:disabled) {
+  border-color: var(--accent-2);
+  background: #283d5c;
+}
+.viewport.pen canvas {
+  cursor: crosshair;
+}
+.viewport.pen.pen-hover canvas {
+  cursor: move;
+}
+.sketch-bar {
+  position: absolute;
+  top: 8px;
+  /* left + right + auto kenar boşluğu: içerik genişliğinde ortalanır (left: 50% genişliği yarıya sınırlıyordu). */
+  left: 8px;
+  right: 8px;
+  margin: 0 auto;
+  width: fit-content;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: calc(100% - 16px);
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(29, 32, 39, 0.92);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+  font-size: 12px;
+}
+.sketch-bar[hidden],
+.sketch-bar [hidden] {
+  display: none !important;
+}
+/* Salt okunur uyarı bandı da üst ortada: çubuk onun altına iner. */
+.viewport:has(.ro-banner) .sketch-bar {
+  top: 56px;
+}
+.sketch-bar .sb-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.sketch-bar .sb-move {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.sketch-bar .sb-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.sketch-bar input[type='number'] {
+  width: 70px;
+  padding: 2px 6px;
+}
+.sketch-bar input[type='checkbox'] {
+  margin: 0;
+}
+.sketch-bar button {
+  padding: 2px 8px;
+}
+.sketch-bar .seg {
+  display: inline-flex;
+}
+.sketch-bar .seg button {
+  border-radius: 0;
+  margin-left: -1px;
+}
+.sketch-bar .seg button:first-child {
+  border-radius: var(--radius) 0 0 var(--radius);
+  margin-left: 0;
+}
+.sketch-bar .seg button:last-child {
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.axis-btn.active {
+  position: relative;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+.axis-btn.ax-x.active {
+  background: #b8433c;
+  border-color: #e5534b;
+}
+.axis-btn.ax-y.active {
+  background: #3f7f43;
+  border-color: #57ab5a;
+}
+.axis-btn.ax-z.active {
+  background: #3a72b8;
+  border-color: #539bf5;
+}
+.sketch-bar .sb-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+}
+.sketch-bar .sb-buf {
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #3a3018;
+  color: var(--warn);
+  font-variant-numeric: tabular-nums;
+}
+.sketch-bar .sb-close {
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: var(--muted);
+}
+.sketch-bar .sb-hint {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sketch-section {
+  border-top: 1px solid var(--border);
+}
+.sketch-section[hidden] {
+  display: none;
+}
+.sketch-list {
+  flex: none;
+}
+.sketch-list .pl-name {
+  display: flex;
+  flex-direction: column;
+}
+.sk-kind {
+  width: 18px;
+  text-align: center;
+  color: #ff7ac8;
+}
+.sketch-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+}
+.sketch-note-input {
+  width: 100%;
+  resize: vertical;
+  margin-bottom: 8px;
+}
+.plane-input {
+  display: grid;
+  grid-template-columns: 46px 1fr;
+  gap: 4px;
+}
+.plane-input input,
+.plane-input select {
+  width: 100%;
+}
+.pt-table {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.pt-row {
+  display: grid;
+  grid-template-columns: 34px repeat(3, minmax(0, 1fr)) 22px;
+  align-items: center;
+  gap: 3px;
+}
+.pt-row input {
+  width: 100%;
+  padding: 2px 4px;
+  font-size: 12px;
+}
+.pt-row.pt-head {
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+.pt-i {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.pt-curve {
+  font-size: 9px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: #3a2440;
+  color: #ff7ac8;
+}

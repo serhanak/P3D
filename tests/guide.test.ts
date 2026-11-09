@@ -34,7 +34,7 @@ describe('rehber kapsamı (docs/guide)', () => {
   });
 
   it('skill ve index yalnızca var olan konulara yönlendirir', () => {
-    const topics = ['cli', 'ops', 'modeling', 'verify', 'ambiguity', 'workspaces', 'scripts', 'game'];
+    const topics = ['cli', 'ops', 'modeling', 'verify', 'ambiguity', 'workspaces', 'scripts', 'game', 'sketch'];
     for (const t of topics) expect(() => read(`../docs/guide/${t}.md`)).not.toThrow();
     const index = read('../docs/guide/index.md');
     for (const t of topics) expect(index).toContain(`| \`${t}\``);

@@ -31,7 +31,7 @@ describe('src/api.ts yüzeyi', () => {
       'mergedMesh', 'projectToJson', 'parseProject', 'buildStl', 'meshAssetFromSoup', 'parseMeshFile', 'baseIndexed',
       'exportGeometry', 'exportableParts', 'roleOf', 'solidVolume', 'registerAsset', 'decodedAsset', 'worldMesh', 'sliceMany',
       'buildGlb', 'loadProjectFile', 'saveProjectFile', 'exportFile', 'sceneSummary', 'build3mf', 'getAsset', 'usedAssets',
-      'readMeshFile',
+      'readMeshFile', 'samplePath', 'sketchKind', 'pathProfile', 'toPlane2D', 'isPlanar',
     ];
     for (const f of fns) expect(typeof (api as Record<string, unknown>)[f], f).toBe('function');
     expect(new api.THREE.Vector3(3, 4, 0).length()).toBe(5);

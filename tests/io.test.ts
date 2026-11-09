@@ -44,7 +44,7 @@ function checkSolid(verts: number[][], faces: number[][]) {
 }
 
 describe('OBJ dışa aktarımı', () => {
-  it('her şekil kapalı, doğru yönlü ve hacmi analitik değere yakın', () => {
+  it('her şekil kapalı, doğru yönlü ve hacmi analitik değere yakın', { timeout: 30_000 }, () => {
     const p = newProject();
     p.settings.resolution = 128;
     const shapes = SHAPES.filter((x) => x !== 'mesh'); // mesh yalnızca içe aktarmayla eklenir

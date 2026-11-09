@@ -9,7 +9,8 @@ dışa aktarılır. Bu makinede `p3d` komutuyla her klasörden kullanılır; tar
 2. **Alan ve dosya:** projenizin kökünde `p3d.json` (`{"workspace": "...", "file": "model.p3d.json"}`); alanı `p3d view` ile açın,
    var olan modeli `p3d open` ile yükleyin (`workspaces`).
 3. **Belirsizlik ön kontrolü:** çizmeden önce kritik/kozmetik belirsizlikleri çıkarın (`ambiguity`).
-4. **Ölçüyü sahneden alın:** `p3d scene` (bbox'lar), gerekirse `section` / `measure`.
+4. **Ölçüyü sahneden alın:** `p3d scene` (bbox'lar), gerekirse `section` / `measure`. Kullanıcı ekranda çizerek tarif
+   ettiyse eskizi okuyun: `p3d sketch` (`sketch`).
 5. **Çizin:** `p3d ops` (sekme) ya da `p3d apply --file` (dosya) ya da `p3d run betik.mts` (betik) — işlemler: `ops`,
    kurallar: `modeling`.
 6. **Görün ve ölçün:** her anlamlı adımdan sonra `p3d snapshot --out <geçici klasör>` + görüntüye bakın; `measure`, `check`
@@ -27,6 +28,7 @@ dışa aktarılır. Bu makinede `p3d` komutuyla her klasörden kullanılır; tar
 | `ambiguity` | Belirsizlik protokolü ve rapor biçimi |
 | `workspaces` | Çalışma alanları, `p3d.json`, open/save, birden çok oturum |
 | `scripts` | `p3d run` ve `import from 'p3d'` ile betikle üretim |
+| `sketch` | Eskiz: kullanıcının ekranda çizdiği yollar (niyet verisi); okuma, profile/yöne/konuma çevirme, temizleme |
 | `game` | GLB, Unreal, düşük poligon, gruplar/pivot, ayna |
 
 ## Temel kurallar

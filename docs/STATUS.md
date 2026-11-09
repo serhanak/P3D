@@ -1,6 +1,7 @@
 # Proje durumu
 
-> Son güncelleme: **2026-11-07** — `hull` her boyutta üretiliyor (BoltRush raporu: 1 m'lik gövde WASM'ı çökertiyordu; ızgara
+> Son güncelleme: **2026-11-09** — eskiz katmanı: kalem aracıyla ekranda çizerek niyet tarifi (`Project.sketch`, `sketch_*` işlemleri,
+> `p3d sketch`, snapshot'ta görünür; eskiz → geometri dönüşümü bilinçli olarak yok). Önceki: **2026-11-07** — `hull` her boyutta üretiliyor (BoltRush raporu: 1 m'lik gövde WASM'ı çökertiyordu; ızgara
 > bütçesi + sınır boşluğu), üretilemeyen geometri artık işlem hatası ve `check` hatası; `hull` için `geom.maxTris` üçgen
 > bütçesi (oyun varlığı, BoltRush isteği #7). Önceki: **2026-11-02** — v0.4: başka projelerden kullanım ([`EXTERNAL-USE.md`](EXTERNAL-USE.md)): global `p3d`
 > komutu, `/w/<ad>` çalışma alanları, tarayıcısız çekirdek (`src/api.ts`, `--file`, `apply`, `export`, `p3d run`,
@@ -10,7 +11,7 @@
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (225 test, ~25 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
+1. `npm install` · `npm run typecheck` · `npm test` (256 test, ~25 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
    (README → Kurulum; `p3d status` kurulu skill eskiyse uyarır).
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
@@ -74,6 +75,17 @@
   da küçülür (`maxTris × 250` nokta, en az 250 bin → 2,2 m gövde 1000 üçgende 0,35 sn, 3,5 yerine). Muz gövdesi (BoltRush)
   1000 üçgende hacim farkı −%0,1, 200 üçgende −%1; Benchy teknesi 1000 üçgende −%0,2. Claude şeması/talimatı (0 = varsayılan),
   panel özeti, `check --profile game` bütçe uyarısı `maxTris`'i önerir. Varsayılan (alan yok) davranış değişmedi.
+- **Eskiz katmanı (2026-11-09):** kullanıcı 3B görünümün üstüne kalem aracıyla (P) yollar çizerek yapılacak işi **tarif eder**;
+  eskiz geometri üretmez, dışa aktarılmaz, `check`'e girmez. Düzlem görünümden seçilir (Üst → Z, Ön → Y, Sağ → X; seçili parçanın
+  kameraya bakan yüzü ya da tabla), tıkla = köşe, sürükle = Bezier eğri, ilk noktaya tıkla = kapat; noktalar seçilip düzlemde ya da
+  kilitli eksende (X/Y/Z, N = düzlem normali) sürüklenir, sayı + Enter mutlak değer verir (Shift+Enter göreli), Shift yakalar (1 mm,
+  parça köşe/yüz merkezleri, eskiz noktaları), Ctrl+tık kenara nokta ekler. Yollar `Project.sketch`'te ("Yol N", `note`), her değişiklik
+  Op (`sketch_add/update/move/delete`; yalnızca yerel/köprü, Claude şemasında yok; geri alınabilir), `SceneSummary.sketch` ile köprüye
+  ve `/api/nl`'e gider (prompt'ta "Sketch" bölümü), `p3d snapshot` görüntüsüne WebGL sprite adlarıyla girer, `p3d sketch [--json]
+  [--clear]` listeler/siler, `p3d scene` sonunda `eskiz (N)` satırları. Paneller: sol eskiz listesi, sağda ad/not/kapalı/düzlem/nokta
+  tablosu. Kurallar: `sketch_update` tüm noktalar düzlem normalinde aynı konumdaysa `plane.at`'ı da taşır; kapalı yol en az 3 nokta ister
+  (azsa açık kalır); dosyadaki bozuk eskiz yolu uyarıyla atlanır (parça kaybı sayılmaz, `export`/`apply`'ı durdurmaz); ~3°'den sığ
+  açıyla düzleme tıklama yok sayılır. Rehber `p3d guide sketch`, skill güncellendi. Eskiz → geometri dönüşümü bilinçli olarak yok (yol haritası 10).
 - **Örtük yüzey ve ölçüm yardımcıları** (`csg.ts`): `levelSetGeometry` (sdf → kapalı ağ, isteğe bağlı manifold
   sadeleştirme), `sliceMany` (bir ağda çok kesit, tek dönüşüm). İçe aktarma sadeleştirmesi `Regularize` ile.
   Testler her örneğin onarımsız yüklendiğini ve kapalı ağ olarak dışa aktarıldığını doğrular.
@@ -122,6 +134,7 @@
 | 3DBenchy kabul testi | ✅ Orijinal STL referans alınarak çizildi; kutu 60 × 31 × 48 (orijinal 60 × 31 × 48), birleşik hacim −%1,9; `check` temiz; tekne ağında <3° iğne üçgen 19/45 000. Son sürüm sahnede görüntülerle (izo/ön/yan/arka) doğrulandı |
 | Büyük `hull` | ✅ 3 test (`tests/geom.test.ts`: 1 m kutu tablosu tam hacim + `check` temiz, 10 kat eğri tablo = ölçekli kopya, ızgara sınırı WASM'ı bozmadan reddeder). Elle: kutu/eğri tablo 20 mm–3 m, çözünürlük 12/96/192, her biri ayrı süreçte temiz; BoltRush'ın birebir tekrarı (`p3d apply --new` → `scene` → `check`) doğru kutu; 1 m gövdenin görüntüsü tabloya uyuyor. Tarayıcı sekmesinde büyük gövde **denenmedi** |
 | `hull` `maxTris` | ✅ 2 test (`tests/geom.test.ts`: 2,2 m muz gövdesi 1000/4000/200 üçgende bütçe aşılmaz, hacim farkı < %1 / %3, kutu doğru, bozuk üçgen yok; doğrulama: aralık dışı hata, 0/null varsayılan, kesir yuvarlanır). Elle: muz/kutu/Benchy 100–5000 üçgen, çözünürlük 12/96; `p3d apply --new` + `check --profile game` temiz; görünmez Chrome görüntüsünde 2000/500 üçgenlik gövdeler tabloya uyuyor. Gerçek Claude ile ve Unreal'de **denenmedi** |
+| Eskiz katmanı | ✅ 31 test (`tests/sketch.test.ts`: Op'lar, özet, Bezier örnekleme, dosya gidiş-dönüş, Store seçimi; `tests/sketch-edit.test.ts`: ışın–düzlem, eksen kilidi, yakalama, tutamaç, kenar bölme; `cli.test.ts`: `p3d sketch`). Görünmez Chrome + CDP duman testi, gerçek fare/klavye (kare çiz/kapat, eğri nokta, Z kilidi + "15" Enter, çoklu seçim N kilidi, Ctrl+tık nokta ekle, Delete, Esc zinciri; konsol temiz; düzeltmelerden sonra tekrarlandı); `snapshot --file` izo/üst görüntüde yollar, ok, işaret ve adlar; `p3d-reviewer` incelemesi (10 bulgu, kritik yok) düzeltildi. Kullanıcının gerçek sekmesinde elle ve gerçek Claude ile eskiz yorumu **denenmedi** |
 | v0.3 özellikleri | ✅ 67 test (tekne şekli: kutu tablosu tam hacim, sıfır genişlikte kapanma, doğrulama; dışa aktarılan örnek tekne kapalı ağ dahil) (örtük yüzey küre hacmi, `sliceMany` = `sliceGeometry`, Regularize iğne üçgen <%1 dahil): yumuşak loft hacmi (daireye yakınsama), uç (koni ≈ πr²h/3), sharp (tam kutu), cuts, çerçeve (kapalı/açık alan), eğik yüzeye dik oturtma, birleşim hacmi, `check` çakışma bulur/temizde susar |
 | OBJ çıktısı | ✅ Her şekil için kapalı/doğru yönlü ağ ve hacim ≈ analitik değer (`tests/io.test.ts`) |
 | Proje kaydet/yükle | ✅ Gidiş-dönüş ve bozuk dosya onarımı testleri; `examples/` dosyaları onarımsız yüklenir |
@@ -178,6 +191,15 @@
 - `set_position` X/Y'yi parçanın merkezine uygular; tek kenarlı prizma/koni döndürülmüşse sınırlayıcı kutu
   merkezi ile küçük fark olabilir.
 
+**Eskiz**
+- Tutamaçlar yalnızca nokta oluştururken (sürükleyerek) kurulur; var olan tutamacı sürükleme ve tüm yolu tek hamlede taşıma yok
+  (nokta tablosundan ya da `sketch_move` ile). Dokunmatik giriş ele alınmadı.
+- Ad etiketleri (WebGL sprite) yakın yollarda üst üste binebilir; işaret (marker) perspektifte küçüktür.
+- Kalem açıkken sol tuş eskize aittir: kamera orta tuşla döner, sağ tuşla kayar. Eksen bakış yönüne ~11°'den yakınken kilitli
+  sürükleme ekran dikeyine düşer (üstten bakarken Z kilidi: yukarı = kameraya doğru).
+- Dosyadaki bozuk eskiz yolu uyarıyla atlanır ve bir sonraki kayıtta onsuz yazılır (yedek alınmaz). Panelde "Kapalı" kutusu 3 noktadan az
+  yolda işaretlense de yol açık kalır (motor mesajla söyler).
+
 **Ayrıştırıcı**
 - Fiilsiz, virgülle ayrılmış birden fazla şekil tek cümle sayılır: "50x30x10 kutu, 20 çaplı silindir ekle"
   yalnızca ilk şekli oluşturur (iki ayrı komut ya da "ve ... ekle" kullanılmalı).
@@ -219,7 +241,7 @@
 **Uygulama**
 - Geri-al geçmişi ve seçim sayfa yenilenince sıfırlanır (proje otomatik kayıttan gelir).
 - Yoğun sahnelerde isim etiketleri üst üste binebilir.
-- İstemci paketi ~910 kB + manifold.wasm 541 kB; kod bölme yapılmadı.
+- İstemci paketi ~1,01 MB (Vite 1000 kB uyarısı) + manifold.wasm 541 kB; kod bölme yapılmadı.
 - Otomatik kayıt tarayıcı kotası (~5 MB) ile sınırlı; büyük içe aktarılmış ağlar sığmazsa uyarı verilir.
 - Hacim/ağırlık %100 doluluk varsayar. Gizli parçalar dışa aktarılmaz.
 
@@ -245,3 +267,7 @@
 7. Hizala/dağıt ("4 köşeye yerleştir"); ayna ve dizi (`duplicate.count`) v0.4'te var.
 8. Geri-al geçmişini kalıcı tutma; birden çok proje listesi.
 9. three.js için kod bölme.
+10. **Eskizden geometri (ertelendi; eskiz v1 yalnızca niyet tarifidir, tartışılacak):** eskiz yolu → ekstrüde et / delik kes balonu;
+    `geom.sketch` bağı (nokta oynayınca bağlı parça yeniden üretilir); paralel düzlemlerdeki kapalı yollar → loft kesitleri
+    (yol yüksekliği = `at`); açık 3B yol + profil (daire/dikdörtgen) → yeni `sweep` geom türü (boru, kulp, kablo kanalı, pist
+    korkuluğu; dönme-minimize çerçeveler, dar büküm/keskin köşe uyarısı).

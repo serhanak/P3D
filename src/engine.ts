@@ -1,10 +1,41 @@
 import * as THREE from 'three';
-import { ROLES, isGeomShape, type Axis, type GroupDef, type LoftGeom, type MeshGeom, type Op, type ParamChange, type Pt2, type Role, type SceneSummary, type Side, type Vec3 } from '../shared/ops';
+import {
+  ROLES,
+  SKETCH_KIND_LABELS,
+  isGeomShape,
+  type Axis,
+  type GroupDef,
+  type LoftGeom,
+  type MeshGeom,
+  type Op,
+  type ParamChange,
+  type Pt2,
+  type Role,
+  type SceneSummary,
+  type Side,
+  type SketchPath,
+  type SketchPlane,
+  type SketchPoint,
+  type Vec3,
+} from '../shared/ops';
 import { decodedAsset, getAsset, makeAsset, newAssetId, registerAsset } from './assets';
 import { resolveColor } from './colors';
 import { GeomError, defaultGeom, describeGeom, geometryVolume, loftCommonSections, meshSource, sanitizeGeom } from './geom';
 import { csgReady } from './csg';
 import { PALETTE, SHAPE_DEFS, buildGeometry, defaultParams, fmt, geometryError, sanitizeParams, type DimWord, type Params } from './shapes';
+import {
+  SKETCH_NAME_MAX,
+  SKETCH_NOTE_MAX,
+  findSketch,
+  planeFromPoints,
+  readSketchPlane,
+  readSketchPoints,
+  sketchKind,
+  sketchNameTaken,
+  sketchSummary,
+  uniqueSketchName,
+} from './sketch';
+import { newId } from './ids';
 import { fold } from './text';
 import type { Part, Project } from './types';
 
@@ -150,9 +181,8 @@ function explicitPartName(project: Project, name: string, exceptId?: string): st
   return uniqueName(project, name, exceptId);
 }
 
-export function newId(): string {
-  return 'p_' + Math.random().toString(36).slice(2, 10);
-}
+// Kimlik üretimi ids.ts'te (sketch.ts ile döngüsel içe aktarma olmasın); eski içe aktaranlar için buradan da verilir.
+export { newId };
 
 // ---------------------------------------------------------------------------
 // Gruplar
@@ -201,6 +231,11 @@ export interface ApplyResult {
   errors: string[];
   /** İşlemlerin en son dokunduğu parça (seçim için). */
   lastPartId: string | null;
+  /**
+   * Eskiz işlemlerinin en son eklediği/değiştirdiği/taşıdığı yol (seçim için); silinen yol için null. `applyOps` her
+   * zaman doldurur; opsiyoneldir ki elle kurulan sonuç nesneleri (arayüz, köprü) kırılmasın.
+   */
+  lastSketchId?: string | null;
   /** Seçimin temizlenmesi gerekiyorsa true (ör. seçili parça silindi). */
   clearSelection: boolean;
 }
@@ -543,8 +578,48 @@ function geomFor(part: Part, raw: unknown, seg: number): void {
   part.geom = geom;
 }
 
+// ---------------------------------------------------------------------------
+// Eskiz işlemi girdileri (yollar niyet verisidir; bkz. sketch.ts)
+
+/** Alan verilmiş mi (undefined/null = değişmez / varsayılan). */
+const given = <T>(v: T | null | undefined): v is T => v !== undefined && v !== null;
+
+function sketchPointsOf(raw: unknown): SketchPoint[] {
+  const pts = readSketchPoints(raw);
+  if (typeof pts === 'string') throw new OpError(`Eskiz noktaları geçersiz: ${pts}.`);
+  return pts;
+}
+
+function sketchPlaneOf(raw: unknown): SketchPlane {
+  const pl = readSketchPlane(raw);
+  if (!pl) throw new OpError('Geçersiz eskiz düzlemi: {"axis": "x" | "y" | "z", "at": sayı} olmalı.');
+  return pl;
+}
+
+function sketchNameOf(raw: unknown): string {
+  if (typeof raw !== 'string') throw new OpError('Eskiz adı metin olmalı.');
+  const name = raw.trim();
+  if (name.length > SKETCH_NAME_MAX) throw new OpError(`Eskiz adı en fazla ${SKETCH_NAME_MAX} karakter olabilir (${name.length}).`);
+  return name;
+}
+
+function sketchNoteOf(raw: unknown): string {
+  if (typeof raw !== 'string') throw new OpError('Eskiz notu metin olmalı.');
+  const note = raw.trim();
+  if (note.length > SKETCH_NOTE_MAX) throw new OpError(`Eskiz notu en fazla ${SKETCH_NOTE_MAX} karakter olabilir (${note.length}).`);
+  return note;
+}
+
+function sketchClosedOf(raw: unknown): boolean {
+  if (typeof raw !== 'boolean') throw new OpError('Eskizde "closed" true ya da false olmalı.');
+  return raw;
+}
+
+const planeLabel = (pl: SketchPlane) => `${pl.axis} = ${fmt(pl.at)}`;
+const SKETCH_OPEN_HINT = 'Kapalı yol en az 3 nokta ister; yol açık.';
+
 export function applyOps(project: Project, ops: Op[], selectedId: string | null): ApplyResult {
-  const res: ApplyResult = { messages: [], errors: [], lastPartId: null, clearSelection: false };
+  const res: ApplyResult = { messages: [], errors: [], lastPartId: null, lastSketchId: null, clearSelection: false };
   const seg = project.settings.resolution;
   const ctx: RefContext = { selectedId, lastPartId: null };
 
@@ -575,6 +650,19 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
     if (!p) return;
     ctx.lastPartId = p.id;
     res.lastPartId = p.id;
+  };
+  /** Eskiz yolu: kimlik ya da tam ad (büyük/küçük harf ve aksan duyarsız). Parça seçimini etkilemez. */
+  const mustSketch = (ref: string | undefined): SketchPath => {
+    if (typeof ref !== 'string' || !ref.trim()) throw new OpError('Hangi eskiz yolu? Yolun adını (ör. "Yol 1") ya da kimliğini verin.');
+    const s = findSketch(project, ref);
+    if (!s) {
+      const have = project.sketch?.length ? ` (var olanlar: ${project.sketch.map((x) => `'${x.name}'`).join(', ')})` : ' (eskiz yok)';
+      throw new OpError(`'${ref}' adında eskiz yolu bulunamadı${have}.`);
+    }
+    return s;
+  };
+  const touchSketch = (s: SketchPath) => {
+    res.lastSketchId = s.id;
   };
   const names = (parts: Part[]) => parts.map((p) => `'${p.name}'`).join(', ');
   /**
@@ -1036,6 +1124,122 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           }
           break;
         }
+        case 'sketch_add': {
+          // Önce tüm girdiler doğrulanır: hatada yarım yol eklenmez.
+          const points = sketchPointsOf(op.points);
+          const plane = given(op.plane) ? sketchPlaneOf(op.plane) : planeFromPoints(points);
+          const name = given(op.name) ? sketchNameOf(op.name) : '';
+          const note = given(op.note) ? sketchNoteOf(op.note) : '';
+          // Kapalı yol en az 3 nokta ister (1 nokta işaret, 2 nokta ok olarak kalır).
+          const wantClosed = given(op.closed) ? sketchClosedOf(op.closed) : false;
+          const closed = wantClosed && points.length >= 3;
+          const path: SketchPath = {
+            id: newId(),
+            name: uniqueSketchName(project, name || undefined),
+            closed,
+            plane,
+            points,
+            ...(note ? { note } : {}),
+          };
+          (project.sketch ??= []).push(path);
+          touchSketch(path);
+          res.messages.push(
+            `'${path.name}' eskizi eklendi: ${SKETCH_KIND_LABELS[sketchKind(path)]}, ${points.length} nokta, düzlem ${planeLabel(plane)}.` +
+              (wantClosed && !closed ? ` ${SKETCH_OPEN_HINT}` : ''),
+          );
+          break;
+        }
+        case 'sketch_update': {
+          const path = mustSketch(op.path);
+          // Önce tüm girdiler doğrulanır, sonra uygulanır (hatada yol değişmez).
+          const name = given(op.name) ? sketchNameOf(op.name) : '';
+          if (name && name !== path.name && sketchNameTaken(project, name, path.id)) {
+            throw new OpError(`'${name}' adında başka bir eskiz yolu var; başka bir ad verin.`);
+          }
+          const closedIn = given(op.closed) ? sketchClosedOf(op.closed) : undefined;
+          const points = given(op.points) ? sketchPointsOf(op.points) : undefined;
+          let plane = given(op.plane) ? sketchPlaneOf(op.plane) : undefined;
+          if (!plane && points) {
+            // Düzlem verilmedi: yeni noktaların hepsi düzlem ekseninde aynı konumdaysa (yol normal yönünde taşındı)
+            // düzlem de onunla gider; değilse düzlem yerinde kalır.
+            const a = path.plane.axis;
+            const v0 = points[0].p[a];
+            if (points.every((pt) => Math.abs(pt.p[a] - v0) <= 1e-6)) plane = { axis: a, at: v0 };
+          }
+          const note = given(op.note) ? sketchNoteOf(op.note) : undefined;
+          // Kapalı yol en az 3 nokta ister: daha azına inince açık olur.
+          const wantClosed = closedIn ?? path.closed;
+          const closed = wantClosed && (points ?? path.points).length >= 3;
+          const old = path.name;
+          const notes: string[] = [];
+          if (name && name !== path.name) {
+            path.name = name;
+            notes.push(`ad → '${name}'`);
+          }
+          if (closed !== path.closed) {
+            path.closed = closed;
+            notes.push(closed ? 'kapalı' : 'açık');
+          }
+          if (plane && (plane.axis !== path.plane.axis || plane.at !== path.plane.at)) {
+            path.plane = plane;
+            notes.push(`düzlem ${planeLabel(plane)}`);
+          }
+          if (points && JSON.stringify(points) !== JSON.stringify(path.points)) {
+            path.points = points;
+            notes.push('nokta');
+          }
+          if (note !== undefined && note !== (path.note ?? '')) {
+            if (note) path.note = note;
+            else delete path.note;
+            notes.push(note ? 'not' : 'not silindi');
+          }
+          touchSketch(path);
+          res.messages.push(
+            (notes.length ? `'${old}' eskizi güncellendi (${notes.join(', ')}).` : `'${old}' eskizi değişmedi.`) +
+              (wantClosed && !closed ? ` ${SKETCH_OPEN_HINT}` : ''),
+          );
+          break;
+        }
+        case 'sketch_move': {
+          const path = mustSketch(op.path);
+          const d = { x: given(op.dx) ? Number(op.dx) : 0, y: given(op.dy) ? Number(op.dy) : 0, z: given(op.dz) ? Number(op.dz) : 0 };
+          if (![d.x, d.y, d.z].every(Number.isFinite)) throw new OpError('Geçersiz kaydırma: dx, dy, dz sonlu sayı olmalı.');
+          const n = path.points.length;
+          let idx = [...Array(n).keys()];
+          if (given(op.indices)) {
+            if (!Array.isArray(op.indices)) throw new OpError('Eskiz nokta indisleri (indices) bir sayı dizisi olmalı.');
+            const bad = op.indices.find((i) => !Number.isInteger(i) || i < 0 || i >= n);
+            if (bad !== undefined) throw new OpError(`'${path.name}' eskizinde nokta indisi ${String(bad)} geçersiz (0–${n - 1} arası olmalı).`);
+            if (op.indices.length) idx = [...new Set(op.indices)];
+          }
+          if (d.x || d.y || d.z) {
+            for (const i of idx) {
+              const p = path.points[i].p;
+              path.points[i].p = { x: round(p.x + d.x), y: round(p.y + d.y), z: round(p.z + d.z) };
+            }
+            // Tüm yol taşındıysa çizim düzlemi de onunla gider (tutamaçlar göreli olduğundan kendiliğinden gider).
+            if (idx.length === n) path.plane = { axis: path.plane.axis, at: round(path.plane.at + d[path.plane.axis]) };
+          }
+          touchSketch(path);
+          const moved = (['x', 'y', 'z'] as const).filter((a) => d[a]).map((a) => `d${a} = ${fmt(d[a])}`);
+          res.messages.push(`'${path.name}' eskizinde ${idx.length} nokta taşındı (${moved.length ? moved.join(', ') : 'kaydırma yok'}).`);
+          break;
+        }
+        case 'sketch_delete': {
+          const ref = typeof op.path === 'string' ? op.path.trim() : '';
+          if (!ref) {
+            const all = project.sketch ?? [];
+            delete project.sketch;
+            if (all.some((s) => s.id === res.lastSketchId)) res.lastSketchId = null;
+            res.messages.push(!all.length ? 'Silinecek eskiz yok.' : all.length === 1 ? `'${all[0].name}' eskizi silindi.` : `${all.length} eskiz yolu silindi.`);
+            break;
+          }
+          const path = mustSketch(ref);
+          project.sketch = project.sketch!.filter((s) => s !== path);
+          if (res.lastSketchId === path.id) res.lastSketchId = null;
+          res.messages.push(`'${path.name}' eskizi silindi.`);
+          break;
+        }
         default:
           throw new OpError(`Bilinmeyen işlem: ${String((op as { op: unknown }).op)}`);
       }
@@ -1045,6 +1249,8 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
   }
   // Silinen/başka gruba alınan üyeler: boş grup kalmaz, olmayan gruba üyelik kalmaz.
   pruneGroups(project);
+  // Boş eskiz dizisi tutulmaz (alan hiç bulunmaz).
+  if (project.sketch && !project.sketch.length) delete project.sketch;
   return res;
 }
 
@@ -1130,6 +1336,7 @@ function meshSummary(g: MeshGeom): { kind: 'mesh'; asset: string; triangles: num
 
 export function sceneSummary(project: Project, selectedId: string | null): SceneSummary {
   const seg = project.settings.resolution;
+  const sketch = sketchSummary(project);
   return {
     units: 'mm',
     bed: { x: project.settings.bedX, y: project.settings.bedY },
@@ -1153,6 +1360,7 @@ export function sceneSummary(project: Project, selectedId: string | null): Scene
       };
     }),
     ...(project.groups?.length ? { groups: project.groups.map((g) => ({ name: g.name, pivot: v2(g.pivot) })) } : {}),
+    ...(sketch ? { sketch } : {}),
   };
 }
 

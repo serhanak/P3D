@@ -155,9 +155,10 @@ export async function loadProjectFile(file: string, opts: LoadOptions = {}): Pro
   const abs = path.resolve(file);
   const raw = readJsonFile(abs);
   const dropped: string[] = [];
+  const warnings: string[] = [];
   let project: Project;
   try {
-    project = parseProject(raw, dropped);
+    project = parseProject(raw, dropped, warnings);
   } catch (e) {
     throw new Error(`${abs}: ${(e as Error).message}`);
   }
@@ -170,7 +171,6 @@ export async function loadProjectFile(file: string, opts: LoadOptions = {}): Pro
   }
   const embedded = new Set(embeddedIds((raw as { assets?: unknown }).assets).filter((id) => getAsset(id)));
   await initCsg();
-  const warnings: string[] = [];
   await resolveMeshSources(project, path.dirname(abs), abs, embedded, warnings);
   for (const id of embedded) loadedEmbedded.add(id);
   if (opts.warnings) opts.warnings.push(...warnings);

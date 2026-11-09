@@ -1,6 +1,6 @@
-import type { GroupDef, MeshAsset, PartGeom, Role, ShapeType, Vec3 } from '../shared/ops';
+import type { GroupDef, MeshAsset, PartGeom, Role, ShapeType, SketchPath, Vec3 } from '../shared/ops';
 
-export type { GroupDef, MeshAsset, PartGeom, Role, ShapeType, Vec3 };
+export type { GroupDef, MeshAsset, PartGeom, Role, ShapeType, SketchPath, Vec3 };
 
 export interface Part {
   id: string;
@@ -31,6 +31,11 @@ export interface Project {
   parts: Part[];
   /** Parça grupları (ad + pivot). Yoksa grup yok; boş dizi tutulmaz. */
   groups?: GroupDef[];
+  /**
+   * Kullanıcının çizdiği eskiz yolları (niyet verisi: geometri üretmez, dışa aktarılmaz, check'e girmez; bkz. sketch.ts).
+   * Yoksa eskiz yok; boş dizi tutulmaz.
+   */
+  sketch?: SketchPath[];
   /** Yalnızca dosyada: mesh parçalarının ağ verisi. Bellekte src/assets.ts deposunda tutulur (geri-al anlık görüntülerine girmez). */
   assets?: Record<string, MeshAsset>;
   view: {

@@ -27,6 +27,10 @@ Ortak alanlar: `part` parça adı (ya da kimliği; birçok işlemde **grup adı*
 | `select` | `part` | Arayüz seçimi |
 | `view` | `show_names?`, `show_dimensions?`, `show_holes?` | Görünüm anahtarları |
 | `import_mesh` | `asset`, `name?`, `role?`, `color?`, `position?` | Yerel; normalde `p3d import dosya.stl` kullanın |
+| `sketch_add` | `points` (`[{p, hIn?, hOut?}]`; dünya mm, tutamaçlar `p`'ye göreli; 1–1000), `name?` (""/yok = "Yol N"), `closed?`, `plane?` (`{axis, at}`; yoksa noktalardan), `note?` (≤ 200 karakter) | Eskiz yolu: niyet verisi, geometri üretmez (`p3d guide sketch`). Yalnızca yerel/köprü |
+| `sketch_update` | `path` (eskiz adı ya da kimliği), `name?`, `closed?`, `plane?`, `points?` (tümü değişir), `note?` (`""` siler) | Verilmeyen alan değişmez; başka yolun adı hata. Yalnızca yerel/köprü |
+| `sketch_move` | `path`, `indices?` (yok/boş = tüm noktalar), `dx`, `dy`, `dz` | Tutamaçlar noktayla gider; tüm yol taşınınca düzlem de kayar. Yalnızca yerel/köprü |
+| `sketch_delete` | `path?` (yok/"" = tüm eskiz) | Yalnızca yerel/köprü; komutla: `p3d sketch --clear [ad]` |
 
 ## Örnekler
 ```json

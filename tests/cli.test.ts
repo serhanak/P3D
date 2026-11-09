@@ -290,6 +290,81 @@ describe('tarayıcısız komutlar (--file)', () => {
     expect(mesh.code).toBe(1);
     expect(mesh.stderr).toContain('yalnızca section --file');
   }, 60_000);
+
+  it('sketch --file: metin listesi, --json, scene satırı; --clear yol/tümü (hata varsa yazmaz)', () => {
+    const ops = [
+      {
+        op: 'sketch_add',
+        closed: true,
+        note: 'kapak, 3 mm',
+        points: [[-20, -10], [20, -10], [20, 10], [-20, 10]].map(([x, y]) => ({ p: { x, y, z: 0 } })),
+      },
+      { op: 'sketch_add', name: 'vida yeri', points: [{ p: { x: 0, y: 0, z: 5 } }, { p: { x: 0, y: 0, z: 17 } }], note: 'buraya 4 vida' },
+    ];
+    const file = path.join(dir, 'eskiz.p3d.json');
+    const r = p3dRun(['apply', '--file', 'eskiz.p3d.json', '--new'], dir, { input: JSON.stringify(ops) });
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
+
+    const out = p3d(['sketch', '--file', 'eskiz.p3d.json'], dir);
+    expect(out).toContain('eskiz (2 yol):');
+    expect(out).toContain('  Yol 1 · kapalı çokgen · 4 nokta · çevre 120 mm · düzlem z = 0 · kutu x -20…20, y -10…10, z 0 · not: "kapak, 3 mm"');
+    expect(out).toContain('    (-20, -10, 0) (20, -10, 0) (20, 10, 0) (-20, 10, 0)');
+    expect(out).toContain('  vida yeri · ok · 12 mm · yön (0, 0, 1) · (0, 0, 5) → (0, 0, 17) · not: "buraya 4 vida"');
+
+    const json = p3dRun(['sketch', '--file', 'eskiz.p3d.json', '--json'], dir);
+    expect(json.code).toBe(0);
+    const list = JSON.parse(json.stdout); // stdout yalnızca JSON
+    expect(list.map((k: { kind: string }) => k.kind)).toEqual(['polygon', 'arrow']);
+    expect(list[1]).toMatchObject({ name: 'vida yeri', length: 12, direction: { x: 0, y: 0, z: 1 }, note: 'buraya 4 vida' });
+
+    expect(p3d(['scene', '--file', 'eskiz.p3d.json'], dir)).toContain(
+      'eskiz (2):\n  Yol 1 · kapalı çokgen · 4 nokta · z = 0 · "kapak, 3 mm"\n  vida yeri · ok · 2 nokta · y = 0 · "buraya 4 vida"',
+    );
+
+    const before = readFileSync(file, 'utf8');
+    const bad = p3dRun(['sketch', '--clear', 'yok', '--file', 'eskiz.p3d.json'], dir);
+    expect(bad.code).toBe(1);
+    expect(bad.stdout).toContain("✕ 'yok' adında eskiz yolu bulunamadı (var olanlar: 'Yol 1', 'vida yeri').");
+    expect(readFileSync(file, 'utf8')).toBe(before);
+
+    const one = p3dRun(['sketch', '--clear', 'VIDA YERI', '--file', 'eskiz.p3d.json'], dir);
+    expect(one.code).toBe(0);
+    expect(one.stdout).toContain("✓ 'vida yeri' eskizi silindi.");
+    expect(JSON.parse(readFileSync(file, 'utf8')).sketch.map((k: { name: string }) => k.name)).toEqual(['Yol 1']);
+
+    expect(p3dRun(['sketch', '--clear', '--file', 'eskiz.p3d.json'], dir).stdout).toContain("✓ 'Yol 1' eskizi silindi.");
+    expect(p3d(['sketch', '--file', 'eskiz.p3d.json'], dir)).toContain('eskiz yok.');
+    expect('sketch' in JSON.parse(readFileSync(file, 'utf8'))).toBe(false);
+    expect(p3d(['scene', '--file', 'eskiz.p3d.json'], dir)).not.toContain('eskiz (');
+  }, 60_000);
+
+  it('bozuk eskiz yolu dosyayı kilitlemez: uyarıyla atlanır, export ve sketch --clear çalışır', () => {
+    const file = path.join(dir, 'bozuk-eskiz.p3d.json');
+    const ops = [
+      { op: 'create', shape: 'box', name: 'k' },
+      { op: 'sketch_add', name: 'iyi', points: [{ p: { x: 0, y: 0, z: 0 } }] },
+    ];
+    expect(p3dRun(['apply', '--file', 'bozuk-eskiz.p3d.json', '--new'], dir, { input: JSON.stringify(ops) }).code).toBe(0);
+    const raw = JSON.parse(readFileSync(file, 'utf8'));
+    raw.sketch.push({ name: 'bozuk', points: [{ p: { x: 'a', y: 0, z: 0 } }] });
+    writeFileSync(file, JSON.stringify(raw));
+    const warn = "⚠ eskiz 'bozuk' atlandı: 1. nokta geçersiz";
+
+    const ex = p3dRun(['export', 'bozuk-eskiz.stl', '--file', 'bozuk-eskiz.p3d.json'], dir);
+    expect(ex.stderr).toBe('');
+    expect(ex.code).toBe(0);
+    expect(ex.stdout).toContain(warn);
+    expect(ex.stdout).toContain('✓ 1 parça');
+
+    const cl = p3dRun(['sketch', '--clear', '--file', 'bozuk-eskiz.p3d.json'], dir);
+    expect(cl.code).toBe(0);
+    expect(cl.stdout).toContain(warn);
+    expect(cl.stdout).toContain("✓ 'iyi' eskizi silindi.");
+    const back = JSON.parse(readFileSync(file, 'utf8'));
+    expect('sketch' in back).toBe(false);
+    expect(back.parts).toHaveLength(1);
+  }, 60_000);
 });
 
 describe('snapshot --file tarayıcısı (scripts/headless.ts)', () => {

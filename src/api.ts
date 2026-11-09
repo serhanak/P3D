@@ -19,6 +19,10 @@ export type { Axis, LoftGeom, LoftSection, MeshGeom, Op, OpName, ParamChange, Pt
 export { applyOps, partBox, partMatrix, partsBox, sceneSummary } from './engine';
 export type { ApplyResult } from './engine';
 
+// Eskiz (kullanıcının çizdiği niyet yolları; geometri üretmez, dışa aktarılmaz)
+export type { SceneSummarySketch, SketchKind, SketchPath, SketchPlane, SketchPoint } from '../shared/ops';
+export { isPlanar, pathProfile, samplePath, sketchKind, toPlane2D } from './sketch';
+
 // Proje dosyası (metin)
 export { mergedMesh, parseProject, projectToJson, worldMesh } from './io';
 

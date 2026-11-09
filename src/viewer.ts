@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
-import type { SnapshotOptions, SnapshotView } from '../shared/ops';
+import type { SnapshotOptions, SnapshotView, Vec3 } from '../shared/ops';
 import { partBox, partsBox } from './engine';
 import { isScanLike } from './geom';
 import { roleOf, solidGeometry, solidKey } from './model';
 import { SHAPE_DEFS, bboxDims } from './shapes';
+import { EMPTY_SKETCH_STATE, SketchView, sketchBox, type SketchViewState } from './sketch-view';
 import type { Part, Project } from './types';
 
 interface Entry {
@@ -44,6 +45,13 @@ export class Viewer {
   private entries = new Map<string, Entry>();
   private raycaster = new THREE.Raycaster();
   private down: { x: number; y: number } | null = null;
+  /** Eskiz katmanı (WebGL; snapshot'a girer). */
+  readonly sketch = new SketchView();
+  private sketchState: SketchViewState = EMPTY_SKETCH_STATE;
+  /** Son `sync` edilen proje: eskiz durumu değişince yalnızca eskiz yeniden çizilir. */
+  private lastProject: Project | null = null;
+  /** Kalem aracı açıkken sol tık parça seçmez (eskize aittir). */
+  penMode = false;
 
   constructor(private container: HTMLElement) {
     THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
@@ -71,7 +79,7 @@ export class Viewer {
     key.position.set(200, -300, 400);
     const fill = new THREE.DirectionalLight(0xffffff, 0.6);
     fill.position.set(-300, 200, 150);
-    this.scene.add(key, fill, this.bed, this.partsRoot, this.labelsRoot);
+    this.scene.add(key, fill, this.bed, this.partsRoot, this.labelsRoot, this.sketch.root);
 
     this.selBox = new THREE.Box3Helper(new THREE.Box3(), 0x7cc4ff);
     (this.selBox.material as THREE.LineBasicMaterial).depthTest = false;
@@ -87,7 +95,7 @@ export class Viewer {
       if (e.button !== 0 || !this.down) return;
       const moved = Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y);
       this.down = null;
-      if (moved < 5) this.pick(e);
+      if (moved < 5 && !this.penMode) this.pick(e);
     });
 
     new ResizeObserver(() => this.resize()).observe(container);
@@ -111,9 +119,7 @@ export class Viewer {
   }
 
   private pick(e: PointerEvent): void {
-    const r = this.renderer.domElement.getBoundingClientRect();
-    const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-    this.raycaster.setFromCamera(ndc, this.camera);
+    this.rayAt(e.clientX, e.clientY); // this.raycaster'ı kurar
     const meshes = [...this.entries.values()].filter((en) => en.group.visible).map((en) => en.mesh);
     const hit = this.raycaster.intersectObjects(meshes, false)[0];
     this.onSelect(hit ? (hit.object.userData.partId as string) : null);
@@ -177,6 +183,87 @@ export class Viewer {
     }
     if (!selectedId || !project.parts.some((p) => p.id === selectedId)) this.selBox.visible = false;
     this.labelsRoot.visible = project.view.showNames;
+    this.lastProject = project;
+    this.sketch.sync(project, this.sketchState);
+  }
+
+  /** Eskiz görünüm durumu (kalem aracı); `redraw` false ise yalnızca saklanır (sonraki `sync` çizer). */
+  setSketchState(state: SketchViewState, redraw = true): void {
+    this.sketchState = state;
+    if (redraw && this.lastProject) this.sketch.sync(this.lastProject, state);
+  }
+
+  // -------------------------------------------------------------------------
+  // Kalem aracı için ekran ↔ dünya yardımcıları
+
+  get domElement(): HTMLCanvasElement {
+    return this.renderer.domElement;
+  }
+
+  /** İstemci (client) koordinatından dünya ışını. */
+  rayAt(clientX: number, clientY: number): THREE.Ray {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    this.camera.updateMatrixWorld();
+    this.raycaster.setFromCamera(ndc, this.camera);
+    return this.raycaster.ray.clone();
+  }
+
+  /**
+   * Dünya noktasını istemci koordinatına çeviren fonksiyon (kamera arkasındaki nokta null). Tuval kutusu ve kamera bir kez
+   * okunur; çok noktalı isabet testleri için.
+   */
+  screenProjector(): (v: Vec3) => { x: number; y: number } | null {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    this.camera.updateMatrixWorld();
+    const view = this.camera.matrixWorldInverse.clone();
+    const proj = this.camera.projectionMatrix.clone();
+    const near = this.camera.near;
+    const p = new THREE.Vector3();
+    return (v) => {
+      p.set(v.x, v.y, v.z).applyMatrix4(view);
+      if (p.z > -near) return null;
+      p.applyMatrix4(proj);
+      return { x: r.left + ((p.x + 1) / 2) * r.width, y: r.top + ((1 - p.y) / 2) * r.height };
+    };
+  }
+
+  toScreen(v: Vec3): { x: number; y: number } | null {
+    return this.screenProjector()(v);
+  }
+
+  /** Kameranın bakış yönü (birim). */
+  viewDir(): Vec3 {
+    const d = this.controls.target.clone().sub(this.camera.position).normalize();
+    return { x: d.x, y: d.y, z: d.z };
+  }
+
+  cameraPos(): Vec3 {
+    const p = this.camera.position;
+    return { x: p.x, y: p.y, z: p.z };
+  }
+
+  target(): Vec3 {
+    const t = this.controls.target;
+    return { x: t.x, y: t.y, z: t.z };
+  }
+
+  /** `p` derinliğinde bir ekran pikselinin mm karşılığı (yakalama toleransı). */
+  mmPerPixelAt(p: Vec3): number {
+    const cam = this.camera.position;
+    const dir = this.controls.target.clone().sub(cam).normalize();
+    const d = Math.max(new THREE.Vector3(p.x - cam.x, p.y - cam.y, p.z - cam.z).dot(dir), this.camera.near);
+    return (2 * d * Math.tan((this.camera.fov * DEG) / 2)) / Math.max(1, this.renderer.domElement.clientHeight);
+  }
+
+  /**
+   * Sol tuşla kamera döndürme açık/kapalı. Kalem aracı sol tuşu kullanır; o sırada orta tuş döndürür (yakınlaştırma
+   * tekerlekte kalır), sağ tuş kaydırır.
+   */
+  setLeftButton(enabled: boolean): void {
+    // OrbitControls null eylemde hiçbir şey yapmaz (state NONE; Shift/Ctrl ile kaydırma da olmaz).
+    this.controls.mouseButtons.LEFT = enabled ? THREE.MOUSE.ROTATE : null;
+    this.controls.mouseButtons.MIDDLE = enabled ? THREE.MOUSE.DOLLY : THREE.MOUSE.ROTATE;
   }
 
   private createEntry(part: Part): Entry {
@@ -363,13 +450,15 @@ export class Viewer {
 
   fit(project: Project): void {
     // Delik parçaları kadraja girmez (tabla altı / ayna kesimi gibi yardımcı kutular çerçeveyi büyütmesin).
+    // Parça yoksa eskiz kadraja alınır.
     const visible = project.parts.filter((p) => p.visible && roleOf(p) !== 'hole');
     const box = visible.length
       ? partsBox(visible, project.settings.resolution)
-      : new THREE.Box3(
+      : (sketchBox(project.sketch) ??
+        new THREE.Box3(
           new THREE.Vector3(-project.settings.bedX / 2, -project.settings.bedY / 2, 0),
           new THREE.Vector3(project.settings.bedX / 2, project.settings.bedY / 2, 10),
-        );
+        ));
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     const radius = Math.max(sphere.radius, 15);
     const dist = (radius / Math.sin((this.camera.fov * DEG) / 2)) * 1.15;
@@ -396,13 +485,17 @@ export class Viewer {
   /**
    * Görünür parçaların dik izdüşüm (ön/arka/sol/sağ/üst/alt) ve izometrik görüntüleri, PNG data URL.
    * Kullanıcının kamerası değişmez; yalnızca tuval boyutu bir anlığına değişir. CSS etiketleri (isimler,
-   * ölçü yazıları) görüntüye girmez.
+   * ölçü yazıları) görüntüye girmez. Görünür eskiz (yollar, oklar, işaretler, WebGL adları) görüntüye girer ve kadraja
+   * katılır; kalem yardımcıları (ızgara, kılavuz, taslak, seçim vurgusu, tutamaçlar) gizlenir.
    */
   snapshot(project: Project, opts: SnapshotOptions): { view: SnapshotView; png: string }[] {
     const visible = project.parts.filter((p) => p.visible && roleOf(p) !== 'hole');
+    // Tek nokta / düz çizgi kutusu sıfır boyutlu olmasın (dik izdüşüm kadrajı).
+    const sk = this.sketch.visibleBox()?.expandByScalar(1) ?? null;
     const box = visible.length
       ? partsBox(visible, project.settings.resolution)
-      : new THREE.Box3(new THREE.Vector3(-50, -50, 0), new THREE.Vector3(50, 50, 10));
+      : (sk?.clone() ?? new THREE.Box3(new THREE.Vector3(-50, -50, 0), new THREE.Vector3(50, 50, 10)));
+    if (visible.length && sk) box.union(sk);
     const prevSize = this.renderer.getSize(new THREE.Vector2());
     const prevRatio = this.renderer.getPixelRatio();
     const prevSel = this.selBox.visible;
@@ -412,6 +505,7 @@ export class Viewer {
     this.renderer.setPixelRatio(1);
     this.renderer.setSize(opts.width, opts.height, false);
     const out: { view: SnapshotView; png: string }[] = [];
+    this.sketch.setSnapshotMode(true);
     try {
       for (const view of opts.views) {
         this.renderer.render(this.scene, this.snapshotCamera(view, box, opts.width / opts.height));
@@ -422,6 +516,7 @@ export class Viewer {
       this.renderer.setSize(prevSize.x, prevSize.y, false);
       this.selBox.visible = prevSel;
       [...this.entries.values()].forEach((e, i) => (e.dims.visible = prevDims[i]));
+      this.sketch.setSnapshotMode(false);
     }
     return out;
   }

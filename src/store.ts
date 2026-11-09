@@ -10,7 +10,10 @@ type Listener = () => void;
 /** Proje durumu: tüm değişiklikler işlem (Op) olarak uygulanır, her uygulama tek bir geri-al adımıdır. */
 export class Store {
   project: Project;
+  /** Seçili parça. Seçim tektir: bir parça ya da bir eskiz yolu seçilir, ikisi birden değil. */
   selectedId: string | null = null;
+  /** Seçili eskiz yolu (`Project.sketch`); parça seçilince null olur. */
+  selectedSketchId: string | null = null;
   /** Sekmenin bağlı olduğu proje dosyası (yalnızca gösterim; `p3d open`/`p3d save`/Kaydet kurar). */
   file: string | undefined;
   /** Son yükleme/kayıttan sonra proje değişti mi. */
@@ -70,7 +73,16 @@ export class Store {
       this.project = draft;
     }
     if (res.clearSelection) this.selectedId = null;
-    if (res.lastPartId && this.project.parts.some((p) => p.id === res.lastPartId)) this.selectedId = res.lastPartId;
+    if (res.lastPartId && this.project.parts.some((p) => p.id === res.lastPartId)) {
+      this.selectedId = res.lastPartId;
+      this.selectedSketchId = null;
+    }
+    // Eskiz işlemi dokunduğu yolu seçer (aynı listede parça işlemi de varsa eskiz kazanır).
+    if (res.lastSketchId && this.project.sketch?.some((s) => s.id === res.lastSketchId)) {
+      this.selectedSketchId = res.lastSketchId;
+      this.selectedId = null;
+    }
+    this.fixSelection();
     this.emit(changed ? after : false);
     return res;
   }
@@ -95,9 +107,19 @@ export class Store {
     return true;
   }
 
+  /** Parça seçer (null = seçimi kaldırır); eskiz seçimi her durumda kalkar. */
   select(id: string | null): void {
-    if (this.selectedId === id) return;
+    if (this.selectedId === id && this.selectedSketchId === null) return;
     this.selectedId = id;
+    this.selectedSketchId = null;
+    this.emit(false);
+  }
+
+  /** Eskiz yolu seçer (null = seçimi kaldırır); parça seçimi her durumda kalkar. */
+  selectSketch(id: string | null): void {
+    if (this.selectedSketchId === id && this.selectedId === null) return;
+    this.selectedSketchId = id;
+    this.selectedId = null;
     this.emit(false);
   }
 
@@ -118,6 +140,7 @@ export class Store {
   load(project: Project): void {
     this.project = project;
     this.selectedId = null;
+    this.selectedSketchId = null;
     this.undoStack = [];
     this.redoStack = [];
     this.file = undefined;
@@ -136,6 +159,7 @@ export class Store {
     this.redoStack = [];
     this.project = project;
     this.selectedId = null;
+    this.selectedSketchId = null;
     this.file = file;
     const json = JSON.stringify(project);
     this.savedJson = dirty ? null : json;
@@ -156,8 +180,10 @@ export class Store {
     return same;
   }
 
+  /** Projede artık olmayan parça/eskiz seçimini düşürür. */
   private fixSelection(): void {
     if (this.selectedId && !this.project.parts.some((p) => p.id === this.selectedId)) this.selectedId = null;
+    if (this.selectedSketchId && !this.project.sketch?.some((s) => s.id === this.selectedSketchId)) this.selectedSketchId = null;
   }
 
   private scheduleAutosave(): void {
