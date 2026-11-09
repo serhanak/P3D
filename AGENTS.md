@@ -77,7 +77,9 @@ Köprü `server/bridge.ts` (sunucu) ↔ `src/bridge.ts` (tarayıcı, SSE + PUT s
 - `hull` tabloyu örtük yüzeye çevirir (`geom.ts` → `hullSdf`, `csg.hullSolid`: önce `Regularize` sadeleştirme, sonra
   yan profil ekstrüzyonuyla kesişim → keskin küpeşte/taban/ayna). Taban yarı genişliği ≥ 1,5 mm olan istasyonda taban
   keskin kesilir, V istasyonda (≤ 0,5) bodoslama örtük yüzeyin kendisidir. Ağı pahalıdır (~1–4 sn); `geom.ts` aynı tablo +
-  çözünürlük için önbellekler; çözünürlük 34 segmentin altında sadeleşmez.
+  çözünürlük için önbellekler; çözünürlük 34 segmentin altında sadeleşmez. `geom.maxTris` (oyun bütçesi) verilince ızgara
+  bütçesi `maxTris × 250` noktaya iner (en az 250 bin), gövde bütçenin iki katına sadeleştirilip kesilir, son ağ bütçeye
+  `RegularizeLight` ile indirilir (doğrudan bütçeye sadeleştirip kesmek kesim çizgisinde bütçeyi aşar).
 - `hull` ızgarasının kenarı mutlak mm'dir (çözünürlük 96 → 0,35 mm), nokta sayısı hacimle büyür: `HULL_MAX_CELLS`
   (2,5 milyon) aşılırsa tablo küçültülerek üretilip ağ geri büyütülür (taşma payları ve düz taban/V eşikleri gövdeyle orantılı).
   Izgara sınırı gövdeden iki hücre uzakta tutulur (`hullGap`): yüzey sınıra bir hücreden yakınken manifold 3.5 `levelSet`

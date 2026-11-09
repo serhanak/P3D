@@ -161,6 +161,9 @@ export function meshSource(g: Record<string, unknown>): Pick<MeshGeom, 'src' | '
 }
 
 const MAX_STATIONS = 512;
+/** Tekne üçgen bütçesi sınırları (`HullGeom.maxTris`). */
+export const HULL_MIN_TRIS = 100;
+export const HULL_MAX_TRIS = 1_000_000;
 const MAX_BREADTHS = 256;
 
 function sanitizeHull(g: Record<string, unknown>): HullGeom {
@@ -185,7 +188,16 @@ function sanitizeHull(g: Record<string, unknown>): HullGeom {
     if (stations[i].x - stations[i - 1].x < 1e-3) throw new GeomError(`İki istasyon aynı x'te (${stations[i].x}).`);
   }
   if (stations.every((s) => s.breadth.every((b) => b < 1e-3))) throw new GeomError('Tekne genişliği her yerde sıfır.');
-  return { kind: 'hull', stations };
+  const out: HullGeom = { kind: 'hull', stations };
+  // Üçgen bütçesi (oyun varlığı); yok, null ya da 0 = varsayılan ayrıntı.
+  if (g.maxTris !== undefined && g.maxTris !== null && g.maxTris !== 0) {
+    const m = Math.round(Number(g.maxTris));
+    if (!(m >= HULL_MIN_TRIS && m <= HULL_MAX_TRIS)) {
+      throw new GeomError(`Tekne 'maxTris' ${HULL_MIN_TRIS}–${HULL_MAX_TRIS.toLocaleString('tr-TR')} arası tam sayı olmalı (0 ya da yok = varsayılan ayrıntı).`);
+    }
+    out.maxTris = m;
+  }
+  return out;
 }
 
 /** Arayüzden eklenen yeni parçalar için örnek geometri. */
@@ -234,7 +246,7 @@ export function describeGeom(g: PartGeom | undefined): string {
     case 'loft':
       return `${g.sections.length} kesit, eksen ${g.axis}${g.smooth ? ', yumuşak' : ''}`;
     case 'hull':
-      return `${g.stations.length} istasyon × ${g.stations[0].breadth.length} yükseklik`;
+      return `${g.stations.length} istasyon × ${g.stations[0].breadth.length} yükseklik${g.maxTris ? `, en fazla ${g.maxTris} üçgen` : ''}`;
     case 'mesh':
       return 'içe aktarılmış ağ';
   }
@@ -646,6 +658,18 @@ function hullSdf(g: HullGeom): (p: [number, number, number]) => number {
  */
 export const HULL_MAX_CELLS = 2.5e6;
 
+/** `maxTris` verilmezse ağın sadeleştirme hedefi (sapma sınırlı; düşük çözünürlükte ham ağ bunun altında kalır). */
+const HULL_TRIS = 60000;
+
+/**
+ * `maxTris` (üçgen bütçesi) verilince ızgara bütçesi: hedef üçgen başına nokta, alt sınırla. Ayrıntı zaten sadeleştirmede
+ * atılır; 2,2 m'lik gövdede 1000 üçgen için 250 bin nokta 2,5 milyonla aynı ağı ~0,4 sn'de verir (3,5 yerine).
+ */
+const HULL_CELLS_PER_TRI = 250;
+const HULL_MIN_CELLS = 250e3;
+const hullCellBudget = (g: HullGeom) =>
+  g.maxTris ? Math.min(HULL_MAX_CELLS, Math.max(HULL_MIN_CELLS, g.maxTris * HULL_CELLS_PER_TRI)) : HULL_MAX_CELLS;
+
 /** Tablonun her uzunluğu 1/k ile çarpılmış kopyası. */
 const scaledHull = (g: HullGeom, k: number): HullGeom => ({
   ...g,
@@ -680,13 +704,14 @@ function hullMesh(g: HullGeom, edge: number): THREE.BufferGeometry {
     min: [X0 - 1 - gap, -maxB - gap, minZ - 1 - gap] as [number, number, number],
     max: [X1 + 1 + gap, maxB + gap, maxZ + 1 + gap] as [number, number, number],
   };
-  return hullSolid(hullSdf(g), bounds, edge, profile, maxB + 2);
+  const target = g.maxTris ? { tris: g.maxTris, strict: true } : { tris: HULL_TRIS };
+  return hullSolid(hullSdf(g), bounds, edge, profile, maxB + 2, target);
 }
 
 /**
  * Tekne ağı (önbellekli: örtük yüzey pahalıdır; aynı tablo ve çözünürlük için bir kez üretilir). Izgara bütçeyi aşan büyük
  * gövde, tablo küçültülerek aynı kenar boyuyla üretilip geri büyütülür: sonuç küçük gövdenin birebir ölçekli kopyasıdır
- * (mm cinsinden taşma payları ve düz taban/V eşikleri de gövdeyle orantılı büyür).
+ * (mm cinsinden taşma payları ve düz taban/V eşikleri de gövdeyle orantılı büyür). `maxTris` verilince bütçe ona göre küçülür.
  */
 function hullGeometry(g: HullGeom, seg: number): THREE.BufferGeometry {
   const key = `${seg}|${JSON.stringify(g)}`;
@@ -702,8 +727,9 @@ function hullGeometry(g: HullGeom, seg: number): THREE.BufferGeometry {
     // Küçültülmüş tablonun ızgarası (taşma ve boşluk dahil, bkz. hullMesh) bütçeye sığana kadar büyüt.
     const gap = hullGap(edge);
     const cells = (k: number) => ((size[0] / k + 2 + 2 * gap) * (size[1] / k + 2 * gap) * (size[2] / k + 2 + 2 * gap)) / edge ** 3;
-    let k = Math.max(1, Math.cbrt(cells(1) / HULL_MAX_CELLS));
-    while (cells(k) > HULL_MAX_CELLS) k *= 1.05;
+    const budget = hullCellBudget(g);
+    let k = Math.max(1, Math.cbrt(cells(1) / budget));
+    while (cells(k) > budget) k *= 1.05;
     if (k === 1) cached = hullMesh(g, edge);
     else {
       cached = hullMesh(scaledHull(g, 1 / k), edge);

@@ -7,8 +7,9 @@ biçimler. Bunlar gerekiyorsa GLB'yi Blender'da sürdürün.
 ## Modelleme
 - Birimler yine mm, Z yukarı, önü −Y. Gerçek ölçüde çizin (araba ≈ 4000 mm). Tabla en fazla 20 000 × 20 000 mm
   (`settings.bedX/bedY`; 2 m üstünde ızgara 100/500 mm); yalnızca görseldir, `check` oyun profilinde tabla kurallarına bakmaz.
-- **Düşük poligon:** proje çözünürlüğü (yuvarlak yüzey segmenti) 6–16 arası seçilebilir (arayüz → Ayarlar). `hull` şekli
-  düşük çözünürlükte sadeleşmez; poligon bütçesi önemliyse gövdeyi `extrude`/`loft` ile kurun.
+- **Düşük poligon:** proje çözünürlüğü (yuvarlak yüzey segmenti) 6–16 arası seçilebilir (arayüz → Ayarlar). `hull`
+  çözünürlükle sadeleşmez; gövdeye `geom.maxTris` ile üçgen bütçesi verin (ör. `{"kind": "hull", "stations": […],
+  "maxTris": 1500}`): ağ bütçeyi aşmaz, keskin küpeşte/ayna kalır, bozuk üçgen bırakmaz.
 - **Simetri:** bir tarafı kurun, `mirror` ile kopyalayın (`p3d guide ops`).
 - **Birlikte hareket eden parçalar** (teker = lastik + jant + göbek) bir **grup**tur; grubun `pivot`u dönme merkezidir
   (göbek merkezi). Grup adı move/rotate/duplicate/mirror/delete'te parça yerine kullanılabilir.

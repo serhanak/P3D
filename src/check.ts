@@ -160,7 +160,7 @@ function gameChecks(solids: Part[], meshOf: (p: Part) => WorldMesh, maxTris: num
       level: 'uyarı',
       message:
         `Toplam ${total.toLocaleString('tr-TR')} üçgen; bütçe ${maxTris.toLocaleString('tr-TR')} aşıldı. Parça başına: ${list}. ` +
-        'Yuvarlak yüzey çözünürlüğünü düşürün (6–16) ya da ayrıntıyı azaltın.',
+        "Yuvarlak yüzey çözünürlüğünü düşürün (6–16), `hull` parçalarına `geom.maxTris` verin ya da ayrıntıyı azaltın.",
     });
   }
   for (const p of solids) {

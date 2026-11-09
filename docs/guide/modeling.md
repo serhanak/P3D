@@ -49,7 +49,9 @@ noktalar çevre boyunca sıralıdır. Nokta sayısını makul tutun (çokgen ba�
   küpeşteye eşit aralıklı yarı genişliklerdir, her istasyonda aynı sayı; x artan sırada. İlk/son istasyon düz ayna ile kapanır;
   tüm genişlikleri 0 olan istasyon sivri uçtur. Tekne, kano, gövde, araç kaportası gibi sivrilen gövdeler için. Oyuk (güverte)
   için ikinci bir `hull` delik. Üretimi ~1–4 sn sürer; her boyutta çalışır (1 m üstü gövdeler aynı ızgara bütçesiyle,
-  ayrıntı gövde boyunun ~%0,4'ü). Üretilemeyen geometri işlem hatası olarak döner, `check` de bildirir.
+  ayrıntı gövde boyunun ~%0,4'ü). Üretilemeyen geometri işlem hatası olarak döner, `check` de bildirir. Varsayılan ağ
+  ayrıntılıdır (~30–60 bin üçgen, çözünürlükten bağımsız); düşük poligon için `maxTris` (100–1 000 000) üçgen bütçesi verin:
+  ağ en fazla o kadar üçgen olur, üretim de hızlanır (2 m'lik gövde 1000 üçgende ~0,4 sn, hacim farkı < %0,5).
 - Hepsinde `scale` parametresi tüm geometriyi büyütür.
 
 ## Roller ve delikler

@@ -233,21 +233,31 @@ export function unionGeometries(geoms: THREE.BufferGeometry[]): THREE.BufferGeom
   }
 }
 
-/** Kapalı ağı meshoptimizer (Regularize) ile ~`target` üçgene sadeleştirir; sapma ağ boyutunun %0,2'si ile sınırlı. */
-function regularized(m: Manifold, target: number): Manifold {
+/**
+ * Kapalı ağı meshoptimizer (Regularize) ile ~`target` üçgene sadeleştirir; sapma ağ boyutunun `maxError` katı ile sınırlı
+ * (1 = sınırsız). Ağ zaten hedefin altındaysa kopyası döner. `light`: daha az düzenleme, şekle daha sadık.
+ */
+function regularized(m: Manifold, target: number, maxError = 0.002, light = false): Manifold {
   const mesh = m.getMesh();
   const pos = mesh.vertProperties.slice(0, mesh.numVert * mesh.numProp).filter((_, i) => i % mesh.numProp < 3);
   if (mesh.numTri <= target) return new wasm!.Manifold(mesh);
-  const [idx] = MeshoptSimplifier.simplify(new Uint32Array(mesh.triVerts), pos, 3, target * 3, 0.002, ['Regularize']);
+  const [idx] = MeshoptSimplifier.simplify(new Uint32Array(mesh.triVerts), pos, 3, target * 3, maxError, [light ? 'RegularizeLight' : 'Regularize']);
   const out = new wasm!.Mesh({ numProp: 3, vertProperties: pos, triVerts: idx });
   out.merge();
   return new wasm!.Manifold(out);
 }
 
 /**
+ * Tekne ağının sadeleştirme hedefi. Varsayılan: ~`tris` üçgen, sapma ağ boyutunun %0,2'siyle sınırlı (hedefin altındaki
+ * ham ağ olduğu gibi kalır). `strict`: üçgen bütçesi (`HullGeom.maxTris`) — sapma sınırı yok, son ağ (profil kesişiminden
+ * sonra) `tris`'i aşmaz.
+ */
+export type HullTarget = { tris: number; strict?: boolean };
+
+/**
  * Tekne (endaze) gövdesi: örtük yüzey (`sdf`, gövdeyi her yöne biraz taşırır) ile yan profilin (x, z) y boyunca
  * ekstrüzyonunun kesişimi. Küpeşte, taban, ayna ve bodoslama bu kesişimden keskin çıkar (marching tetrahedra keskin
- * kenarı dişli bırakır). `simplify` > 0 ise yüzey en fazla o kadar (mm) oynayarak sadeleştirilir.
+ * kenarı dişli bırakır).
  */
 export function hullSolid(
   sdf: (p: [number, number, number]) => number,
@@ -255,21 +265,26 @@ export function hullSolid(
   edge: number,
   profile: Pt2[],
   halfWidth: number,
-  targetTris = 60000,
+  target: HullTarget = { tris: 60000 },
 ): THREE.BufferGeometry {
   if (!wasm) throw new CsgError('Tekne şekli için boolean çekirdeği yüklenmedi.');
   const keep: { delete(): void }[] = [];
   const track = <T extends { delete(): void }>(x: T) => (keep.push(x), x);
   try {
     const raw = track(levelSet(sdf, bounds, edge, 0.02));
-    // Önce örtük gövdeyi düzgün üçgenlerle sadeleştir (iğne üçgen bırakmaz), sonra keskin profille kes: kesişim
-    // kenarları tam kalır, yüzeyde gölge/kenar gürültüsü olmaz.
-    const body = track(regularized(raw, targetTris));
     const cs = track(new wasm.CrossSection([profile], 'NonZero'));
     // XY'deki (x, z) profili z boyunca uzat, ortala (w ∈ [−hw, hw]), X etrafında 90° çevir: (u, v, w) → (u, −w, v)
     const ext = track(wasm.Manifold.extrude(cs, 2 * halfWidth));
     const env = track(track(ext.translate([0, 0, -halfWidth])).rotate([90, 0, 0]));
-    return toGeometry(track(body.intersect(env)));
+    // Önce örtük gövdeyi düzgün üçgenlerle sadeleştir (iğne üçgen bırakmaz), sonra keskin profille kes: kesişim
+    // kenarları tam kalır, yüzeyde gölge/kenar gürültüsü olmaz. Bütçede (`strict`) gövde bütçenin iki katına sadeleştirilip
+    // kesilir, son ağ bütçeye indirilir (hafif düzenlemeyle): önce kesim çizgisindeki iğne üçgenler gider, şekil korunur
+    // (2,2 m'lik gövde 200 üçgende hacim farkı < %1; doğrudan bütçeye sadeleştirip kesmek bütçeyi aşıyor, hedefi küçültmek
+    // gövdeyi çökertiyordu).
+    const pre = target.strict ? 2 * target.tris : target.tris;
+    const cut = track(track(regularized(raw, pre, target.strict ? 1 : 0.002)).intersect(env));
+    if (!target.strict || cut.numTri() <= target.tris) return toGeometry(cut);
+    return toGeometry(track(regularized(cut, target.tris, 1, true)));
   } finally {
     for (const x of keep) x.delete();
   }

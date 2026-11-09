@@ -483,6 +483,53 @@ describe('tekne (endaze) şekli', () => {
     g.dispose();
   });
 
+  // 2,2 m'lik muz gövdesi (BoltRush): sivri uçlar, eğri omurga.
+  const banana = (maxTris?: number) =>
+    create('tekne', 'hull' as never, {
+      kind: 'hull',
+      maxTris,
+      stations: [
+        [-1090, 370, 400, [0, 0, 0, 0]], [-990, 220, 455, [50, 90, 90, 50]], [-840, 100, 455, [170, 270, 270, 160]],
+        [-620, 15, 435, [300, 440, 450, 300]], [-430, -20, 412, [360, 535, 545, 360]], [-100, -32, 398, [400, 585, 595, 400]],
+        [220, -22, 402, [385, 565, 572, 385]], [450, 0, 420, [330, 505, 520, 330]], [700, 45, 440, [255, 420, 430, 255]],
+        [920, 130, 462, [150, 255, 265, 145]], [1080, 270, 480, [55, 90, 90, 50]], [1165, 405, 430, [0, 0, 0, 0]],
+      ].map(([x, keel, sheer, breadth]) => ({ x, keel, sheer, breadth })),
+    } as never);
+
+  it('maxTris üçgen bütçesi: ağ bütçeyi aşmaz, şekil korunur, bozuk üçgen yok', () => {
+    const tris = (p: Project) => worldMesh(p, p.parts[0]).tris.length / 3;
+    const p1 = project([banana(1000)]);
+    const p4 = project([banana(4000)]);
+    p1.settings.resolution = 12;
+    expect(p1.parts[0].geom).toMatchObject({ maxTris: 1000 });
+    const [a, b] = [solid(p1, 'tekne'), solid(p4, 'tekne')];
+    expect(a.bad).toBe(0);
+    expect(tris(p1)).toBeLessThanOrEqual(1000);
+    expect(tris(p1)).toBeGreaterThan(800);
+    expect(tris(p4)).toBeLessThanOrEqual(4000);
+    expect(Math.abs(a.vol / b.vol - 1)).toBeLessThan(0.01);
+    expect(a.box.getSize(new THREE.Vector3()).toArray()).toEqual([2255, 1190, 512].map((v) => expect.closeTo(v, -1)));
+    expect(checkProject(p1, { profile: 'game' }).filter((i) => /bozuk/.test(i.message))).toEqual([]);
+    // Çok küçük bütçe de kapalı ağ ve yakın hacim verir (kesimden sonra sadeleştirilir, gövde çökmez).
+    const p0 = project([banana(200)]);
+    expect(tris(p0)).toBeLessThanOrEqual(200);
+    expect(Math.abs(solid(p0, 'tekne').vol / b.vol - 1)).toBeLessThan(0.03);
+  }, 30000);
+
+  it('maxTris doğrulama: aralık dışı hata, 0 ya da null varsayılan, kesir yuvarlanır', () => {
+    const geomOf = (maxTris: unknown) => {
+      const p = newProject();
+      const r = applyOps(p, [hull([0, 5, 10].map((x) => ({ x, keel: 0, sheer: 5, breadth: [3, 3, 3] })))].map((op) => ({ ...op, geom: { ...(op as { geom: object }).geom, maxTris } }) as Op), null);
+      return { err: r.errors.join(' '), geom: p.parts[0]?.geom as { maxTris?: number } | undefined };
+    };
+    expect(geomOf(50).err).toMatch(/maxTris.*100/);
+    expect(geomOf(2e6).err).toMatch(/maxTris/);
+    expect(geomOf('çok').err).toMatch(/maxTris/);
+    expect(geomOf(0).geom).not.toHaveProperty('maxTris');
+    expect(geomOf(null).geom).not.toHaveProperty('maxTris');
+    expect(geomOf(1500.4).geom?.maxTris).toBe(1500);
+  });
+
   it('doğrulama: eşit olmayan genişlik sayısı, ters omurga/küpeşte reddedilir', () => {
     const err = (st: { x: number; keel: number; sheer: number; breadth: number[] }[]) => applyOps(newProject(), [hull(st)], null).errors.join(' ');
     expect(err([{ x: 0, keel: 0, sheer: 5, breadth: [1, 2] }, { x: 5, keel: 0, sheer: 5, breadth: [1, 2, 3] }])).toMatch(/aynı \(2\)/);

@@ -1,7 +1,8 @@
 # Proje durumu
 
 > Son güncelleme: **2026-11-07** — `hull` her boyutta üretiliyor (BoltRush raporu: 1 m'lik gövde WASM'ı çökertiyordu; ızgara
-> bütçesi + sınır boşluğu), üretilemeyen geometri artık işlem hatası ve `check` hatası. Önceki: **2026-11-02** — v0.4: başka projelerden kullanım ([`EXTERNAL-USE.md`](EXTERNAL-USE.md)): global `p3d`
+> bütçesi + sınır boşluğu), üretilemeyen geometri artık işlem hatası ve `check` hatası; `hull` için `geom.maxTris` üçgen
+> bütçesi (oyun varlığı, BoltRush isteği #7). Önceki: **2026-11-02** — v0.4: başka projelerden kullanım ([`EXTERNAL-USE.md`](EXTERNAL-USE.md)): global `p3d`
 > komutu, `/w/<ad>` çalışma alanları, tarayıcısız çekirdek (`src/api.ts`, `--file`, `apply`, `export`, `p3d run`,
 > görünmez Chrome ile `snapshot --file`), kullanım rehberi (`docs/guide/`) + kullanıcı skill'i; oyun dışa aktarımı (GLB,
 > gruplar/pivot, ayna, `count`, düşük poligon, `check --profile game`). Önceki: v0.3 (2026-10-29) `hull`, çerçeve,
@@ -9,7 +10,7 @@
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (223 test, ~25 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
+1. `npm install` · `npm run typecheck` · `npm test` (225 test, ~25 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
    (README → Kurulum; `p3d status` kurulu skill eskiyse uyarır).
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
@@ -67,6 +68,12 @@
   (`hullGap`), ızgara `LEVEL_SET_MAX_CELLS` (30 milyon) üstündeyse WASM'a verilmeden reddedilir. Benchy teknesi değişmedi
   (hacim 10,69 cm³ aynı, kutu farkı 0,04 mm). Üretilemeyen geometri: geom veren `create`/`update` hata döndürür (çekirdek
   hazırsa), `check` yer tutucuya düşen parçayı hata sayar.
+- **`hull` üçgen bütçesi `geom.maxTris` (2026-11-07, BoltRush isteği #7):** varsayılan ağ çözünürlükten bağımsız ~30–60 bin
+  üçgendi (2,2 m'lik gövde çözünürlük 12'de 34 bin, kesim çizgisinde iğne üçgenler). `maxTris` (100–1 000 000) verilince ağ
+  bütçeyi aşmaz: gövde bütçenin iki katına sadeleştirilip profille kesilir, son ağ `RegularizeLight` ile bütçeye iner; ızgara
+  da küçülür (`maxTris × 250` nokta, en az 250 bin → 2,2 m gövde 1000 üçgende 0,35 sn, 3,5 yerine). Muz gövdesi (BoltRush)
+  1000 üçgende hacim farkı −%0,1, 200 üçgende −%1; Benchy teknesi 1000 üçgende −%0,2. Claude şeması/talimatı (0 = varsayılan),
+  panel özeti, `check --profile game` bütçe uyarısı `maxTris`'i önerir. Varsayılan (alan yok) davranış değişmedi.
 - **Örtük yüzey ve ölçüm yardımcıları** (`csg.ts`): `levelSetGeometry` (sdf → kapalı ağ, isteğe bağlı manifold
   sadeleştirme), `sliceMany` (bir ağda çok kesit, tek dönüşüm). İçe aktarma sadeleştirmesi `Regularize` ile.
   Testler her örneğin onarımsız yüklendiğini ve kapalı ağ olarak dışa aktarıldığını doğrular.
@@ -114,6 +121,7 @@
 | Claude yeni şema (`geom`, `role`) | ✅ `claude -p` ile: "ortasına 5 mm delik aç + vazo" → silindir `role: hole` + içi boş `revolve` profili (~10 sn). API anahtarıyla denenmedi |
 | 3DBenchy kabul testi | ✅ Orijinal STL referans alınarak çizildi; kutu 60 × 31 × 48 (orijinal 60 × 31 × 48), birleşik hacim −%1,9; `check` temiz; tekne ağında <3° iğne üçgen 19/45 000. Son sürüm sahnede görüntülerle (izo/ön/yan/arka) doğrulandı |
 | Büyük `hull` | ✅ 3 test (`tests/geom.test.ts`: 1 m kutu tablosu tam hacim + `check` temiz, 10 kat eğri tablo = ölçekli kopya, ızgara sınırı WASM'ı bozmadan reddeder). Elle: kutu/eğri tablo 20 mm–3 m, çözünürlük 12/96/192, her biri ayrı süreçte temiz; BoltRush'ın birebir tekrarı (`p3d apply --new` → `scene` → `check`) doğru kutu; 1 m gövdenin görüntüsü tabloya uyuyor. Tarayıcı sekmesinde büyük gövde **denenmedi** |
+| `hull` `maxTris` | ✅ 2 test (`tests/geom.test.ts`: 2,2 m muz gövdesi 1000/4000/200 üçgende bütçe aşılmaz, hacim farkı < %1 / %3, kutu doğru, bozuk üçgen yok; doğrulama: aralık dışı hata, 0/null varsayılan, kesir yuvarlanır). Elle: muz/kutu/Benchy 100–5000 üçgen, çözünürlük 12/96; `p3d apply --new` + `check --profile game` temiz; görünmez Chrome görüntüsünde 2000/500 üçgenlik gövdeler tabloya uyuyor. Gerçek Claude ile ve Unreal'de **denenmedi** |
 | v0.3 özellikleri | ✅ 67 test (tekne şekli: kutu tablosu tam hacim, sıfır genişlikte kapanma, doğrulama; dışa aktarılan örnek tekne kapalı ağ dahil) (örtük yüzey küre hacmi, `sliceMany` = `sliceGeometry`, Regularize iğne üçgen <%1 dahil): yumuşak loft hacmi (daireye yakınsama), uç (koni ≈ πr²h/3), sharp (tam kutu), cuts, çerçeve (kapalı/açık alan), eğik yüzeye dik oturtma, birleşim hacmi, `check` çakışma bulur/temizde susar |
 | OBJ çıktısı | ✅ Her şekil için kapalı/doğru yönlü ağ ve hacim ≈ analitik değer (`tests/io.test.ts`) |
 | Proje kaydet/yükle | ✅ Gidiş-dönüş ve bozuk dosya onarımı testleri; `examples/` dosyaları onarımsız yüklenir |
@@ -163,7 +171,9 @@
 - Keyfi kenar yuvarlatma, metin, vida dişi yok (pah profilde çizilebilir).
 - Ayna: `hull` yüzeyi ~0,5 mm'ye kadar simetrik; aynalanmış loft'un geom'u yeniden yazılırsa `mirrored` bayrağı düşer
   (aslını düzenleyip yeniden aynalayın). Dosyadan yüklenen projede parça ile grup aynı adı taşıyorsa onarılmaz.
-- `hull` düşük çözünürlükte (< 34 segment) sadeleşmez; oyun üçgen bütçesinde gövde için extrude/loft tercih edin.
+- `hull` varsayılan ağı çözünürlükle sadeleşmez (< 34 segmentte ızgara kenarı 1 mm'de kalır); oyun bütçesi için `geom.maxTris`
+  verin. Çok küçük bütçede (≲ 300) sivri uçlar birkaç mm kısalabilir (2,2 m gövde 500 üçgende baş ucu ~10 mm), yumuşak
+  kırılımlar (küpeşte altındaki dikey bant) yuvarlanır.
 - Otomatik yerleşim tabla doluysa parçayı tablanın dışına (sağa) koyar.
 - `set_position` X/Y'yi parçanın merkezine uygular; tek kenarlı prizma/koni döndürülmüşse sınırlayıcı kutu
   merkezi ile küçük fark olabilir.
