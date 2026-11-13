@@ -103,6 +103,16 @@ describe('p3d run', () => {
     expect(JSON.parse(r.stdout)).toEqual({ name: 'npm', box: true, cwd: sub, argv: ['x'] });
   }, 60_000);
 
+  it('snapshot: geçersiz --size ya da bilinmeyen görünüm sunucuya gitmeden hata verir', () => {
+    const env = { P3D_URL: 'http://127.0.0.1:9' };
+    const size = p3dRun(['snapshot', '--size', '3200'], dir, { env });
+    expect(size.code).toBe(1);
+    expect(size.stderr).toContain("--size GENİŞLİKxYÜKSEKLİK (piksel) olmalı, ör. 1000x750 ('3200')");
+    const views = p3dRun(['snapshot', '--views', 'iso,iso-back'], dir, { env });
+    expect(views.code).toBe(1);
+    expect(views.stderr).toContain('Bilinmeyen görünüm: iso-back');
+  }, 60_000);
+
   it('betik yoksa açıklayıcı hata; betiğin hatası yığın iziyle, çıkış kodu 1', () => {
     const missing = p3dRun(['run', 'yok.mts'], dir);
     expect(missing.code).toBe(1);

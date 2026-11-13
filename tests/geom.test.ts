@@ -2,11 +2,11 @@ import * as THREE from 'three';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { Op, PartGeom } from '../shared/ops';
 import { initCsg, levelSetGeometry, sliceGeometry, sliceMany } from '../src/csg';
-import { applyOps, partBox, partMatrix } from '../src/engine';
+import { applyOps, partBox, partMatrix, partsBox } from '../src/engine';
 import { checkProject } from '../src/check';
 import { buildObj, mergedMesh, parseProject, projectToJson, worldMesh } from '../src/io';
 import { build3mf, buildStl, meshAssetFromSoup, parseMeshFile } from '../src/meshio';
-import { solidGeometry, solidVolume } from '../src/model';
+import { exportableParts, solidBox, solidGeometry, solidPartsBox, solidVolume } from '../src/model';
 import { newProject, type Project } from '../src/types';
 
 beforeAll(() => initCsg());
@@ -627,5 +627,93 @@ describe('tekne (endaze) şekli', () => {
     const err = (st: { x: number; keel: number; sheer: number; breadth: number[] }[]) => applyOps(newProject(), [hull(st)], null).errors.join(' ');
     expect(err([{ x: 0, keel: 0, sheer: 5, breadth: [1, 2] }, { x: 5, keel: 0, sheer: 5, breadth: [1, 2, 3] }])).toMatch(/aynı \(2\)/);
     expect(err([{ x: 0, keel: 5, sheer: 1, breadth: [1, 2] }, { x: 5, keel: 0, sheer: 5, breadth: [1, 2] }])).toMatch(/yüksek olmalı/);
+  });
+});
+
+describe('kutu: partBox kesimsiz, solidBox delikler çıkarılmış (BoltRush isteği #11)', () => {
+  const box = (name: string, w: number, d: number, h: number, at: [number, number, number], extra: Partial<Op> = {}) =>
+    ({
+      op: 'create',
+      shape: 'box',
+      name,
+      params: [{ name: 'width', value: w }, { name: 'depth', value: d }, { name: 'height', value: h }],
+      position: { x: at[0], y: at[1], z: at[2] },
+      ...extra,
+    }) as Op;
+  const meshBox = (p: Project, name: string) => {
+    const m = worldMesh(p, p.parts.find((q) => q.name === name)!);
+    const b = new THREE.Box3();
+    for (const i of m.tris) b.expandByPoint(new THREE.Vector3(m.pos[i * 3], m.pos[i * 3 + 1], m.pos[i * 3 + 2]));
+    return b;
+  };
+
+  it('kesilen parçada dışa aktarılan ağın kutusu; kesimsiz kutu değişmez', () => {
+    const p = newProject();
+    const r = applyOps(p, [box('govde', 100, 100, 100, [0, 0, 50]), box('kesik', 60, 120, 120, [30, 0, 50], { role: 'hole', cuts: ['govde'] })], null);
+    expect(r.errors).toEqual([]);
+    const solids = exportableParts(p.parts);
+    expect(partsBox(solids, p.settings.resolution).max.x).toBeCloseTo(50, 6); // sözleşme: şeklin kutusu
+    const sb = solidPartsBox(p, solids);
+    expect(sb.max.x).toBeCloseTo(0, 4);
+    expect(sb.min.toArray()).toEqual([-50, -50, 0].map((v) => expect.closeTo(v, 4)));
+    expect(sb.max.toArray()).toEqual(meshBox(p, 'govde').max.toArray().map((v) => expect.closeTo(v, 4)));
+    // Delik parçasının kendi kutusu (solidBox katı olmayanda partBox'tır).
+    const hole = p.parts.find((q) => q.name === 'kesik')!;
+    expect(solidBox(p, hole).equals(partBox(hole, p.settings.resolution))).toBe(true);
+  });
+
+  it('döndürülmüş parça, deliksiz parça ve tümüyle kesilen parça', () => {
+    const p = newProject();
+    applyOps(
+      p,
+      [
+        box('a', 100, 40, 20, [0, 0, 10], { rotation: { x: 0, y: 0, z: 90 } }),
+        box('ka', 50, 50, 50, [0, 40, 10], { role: 'hole', cuts: ['a'] }),
+        box('b', 10, 10, 10, [200, 0, 5]),
+        box('c', 10, 10, 10, [-200, 0, 5]),
+        box('kc', 20, 20, 20, [-200, 0, 5], { role: 'hole', cuts: ['c'] }),
+      ],
+      null,
+    );
+    const get = (n: string) => p.parts.find((q) => q.name === n)!;
+    // 'a' döndürülünce y −50…50; delik y 15…65'i alır → y −50…15.
+    const a = solidBox(p, get('a'));
+    expect(a.min.y).toBeCloseTo(-50, 4);
+    expect(a.max.y).toBeCloseTo(15, 4);
+    expect(a.max.toArray()).toEqual(meshBox(p, 'a').max.toArray().map((v) => expect.closeTo(v, 4)));
+    expect(solidBox(p, get('b')).equals(partBox(get('b'), p.settings.resolution))).toBe(true);
+    expect(solidBox(p, get('c')).isEmpty()).toBe(true);
+    // Önbellek: parça taşınınca kutu da taşınır (y −60…40; delik y 15…65'i almaya devam eder).
+    applyOps(p, [{ op: 'move', part: 'a', dx: 0, dy: -10, dz: 0 } as Op], null);
+    const moved = solidBox(p, get('a'));
+    expect(moved.min.y).toBeCloseTo(-60, 4);
+    expect(moved.max.y).toBeCloseTo(15, 4);
+  });
+});
+
+describe('prizma köşe fazı (rehber: modeling.md, BoltRush isteği #13)', () => {
+  const zRange = (n: number, rotation: { x: number; y: number; z: number }) => {
+    const p = newProject();
+    applyOps(
+      p,
+      [{ op: 'create', shape: 'prism', name: 'p', params: [{ name: 'sides', value: n }, { name: 'diameter', value: 1000 }, { name: 'height', value: 100 }], position: { x: 0, y: 0, z: 600 }, rotation } as Op],
+      null,
+    );
+    const part = p.parts[0];
+    const b = partBox(part, 12);
+    return { below: part.position.z - b.min.z, above: b.max.z - part.position.z };
+  };
+  const apothem = (n: number) => 500 * Math.cos(Math.PI / n);
+
+  it('eksen Y (x 90) her n için düz taban; eksen X (y 90) yalnız n 4\'ün katıysa, değilse rotation.z = 90 mod (360/n)', () => {
+    for (let n = 3; n <= 16; n++) {
+      expect(zRange(n, { x: 90, y: 0, z: 0 }).below, `x90 n=${n}`).toBeCloseTo(apothem(n), 3);
+      const plain = zRange(n, { x: 0, y: 90, z: 0 }).below;
+      if (n % 4 === 0) expect(plain, `y90 n=${n}`).toBeCloseTo(apothem(n), 3);
+      if (n % 4 === 2) expect(plain, `y90 n=${n}`).toBeCloseTo(500, 3);
+      expect(zRange(n, { x: 0, y: 90, z: 90 % (360 / n) }).below, `y90+faz n=${n}`).toBeCloseTo(apothem(n), 3);
+    }
+    // Boltrush ölçümü (çap 1000, y 90): n = 4 ±353,6; 6 ±500; 8 ±461,9; 10 ±500; 12 ±483.
+    expect([4, 6, 8, 10, 12].map((n) => Math.round(zRange(n, { x: 0, y: 90, z: 0 }).above * 10) / 10)).toEqual([353.6, 500, 461.9, 500, 483]);
   });
 });

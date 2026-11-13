@@ -15,6 +15,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   SNAPSHOT_VIEWS,
+  fitSnapshotSize,
   normalizeWs,
   wsPath,
   type BridgeAction,
@@ -133,8 +134,10 @@ function sceneAssets(project: unknown): Record<string, MeshAsset> {
 function snapshotOptions(raw: unknown): SnapshotOptions {
   const o = (raw ?? {}) as Partial<SnapshotOptions>;
   const views = Array.isArray(o.views) ? o.views.filter((v): v is SnapshotView => (SNAPSHOT_VIEWS as readonly string[]).includes(v)) : [];
-  const size = (v: unknown, d: number) => (Number.isFinite(Number(v)) ? Math.min(2400, Math.max(200, Math.round(Number(v)))) : d);
-  return { views: views.length ? views : ['iso', 'front', 'right', 'top'], width: size(o.width, 1000), height: size(o.height, 750), dims: o.dims === true };
+  const num = (v: unknown, d: number) => (Number(v) > 0 && Number.isFinite(Number(v)) ? Number(v) : d);
+  // Sınır aşılırsa en-boy oranı korunarak küçültülür (eskiden her kenar ayrı ayrı 2400'e kırpılıyordu).
+  const { width, height } = fitSnapshotSize(num(o.width, 1000), num(o.height, 750));
+  return { views: views.length ? views : ['iso', 'front', 'right', 'top'], width, height, dims: o.dims === true };
 }
 
 export class BridgeError extends Error {

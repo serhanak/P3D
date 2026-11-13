@@ -11,7 +11,8 @@
 - Ölçü ya da döndürme değişince parça **tabanını (min z) ve XY merkezini korur** (konum açıkça verilmedikçe). Parçalar
   birbirine bağlı değildir: alttaki kalınlaşınca üstteki onunla yükselmez (`place_on` ile yeniden hizalayın).
 - `set_position` (yalnızca yerel/köprü) işleminde `z` **tabandır**; diğer her yerde merkezdir. Sahne özetinde `bbox` verilir;
-  ölçüleri oradan hesaplayın.
+  ölçüleri oradan hesaplayın. `bbox` (ve betiklerde `partBox`/`partsBox`) şeklin **kesimsiz** kutusudur; yerleştirme işlemleri
+  de onu kullanır. Delikler çıkarılmış son hâlin kutusu: `p3d measure` ya da betikte `solidBox`/`solidPartsBox`.
 
 ## İşlem (Op) gönderme
 - İşlemler JSON dizisidir (ayrıntı: `p3d guide ops`). `params` **her zaman dizidir**:
@@ -29,7 +30,17 @@
 | `cone` | `bottomDiameter`, `topDiameter` (0 = sivri), `height` |
 | `sphere` | `diameter` |
 | `torus` | `diameter` (dış), `thickness` (halka kesiti); XY düzleminde yatar |
-| `prism` | `sides` (3–128), `diameter` (köşeden köşeye), `height` |
+| `prism` | `sides` (3–128), `diameter` (köşeden köşeye), `height` — köşe fazı aşağıda |
+
+**Prizma köşe fazı.** Bir düz kenar yerel **−Y**'ye bakar (köşeler `−90° + 180°/n + k·360°/n` açılarında; R = çap/2, düz
+kenarın merkeze uzaklığı `R·cos(180°/n)`). Dik dururken ön yüz (−Y) her n'de düzdür; ±X'te düz kenar yalnızca n **4'ün katıysa**
+vardır (n = 6, 10, 14 … ±X'te köşe; tek n'de +Y'de köşe). Yatırırken:
+- `rotation: {x: 90}` (eksen Y'ye yatar): taban her n'de **düz**.
+- `rotation: {y: 90}` (eksen X'e yatar): taban yalnızca n 4'ün katıysa düz (n = 4, 8, 12); 6 ve 10'da köşe alta gelir
+  (çap 1000'de z aralığı n = 4 ±353,6; 6 ±500; 8 ±461,9; 10 ±500; 12 ±483). Düz taban için prizmayı kendi ekseni çevresinde
+  `rotation.z = 90 mod (360/n)` çevirin: n = 6 → 30, n = 10 → 18, n = 3 → 90, n = 5 → 18 (XYZ Euler'de z önce, parçanın
+  kendi ekseninde uygulanır). Genel kural: yerel θ yönünde (derece, +X'ten) düz kenar için `rotation.z ≡ θ + 90 (mod 360/n)`;
+  köşe için buna `180/n` ekleyin.
 
 ## Serbest biçimler (`geom`)
 Eğri/eğik yüzeyleri ilkel şekillerle **basamaklamayın**; ham üçgen de üretmeyin. Niyeti şekille verin, motor kapalı ağı üretir.

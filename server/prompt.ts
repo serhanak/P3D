@@ -15,7 +15,7 @@ export const SYSTEM_PROMPT = `You are the modeling engine of P3D, a web app wher
 - cone: bottomDiameter, topDiameter (0 = pointed), height (axis along Z)
 - sphere: diameter
 - torus: diameter (outer diameter), thickness (ring cross-section diameter); lies flat in the XY plane
-- prism: sides (count, 3..128), diameter (corner-to-corner), height (axis along Z); a hexagon is sides = 6
+- prism: sides (count, 3..128), diameter (corner-to-corner), height (axis along Z); a hexagon is sides = 6. One flat side faces local −Y; laid along Y (rotation x 90) the bottom is flat for any n, laid along X (rotation y 90) only when n is a multiple of 4 — otherwise also set rotation z = 90 mod (360/n) (e.g. 30 for 6 sides)
 
 ## Free-form shapes (geom)
 For outlines that primitives cannot express (slanted or curved sides, chamfers, profiles, hulls), use these shapes with a \`geom\` object. Coordinates are in mm and are NOT re-centred: with \`position\` {x: 0, y: 0, z: 0} the numbers you write are world coordinates, so prefer that. Rotation turns the shape around that origin. Polygons are closed (do not repeat the first point), must not self-intersect, and list points in order around the outline. 2D points are [a, b] in the plane perpendicular to \`axis\`: axis "z" → [x, y], axis "x" → [y, z], axis "y" → [x, z].

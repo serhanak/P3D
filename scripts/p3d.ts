@@ -60,7 +60,11 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   SKETCH_KIND_LABELS,
+  SNAPSHOT_MAX_SIDE,
+  SNAPSHOT_MIN_SIDE,
+  SNAPSHOT_VIEWS,
   contentDigest,
+  fitSnapshotSize,
   wsLabel,
   wsPath,
   type BridgeResult,
@@ -71,6 +75,7 @@ import {
   type SceneSummary,
   type SceneSummaryPart,
   type SceneSummarySketch,
+  type SnapshotOptions,
   type SnapshotView,
 } from '../shared/ops.ts';
 import type { CheckOptions } from '../src/check.ts';
@@ -588,14 +593,21 @@ function checkOptions(): CheckOptions {
   return { profile, maxTris };
 }
 
-/** Görüntüleri `out` klasörüne yazar, yolları ve görünür kutuyu basar. */
-function writeSnapshots(r: BridgeResult): void {
+/**
+ * Görüntüleri `out` klasörüne yazar, yolları ve görünür kutuyu basar. PNG başlığındaki boyut istenenden farklıysa
+ * (tarayıcı tuvali küçülttüyse) uyarır; yol satırları değişmez (betikler satırları yol olarak okuyabilir).
+ */
+function writeSnapshots(r: BridgeResult, req: SnapshotOptions): void {
   const out = fromCaller(flag('--out') ?? path.join(tmpdir(), 'p3d-snapshots'));
   mkdirSync(out, { recursive: true });
   for (const img of r.images ?? []) {
     const file = path.join(out, `${img.view}.png`);
-    writeFileSync(file, Buffer.from(img.png.replace(/^data:image\/png;base64,/, ''), 'base64'));
+    const png = Buffer.from(img.png.replace(/^data:image\/png;base64,/, ''), 'base64');
+    writeFileSync(file, png);
     console.log(file);
+    // IHDR: genişlik 16., yükseklik 20. bayttan (big-endian).
+    const [w, h] = png.length >= 24 ? [png.readUInt32BE(16), png.readUInt32BE(20)] : [0, 0];
+    if (w !== req.width || h !== req.height) console.log(`uyarı: ${img.view}.png ${w}x${h} çıktı (istenen ${req.width}x${req.height}); tarayıcı tuvali küçülttü`);
   }
   for (const m of r.errors) console.log(`✕ ${m}`);
   if (r.errors.length || !r.images?.length) process.exitCode = 1;
@@ -609,10 +621,27 @@ function writeSnapshots(r: BridgeResult): void {
   if (Number.isFinite(box.min.x)) console.log(`görünür kutu: ${vec(box.min)} → ${vec(box.max)} (dik görünümler bu kutuya %6 payla sığdırılır)`);
 }
 
-function snapshotRequest(): Record<string, unknown> {
-  const [w, h] = (flag('--size') ?? '1000x750').split('x').map(Number);
-  const views = (list('--views') ?? ['iso', 'front', 'right', 'top']) as SnapshotView[];
-  return { action: 'snapshot', snapshot: { views, width: w, height: h, dims: has('--dims') } };
+/**
+ * snapshot isteği: `--views` bilinen görünümler olmalı; `--size GENxYÜK` kenarları SNAPSHOT_MIN_SIDE–SNAPSHOT_MAX_SIDE
+ * piksel aralığına oturtulur (uzun kenar sınırı aşarsa orantılı küçültme) ve değiştiyse uyarılır — sessiz kırpma yok.
+ */
+function snapshotRequest(): { action: 'snapshot'; snapshot: SnapshotOptions } {
+  const views = list('--views') ?? ['iso', 'front', 'right', 'top'];
+  const unknown = views.filter((v) => !(SNAPSHOT_VIEWS as readonly string[]).includes(v));
+  if (unknown.length) throw new Error(`Bilinmeyen görünüm: ${unknown.join(', ')} (olanlar: ${SNAPSHOT_VIEWS.join(', ')}).`);
+  const raw = flag('--size') ?? '1000x750';
+  const m = /^\s*(\d+)\s*[xX×]\s*(\d+)\s*$/.exec(raw);
+  if (!m || Number(m[1]) < 1 || Number(m[2]) < 1) throw new Error(`--size GENİŞLİKxYÜKSEKLİK (piksel) olmalı, ör. 1000x750 ('${raw}').`);
+  const [w, h] = [Number(m[1]), Number(m[2])];
+  const fit = fitSnapshotSize(w, h);
+  if (fit.width !== w || fit.height !== h) {
+    const kept = Math.abs(fit.width / fit.height / (w / h) - 1) < 0.01;
+    console.log(
+      `uyarı: --size ${w}x${h} sınır dışında (kenar ${SNAPSHOT_MIN_SIDE}–${SNAPSHOT_MAX_SIDE} piksel) → ${fit.width}x${fit.height} ` +
+        `çekiliyor (${kept ? 'en-boy oranı korundu' : 'en-boy oranı değişti'})`,
+    );
+  }
+  return { action: 'snapshot', snapshot: { views: views as SnapshotView[], ...fit, dims: has('--dims') } };
 }
 
 const SNAP_CONNECT_MS = 30_000;
@@ -622,6 +651,7 @@ const SNAP_CONNECT_MS = 30_000;
  * yükler, görüntü alır. Tarayıcı süreç ağacı ve geçici profil her durumda (hata dahil) kapatılır/silinir.
  */
 async function snapshotFile(file: string): Promise<void> {
+  const req = snapshotRequest(); // geçersiz --size/--views tarayıcı açılmadan hata versin
   const loaded = await readProjectFile(file, false);
   printLoadNotes(loaded);
   const { project } = loaded;
@@ -659,7 +689,7 @@ async function snapshotFile(file: string): Promise<void> {
     const { usedAssets } = await import('../src/assets.ts');
     const load = await post({ action: 'load', project, assets: usedAssets(project), label: `snapshot: ${path.basename(file)}` }, snapWs);
     for (const m of load.errors) console.log(`✕ ${m}`);
-    writeSnapshots(await post(snapshotRequest(), snapWs));
+    writeSnapshots(await post(req, snapWs), req.snapshot);
   } finally {
     process.off('SIGINT', interrupted);
     process.off('SIGTERM', interrupted);
@@ -746,8 +776,7 @@ async function measureOrSection(command: 'measure' | 'section'): Promise<void> {
   printLoadNotes(loaded);
   const { project } = loaded;
   const { worldMesh, mergedMesh } = await import('../src/io.ts');
-  const { roleOf, solidVolume } = await import('../src/model.ts');
-  const { partBox } = await import('../src/engine.ts');
+  const { roleOf, solidBox, solidVolume } = await import('../src/model.ts');
   const names = list('--parts');
   const parts = project.parts.filter((p) => (names ? names.includes(p.name) : p.visible && roleOf(p) !== 'hole'));
   if (names) for (const nm of names) if (!parts.some((p) => p.name === nm)) console.log(`(uyarı: '${nm}' bulunamadı)`);
@@ -755,14 +784,16 @@ async function measureOrSection(command: 'measure' | 'section'): Promise<void> {
     let total = 0;
     const all = new THREE.Box3();
     for (const p of parts) {
-      const b = partBox(p, project.settings.resolution);
+      // Katıda delikler çıkarılmış kutu (hacimle aynı geometri); delik/referansta şeklin kutusu.
+      const b = solidBox(project, p);
       const v = solidVolume(project, p);
       if (roleOf(p) === 'solid') {
         total += v;
         all.union(b);
       }
       const s = b.getSize(new THREE.Vector3());
-      console.log(`${p.name} [${roleOf(p)}]: kutu ${vec(b.min)} → ${vec(b.max)} (${vec(s)}), hacim ${n(v / 1000)} cm³`);
+      const boxText = b.isEmpty() ? 'kutu yok (delikler tümünü kesiyor)' : `kutu ${vec(b.min)} → ${vec(b.max)} (${vec(s)})`;
+      console.log(`${p.name} [${roleOf(p)}]: ${boxText}, hacim ${n(v / 1000)} cm³`);
     }
     if (!all.isEmpty()) {
       const s = all.getSize(new THREE.Vector3());
@@ -1021,7 +1052,8 @@ async function main(): Promise<void> {
     case 'snapshot': {
       const file = projectFileFlag('snapshot');
       if (file) return snapshotFile(file);
-      writeSnapshots(await post(snapshotRequest()));
+      const req = snapshotRequest();
+      writeSnapshots(await post(req), req.snapshot);
       return;
     }
     case 'import': {

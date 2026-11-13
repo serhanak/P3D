@@ -29,7 +29,7 @@ export { mergedMesh, parseProject, projectToJson, worldMesh } from './io';
 // Geometri, boolean, kesit
 export { initCsg, manifoldVolume, sliceMany, subtract } from './csg';
 export type { Cutter } from './csg';
-export { baseIndexed, exportGeometry, exportableParts, roleOf, solidVolume } from './model';
+export { baseIndexed, exportGeometry, exportableParts, roleOf, solidBox, solidPartsBox, solidVolume } from './model';
 
 // Ağlar
 export { decodedAsset, getAsset, registerAsset, usedAssets } from './assets';

@@ -26,10 +26,13 @@ console.log(new THREE.Vector3(width, 60, 30).length(), issues);
 - Editörde tip desteği isterseniz proje klasörünüzde `npm link p3d` (isteğe bağlı).
 - **Kararlı yüzey** (`src/api.ts`): `newProject`, `applyOps`, `parseProject`, `projectToJson`, `checkProject`, `initCsg`,
   `subtract`, `manifoldVolume`, `partBox`, `partMatrix`, `partsBox`, `mergedMesh`, `worldMesh`, `sliceMany`, `exportGeometry`,
-  `exportableParts`, `baseIndexed`, `roleOf`, `solidVolume`, `parseMeshFile`, `meshAssetFromSoup`, `registerAsset`,
+  `exportableParts`, `baseIndexed`, `roleOf`, `solidVolume`, `solidBox`, `solidPartsBox`, `parseMeshFile`, `meshAssetFromSoup`, `registerAsset`,
   `decodedAsset`, `getAsset`, `usedAssets`, `buildStl`, `build3mf`, `buildGlb`, `sceneSummary`, `SHAPES`, `THREE`;
   Node yardımcıları `loadProjectFile`, `saveProjectFile`, `exportFile`, `readMeshFile`; tipler `Project`, `Part`, `Op` …
   P3D'nin iç modüllerini (`…/P3D/src/*.ts`) doğrudan içe aktarmayın — iç yapı değişebilir, bu yüzey değişmez.
+- Kutular: `partBox(part, seg)` / `partsBox(parts, seg)` şeklin **kesimsiz** kutusudur (hızlı, delik uygulanmaz; sahne özetindeki
+  `bbox` ile aynı). Delikler çıkarılmış, dışa aktarılan ağın kutusu: `solidBox(project, part)` / `solidPartsBox(project, parts)`
+  (ör. `solidPartsBox(p, exportableParts(p.parts))`; kesen delik yoksa `partBox` ile aynı, boolean yapılmaz; `initCsg()` gerekir).
 - `initCsg()` delik/boolean ve sadeleştirmeden önce beklenmelidir (`loadProjectFile`/`exportFile` kendileri bekler).
 - Betik çıktısını sekmede görmek için: `p3d open --ws <alan> kutu.p3d.json` ya da tarayıcısız `p3d snapshot --file kutu.p3d.json`.
 - Tek seferlik işlem listeleri için betik yerine `p3d apply --file model.p3d.json --ops ops.json` yeterlidir.

@@ -134,6 +134,40 @@ export function solidVolume(project: Project, part: Part): number {
   return v;
 }
 
+const boxCache = new Map<string, THREE.Box3>();
+
+/**
+ * Parçanın son hâlinin (delikler çıkarılmış) dünya kutusu — dışa aktarılan / `worldMesh` ağının kutusu. Kesen delik yoksa
+ * (ya da katı değilse) `partBox` ile aynıdır ve boolean yapılmaz. `partBox` ise şeklin kesimsiz kutusudur: yerleştirme
+ * işlemleri (`place_on`, `drop_to_bed` …), delik eşleştirmesi ve sahne özetindeki `bbox` onu kullanır. Delik tümünü
+ * kesiyorsa boş kutu döner (`isEmpty()`). Boolean hatasında kesimsiz kutu (görünen/dışa aktarılan da kesimsizdir).
+ */
+export function solidBox(project: Project, part: Part): THREE.Box3 {
+  if (!holesFor(project, part).length || !csgReady()) return partBox(part, project.settings.resolution);
+  const full = `${solidKey(project, part)}|${JSON.stringify(part.position)}|${JSON.stringify(part.rotation)}`;
+  const hit = boxCache.get(full);
+  if (hit) return hit.clone();
+  const g = exportGeometry(project, part);
+  const pos = g.getAttribute('position');
+  const index = g.getIndex();
+  const m = partMatrix(part);
+  const box = new THREE.Box3();
+  const v = new THREE.Vector3();
+  const n = index ? index.count : pos.count;
+  for (let i = 0; i < n; i++) box.expandByPoint(v.fromBufferAttribute(pos, index ? index.getX(i) : i).applyMatrix4(m));
+  g.dispose();
+  if (boxCache.size > 500) boxCache.clear();
+  boxCache.set(full, box.clone());
+  return box;
+}
+
+/** Parçaların son hâllerinin (delikler çıkarılmış) birleşik dünya kutusu; kesimsiz şekil kutusu için `partsBox`. */
+export function solidPartsBox(project: Project, parts: Part[]): THREE.Box3 {
+  const box = new THREE.Box3();
+  for (const p of parts) box.union(solidBox(project, p));
+  return box;
+}
+
 /** Dışa aktarılacak parçalar: görünür katılar. */
 export function exportableParts(parts: Part[]): Part[] {
   return parts.filter((p) => p.visible && roleOf(p) === 'solid');

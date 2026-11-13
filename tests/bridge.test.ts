@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { handleBridge } from '../server/bridge';
 import { makeAsset } from '../src/assets';
-import { contentDigest, type BridgeCommand, type BridgeHello, type BridgeResult, type BridgeSceneResponse, type BridgeWorkspace, type SceneSummary } from '../shared/ops';
+import { SNAPSHOT_MAX_SIDE, contentDigest, fitSnapshotSize, type BridgeCommand, type BridgeHello, type BridgeResult, type BridgeSceneResponse, type BridgeWorkspace, type SceneSummary } from '../shared/ops';
 
 // Köprü sunucusu port 0'da gerçek bir HTTP sunucusuyla çalıştırılır; sekmeler SSE'yi fetch akışıyla okur.
 let server: Server;
@@ -273,6 +273,25 @@ describe('köprü: çalışma alanları', () => {
     expect((await api('POST', '/api/bridge/ops', { ws: 'dosya-ws', action: 'mark_saved', digest })).status).toBe(400);
     expect((await api('POST', '/api/bridge/ops', { ws: 'dosya-ws', action: 'load' })).status).toBe(400);
     expect(t.commands.map((c) => c.action)).toEqual(['load', 'mark_saved']);
+  });
+
+  it('snapshot boyutu: sınırı aşan istek en-boy oranı korunarak küçültülür (BoltRush isteği #12)', async () => {
+    expect(SNAPSHOT_MAX_SIDE).toBe(4096);
+    expect(fitSnapshotSize(3200, 640)).toEqual({ width: 3200, height: 640 });
+    expect(fitSnapshotSize(8192, 1600)).toEqual({ width: 4096, height: 800 });
+    expect(fitSnapshotSize(1000, 9000)).toEqual({ width: 455, height: 4096 });
+    expect(fitSnapshotSize(100, 50)).toEqual({ width: 200, height: 200 });
+    expect(fitSnapshotSize(20000, 400)).toEqual({ width: 4096, height: 200 }); // oran sığmıyor: kısa kenar alt sınırda
+
+    const t = await openTab('snap-boyut');
+    await t.put(['a']);
+    t.auto(['a']);
+    const snap = async (snapshot: Record<string, unknown>) => {
+      await api('POST', '/api/bridge/ops', { ws: 'snap-boyut', action: 'snapshot', snapshot });
+      return t.commands.at(-1)!.snapshot!;
+    };
+    expect(await snap({ views: ['front'], width: 6000, height: 1200 })).toMatchObject({ views: ['front'], width: 4096, height: 819 });
+    expect(await snap({ views: ['yok'], width: 'abc', height: -5 })).toMatchObject({ views: ['iso', 'front', 'right', 'top'], width: 1000, height: 750 });
   });
 
   it('/workspaces bağlı sekmeleri ve son sahneyi listeler', async () => {

@@ -4,8 +4,8 @@ Kör çizmeyin: anlamlı her adımdan sonra görün ve ölçün. Bir model bitti
 
 | Komut | Ne verir | Ne zaman |
 |---|---|---|
-| `p3d snapshot [--views iso,front,back,left,right,top,bottom] [--size 1000x750] [--out klasör]` | PNG yolları; dosyaları Read ile açıp bakın | Her anlamlı adımdan sonra |
-| `p3d measure [--parts a,b]` | Parça başına kutu ve **delikler uygulanmış** hacim; toplam **birleşik** (union) hacim ve PLA tahmini | Ölçü/hacim hedefi varken, orijinalle karşılaştırırken (birleşik hacmi kullanın) |
+| `p3d snapshot [--views iso,front,back,left,right,top,bottom] [--size 1000x750] [--out klasör]` | PNG yolları; dosyaları Read ile açıp bakın. Kenar 200–4096 piksel (aşan boyut orantılı küçültülür, uyarılır) | Her anlamlı adımdan sonra |
+| `p3d measure [--parts a,b]` | Parça başına **delikler uygulanmış** kutu ve hacim; toplam **birleşik** (union) hacim ve PLA tahmini | Ölçü/hacim hedefi varken, orijinalle karşılaştırırken (birleşik hacmi kullanın) |
 | `p3d check [--profile print\|game]` | Z-fighting (aynı düzlemde üst üste yüzeyler), boolean hataları, hiçbir şeyi kesmeyen delikler, ince parçalar, tabla teması; hata varsa çıkış kodu 1 | Her bitmiş modelde |
 | `p3d section --axis x\|y\|z --at a,b [--parts …] [--file ref.stl] [--tol 0.1]` | Kesit çokgenleri ([y,z] / [x,z] / [x,y]); alan negatifse iç boşluk | Referanstan ölçerken, iç yapıyı kontrol ederken |
 

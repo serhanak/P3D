@@ -1,6 +1,8 @@
 # Proje durumu
 
-> Son güncelleme: **2026-11-11** — loft: kesitte ardışık çakışık nokta (dejenere kenar) nokta eşleşmesini korur (BoltRush isteği #8:
+> Son güncelleme: **2026-11-13** — BoltRush istekleri #11–13: `solidBox`/`solidPartsBox` (delikler çıkarılmış kutu; `measure`
+> kutusu da kesimli), `snapshot --size` sessiz kırpma yerine 4096'ya kadar orantılı oturtma + uyarı, prizma köşe fazı rehberde.
+> Önceki: **2026-11-11** — loft: kesitte ardışık çakışık nokta (dejenere kenar) nokta eşleşmesini korur (BoltRush isteği #8:
 > nokta atılınca kesitler yeniden örneklenip yüzey sessizce yanlış çıkıyordu). Önceki: **2026-11-09** — eskiz katmanı: kalem aracıyla ekranda çizerek niyet tarifi (`Project.sketch`, `sketch_*` işlemleri,
 > `p3d sketch`, snapshot'ta görünür; eskiz → geometri dönüşümü bilinçli olarak yok). Önceki: **2026-11-07** — `hull` her boyutta üretiliyor (BoltRush raporu: 1 m'lik gövde WASM'ı çökertiyordu; ızgara
 > bütçesi + sınır boşluğu), üretilemeyen geometri artık işlem hatası ve `check` hatası; `hull` için `geom.maxTris` üçgen
@@ -12,7 +14,7 @@
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (260 test, ~30 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
+1. `npm install` · `npm run typecheck` · `npm test` (265 test, ~30 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
    (README → Kurulum; `p3d status` kurulu skill eskiyse uyarır).
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
@@ -87,6 +89,19 @@
   tablosu. Kurallar: `sketch_update` tüm noktalar düzlem normalinde aynı konumdaysa `plane.at`'ı da taşır; kapalı yol en az 3 nokta ister
   (azsa açık kalır); dosyadaki bozuk eskiz yolu uyarıyla atlanır (parça kaybı sayılmaz, `export`/`apply`'ı durdurmaz); ~3°'den sığ
   açıyla düzleme tıklama yok sayılır. Rehber `p3d guide sketch`, skill güncellendi. Eskiz → geometri dönüşümü bilinçli olarak yok (yol haritası 10).
+- **Kesimli kutu, snapshot boyutu, prizma fazı (2026-11-13, BoltRush istekleri #11–13):**
+  - `partBox`/`partsBox` şeklin **kesimsiz** kutusudur (sözleşme; yerleştirme işlemleri, delik eşleştirmesi, sahne `bbox`'ı onu
+    kullanır) ama bu belgelenmemişti; betikler kesilen parçada yanlış sınır yazıyordu. Kararlı yüzeye `solidBox(project, part)` /
+    `solidPartsBox(project, parts)` eklendi (`src/model.ts`): dışa aktarılan / `worldMesh` ağının kutusu; kesen delik yoksa `partBox`,
+    delik tümünü keserse boş kutu; konum+döndürme+`solidKey` ile önbellekli. `p3d measure` parça ve TOPLAM kutusunu artık bununla
+    yazar (hacimle aynı geometri). `scene` bbox'ı değişmedi (rehberde "kesimsiz" diye yazıldı).
+  - `snapshot --size` her kenarı ayrı ayrı sessizce 2400'e kırpıyordu (3200x640 → 2400x640). Şimdi `fitSnapshotSize` (`shared/ops.ts`,
+    köprü ve CLI ortak): kenar 200–4096 piksel, uzun kenar aşarsa iki kenar orantılı küçültülür; CLI değişiklikte `uyarı:` basar,
+    PNG başlığı istenenden farklıysa (tarayıcı tuvali küçültürse) uyarır, geçersiz `--size` ve bilinmeyen `--views` adı tarayıcı
+    açılmadan hata verir (eskiden görünüm adı sessizce atılıyordu). Yol satırları değişmedi.
+  - Prizma köşe fazı `docs/guide/modeling.md`'de (düz kenar yerel −Y; `x: 90` her n'de düz taban; `y: 90` yalnız n 4'ün katıysa,
+    değilse `rotation.z = 90 mod (360/n)`; genel kural). Yeni `phase` parametresi eklenmedi: `rotation.z` (XYZ Euler'de önce,
+    parçanın kendi ekseninde) aynı işi görür. Claude talimatındaki prizma satırına kısa not.
 - **Loft çakışık nokta (2026-11-11, BoltRush isteği #8):** `cleanLoop` ardışık çakışık noktaları attığı için 8 noktalı kesit 6'ya
   düşüyor, sayılar farklı göründüğünden kesitler yay uzunluğuyla yeniden örneklenip indis eşleşmesi kayıyordu (hata/uyarı yok; örnekte
   hacim 498 yerine 533,3 cm³). Şimdi loft kesitleri birlikte temizlenir (`loftLoops`): kapanış tekrarı atılmış → hiç atılmamış →
@@ -143,6 +158,7 @@
 | Büyük `hull` | ✅ 3 test (`tests/geom.test.ts`: 1 m kutu tablosu tam hacim + `check` temiz, 10 kat eğri tablo = ölçekli kopya, ızgara sınırı WASM'ı bozmadan reddeder). Elle: kutu/eğri tablo 20 mm–3 m, çözünürlük 12/96/192, her biri ayrı süreçte temiz; BoltRush'ın birebir tekrarı (`p3d apply --new` → `scene` → `check`) doğru kutu; 1 m gövdenin görüntüsü tabloya uyuyor. Tarayıcı sekmesinde büyük gövde **denenmedi** |
 | `hull` `maxTris` | ✅ 2 test (`tests/geom.test.ts`: 2,2 m muz gövdesi 1000/4000/200 üçgende bütçe aşılmaz, hacim farkı < %1 / %3, kutu doğru, bozuk üçgen yok; doğrulama: aralık dışı hata, 0/null varsayılan, kesir yuvarlanır). Elle: muz/kutu/Benchy 100–5000 üçgen, çözünürlük 12/96; `p3d apply --new` + `check --profile game` temiz; görünmez Chrome görüntüsünde 2000/500 üçgenlik gövdeler tabloya uyuyor. Gerçek Claude ile ve Unreal'de **denenmedi** |
 | Eskiz katmanı | ✅ 31 test (`tests/sketch.test.ts`: Op'lar, özet, Bezier örnekleme, dosya gidiş-dönüş, Store seçimi; `tests/sketch-edit.test.ts`: ışın–düzlem, eksen kilidi, yakalama, tutamaç, kenar bölme; `cli.test.ts`: `p3d sketch`). Görünmez Chrome + CDP duman testi, gerçek fare/klavye (kare çiz/kapat, eğri nokta, Z kilidi + "15" Enter, çoklu seçim N kilidi, Ctrl+tık nokta ekle, Delete, Esc zinciri; konsol temiz; düzeltmelerden sonra tekrarlandı); `snapshot --file` izo/üst görüntüde yollar, ok, işaret ve adlar; `p3d-reviewer` incelemesi (10 bulgu, kritik yok) düzeltildi. Kullanıcının gerçek sekmesinde elle ve gerçek Claude ile eskiz yorumu **denenmedi** |
+| Kesimli kutu / snapshot boyutu / prizma fazı | ✅ 5 test (`tests/geom.test.ts`: BoltRush örneği `partsBox` 50 / `solidPartsBox` 0 = `worldMesh`, döndürülmüş + taşınmış parça (önbellek), deliksiz = `partBox`, tümüyle kesilen = boş; prizma n = 3–16 için rehberdeki üç kural ve BoltRush ölçümleri; `tests/bridge.test.ts`: `fitSnapshotSize` ve köprünün sekmeye ilettiği boyut; `tests/cli.test.ts`: geçersiz `--size` / görünüm). Elle: `p3d run` ile BoltRush yeniden üretimi, `measure --file` kesimli kutu, görünmez Chrome'da 4096x800 ve 6000x6000 → 4096x4096 PNG (başlık doğrulandı), altıgen prizma `y 90, z 30` önden düz tabanlı. Kullanıcının gerçek sekmesinde (donanım GPU) 4096 görüntü **denenmedi** |
 | Loft çakışık nokta | ✅ 4 test (`tests/geom.test.ts`: BoltRush örneği tam hacim 533,33 cm³ + `check --profile game` temiz + ayna; kapanış tekrarı / kapanışta ve başta dejenere kenar (prizmatoid tam hacmi 750) / eşleşmeyi bozan tekrar / 1024 sınırı; uç kesit, 3 kesitte kısmi çakışma düz ve yumuşak, ayna + `sharp`; yumuşak loft'ta çakışık nokta hacmi değiştirmez), düzeltme olmadan kırılıyorlar. Çakışık noktasız 8 tip loft'un ağı HEAD ile bayt bayt aynı; `p3d-reviewer` 120 rastgele loft'ta fark bulmadı, 3 bulgusu (ayna + sharp, 1024 sınırı, test kapsamı) düzeltildi. Elle: `p3d apply --new` + `measure` + `check` (düz ve yumuşak, 3 kesit), görünmez Chrome görüntüsünde çıkıntı ön kesitte kenardan doğuyor |
 | v0.3 özellikleri | ✅ 67 test (tekne şekli: kutu tablosu tam hacim, sıfır genişlikte kapanma, doğrulama; dışa aktarılan örnek tekne kapalı ağ dahil) (örtük yüzey küre hacmi, `sliceMany` = `sliceGeometry`, Regularize iğne üçgen <%1 dahil): yumuşak loft hacmi (daireye yakınsama), uç (koni ≈ πr²h/3), sharp (tam kutu), cuts, çerçeve (kapalı/açık alan), eğik yüzeye dik oturtma, birleşim hacmi, `check` çakışma bulur/temizde susar |
 | OBJ çıktısı | ✅ Her şekil için kapalı/doğru yönlü ağ ve hacim ≈ analitik değer (`tests/io.test.ts`) |

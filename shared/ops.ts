@@ -565,6 +565,21 @@ export type BridgeAction = 'undo' | 'redo' | 'fit' | 'snapshot' | 'load' | 'mark
 export const SNAPSHOT_VIEWS = ['iso', 'front', 'back', 'left', 'right', 'top', 'bottom'] as const;
 export type SnapshotView = (typeof SNAPSHOT_VIEWS)[number];
 
+/** snapshot görüntü kenarının sınırları (piksel). */
+export const SNAPSHOT_MIN_SIDE = 200;
+export const SNAPSHOT_MAX_SIDE = 4096;
+
+/**
+ * İstenen görüntü boyutunu sınırlara oturtur. Uzun kenar `SNAPSHOT_MAX_SIDE`'ı aşarsa iki kenar birlikte (en-boy oranı
+ * korunarak) küçültülür; kısa kenar `SNAPSHOT_MIN_SIDE`'ın altında kalırsa yalnızca o yükseltilir (çok uzun şeritlerde oran
+ * o zaman değişir). Sunucu (köprü) ve CLI aynı kuralı kullanır; CLI sonuç istenenden farklıysa uyarır.
+ */
+export function fitSnapshotSize(width: number, height: number): { width: number; height: number } {
+  const k = Math.min(1, SNAPSHOT_MAX_SIDE / Math.max(width, height));
+  const side = (v: number) => Math.min(SNAPSHOT_MAX_SIDE, Math.max(SNAPSHOT_MIN_SIDE, Math.round(v * k)));
+  return { width: side(width), height: side(height) };
+}
+
 export interface SnapshotOptions {
   views: SnapshotView[];
   width: number;

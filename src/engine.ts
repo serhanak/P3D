@@ -74,7 +74,11 @@ export function partMatrix(part: Part): THREE.Matrix4 {
   );
 }
 
-/** Parçanın dünya koordinatlarındaki sınırlayıcı kutusu (döndürme dahil). */
+/**
+ * Parçanın dünya koordinatlarındaki sınırlayıcı kutusu (döndürme dahil) — şeklin **kesimsiz** kutusu: delikler uygulanmaz
+ * (hızlı; yerleştirme işlemleri, delik eşleştirmesi ve sahne özetindeki `bbox` bunu kullanır). Delikler çıkarılmış son
+ * hâlin kutusu: `model.ts` → `solidBox` / `solidPartsBox`.
+ */
 export function partBox(part: Part, seg: number): THREE.Box3 {
   const pos = positionsFor(part, seg);
   const m = partMatrix(part);
@@ -84,6 +88,7 @@ export function partBox(part: Part, seg: number): THREE.Box3 {
   return box;
 }
 
+/** Parçaların kesimsiz şekil kutularının birleşimi (bkz. `partBox`; delikler çıkarılmış hâl için `solidPartsBox`). */
 export function partsBox(parts: Part[], seg: number): THREE.Box3 {
   const box = new THREE.Box3();
   for (const p of parts) box.union(partBox(p, seg));

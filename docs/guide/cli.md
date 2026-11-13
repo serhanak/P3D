@@ -11,12 +11,12 @@ Hata olursa çıkış kodu 1.
 |---|---|
 | `status` | Sunucu, kurulu skill güncel mi, alan ve adresi, bağlı sekme, rev, parça sayısı, `p3d.json`, dosya bağı, diğer alanlar |
 | `view` | Alanın adresini varsayılan tarayıcıda açar |
-| `scene [--full] [--stale]` | Sahne özeti (parça, şekil, parametre, merkez, bbox, renk, grup); `--full` proje JSON'u (stdout yalnızca JSON) |
+| `scene [--full] [--stale]` | Sahne özeti (parça, şekil, parametre, merkez, bbox, renk, grup; bbox şeklin kesimsiz kutusu); `--full` proje JSON'u (stdout yalnızca JSON) |
 | `ops [--ops ops.json] [--label "metin"]` | İşlem listesini uygular (ya da stdin); tek geri-al adımı |
 | `undo` · `redo` · `fit` | Geri al, yinele, görünümü sığdır |
 | `open [dosya] [--force]` | Dosyayı sekmeye yükler (geri alınabilir). Sekmede kaydedilmemiş iş varsa `--force` ister |
 | `save [dosya] [--force] [--embed]` | Sekmeyi dosyaya yazar (atomik). Başka dosyaya bağlı sekme / boş sekme / P3D olmayan dosya için korur |
-| `snapshot [--views …] [--size 1000x750] [--dims] [--out klasör]` | PNG görüntüler; yolları basar |
+| `snapshot [--views …] [--size 1000x750] [--dims] [--out klasör]` | PNG görüntüler; yolları basar. Kenar 200–4096 piksel: uzun kenar aşarsa iki kenar orantılı küçültülür ve uyarılır; bilinmeyen görünüm hata |
 | `import <dosya.stl\|obj\|3mf> [--name] [--role solid\|hole\|reference] [--color] [--max-tris 60000] [--keep-position]` | Ağ içe aktarır; dosya yolu parçada `src` olarak saklanır |
 
 ## Sekme ya da dosya (`--file m.p3d.json` ile tarayıcısız)
@@ -24,7 +24,7 @@ Hata olursa çıkış kodu 1.
 |---|---|
 | `scene --file m.p3d.json [--full]` | Dosyanın sahne özeti |
 | `check [--file] [--profile print\|game] [--max-tris N]` | Z-fighting, boolean, boş delik; print: ince parça, tabla; game: üçgen bütçesi, bozuk üçgen |
-| `measure [--file] [--parts a,b]` | Kutu, delikli hacim, birleşik hacim, PLA |
+| `measure [--file] [--parts a,b]` | Delikler çıkarılmış kutu ve hacim, birleşik hacim, PLA |
 | `section --axis x\|y\|z --at v1,v2 [--parts] [--file m.p3d.json \| ağ.stl] [--tol 0.1]` | Kesit çokgenleri |
 | `export <çıktı.stl\|3mf\|obj\|glb> [--file] [--parts a,b] [--merge] [--skeleton] [--units m\|mm] [--normals flat\|smooth]` | Dışa aktarım; GLB seçenekleri `p3d guide game` |
 | `sketch [--file] [--json] [--sample 8]` · `sketch --clear [ad] [--file] [--label]` | Kullanıcının ekranda çizdiği eskiz yollarını listeler (tür, nokta, düzlem, kutu, not; `--json` sahne özetindeki gibi, stdout yalnızca JSON) / adı verilen yolu ya da (ad yoksa) tüm eskizi siler; dosyada hata varsa yazmaz (`p3d guide sketch`) |
