@@ -1,6 +1,7 @@
 # Proje durumu
 
-> Son güncelleme: **2026-11-09** — eskiz katmanı: kalem aracıyla ekranda çizerek niyet tarifi (`Project.sketch`, `sketch_*` işlemleri,
+> Son güncelleme: **2026-11-11** — loft: kesitte ardışık çakışık nokta (dejenere kenar) nokta eşleşmesini korur (BoltRush isteği #8:
+> nokta atılınca kesitler yeniden örneklenip yüzey sessizce yanlış çıkıyordu). Önceki: **2026-11-09** — eskiz katmanı: kalem aracıyla ekranda çizerek niyet tarifi (`Project.sketch`, `sketch_*` işlemleri,
 > `p3d sketch`, snapshot'ta görünür; eskiz → geometri dönüşümü bilinçli olarak yok). Önceki: **2026-11-07** — `hull` her boyutta üretiliyor (BoltRush raporu: 1 m'lik gövde WASM'ı çökertiyordu; ızgara
 > bütçesi + sınır boşluğu), üretilemeyen geometri artık işlem hatası ve `check` hatası; `hull` için `geom.maxTris` üçgen
 > bütçesi (oyun varlığı, BoltRush isteği #7). Önceki: **2026-11-02** — v0.4: başka projelerden kullanım ([`EXTERNAL-USE.md`](EXTERNAL-USE.md)): global `p3d`
@@ -11,7 +12,7 @@
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (256 test, ~25 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
+1. `npm install` · `npm run typecheck` · `npm test` (260 test, ~30 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
    (README → Kurulum; `p3d status` kurulu skill eskiyse uyarır).
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
@@ -86,6 +87,13 @@
   tablosu. Kurallar: `sketch_update` tüm noktalar düzlem normalinde aynı konumdaysa `plane.at`'ı da taşır; kapalı yol en az 3 nokta ister
   (azsa açık kalır); dosyadaki bozuk eskiz yolu uyarıyla atlanır (parça kaybı sayılmaz, `export`/`apply`'ı durdurmaz); ~3°'den sığ
   açıyla düzleme tıklama yok sayılır. Rehber `p3d guide sketch`, skill güncellendi. Eskiz → geometri dönüşümü bilinçli olarak yok (yol haritası 10).
+- **Loft çakışık nokta (2026-11-11, BoltRush isteği #8):** `cleanLoop` ardışık çakışık noktaları attığı için 8 noktalı kesit 6'ya
+  düşüyor, sayılar farklı göründüğünden kesitler yay uzunluğuyla yeniden örneklenip indis eşleşmesi kayıyordu (hata/uyarı yok; örnekte
+  hacim 498 yerine 533,3 cm³). Şimdi loft kesitleri birlikte temizlenir (`loftLoops`): kapanış tekrarı atılmış → hiç atılmamış →
+  tümü atılmış biçimlerden nokta sayılarını eşit tutan (ve 1024'ü aşmayan) ilki seçilir; atılan kapanış noktasına verilen `sharp`
+  indisi 0'a eşlenir (aynada 0–1 çakışık çifti sona geçer); çakışık noktalar ağda tek köşedir (`repeatGroups`: yan dörtgen
+  üçgene iner, kapak tekil noktalarla, ağ kapalı, bozuk üçgen yok), yumuşatmada teğetler tekil noktalardan hesaplanır (yüzey
+  değişmez). Çakışık nokta içermeyen loft'larda ağ bayt bayt aynı; ilk noktayı sonda tekrarlayan kesitler eskisi gibi kırpılır.
 - **Örtük yüzey ve ölçüm yardımcıları** (`csg.ts`): `levelSetGeometry` (sdf → kapalı ağ, isteğe bağlı manifold
   sadeleştirme), `sliceMany` (bir ağda çok kesit, tek dönüşüm). İçe aktarma sadeleştirmesi `Regularize` ile.
   Testler her örneğin onarımsız yüklendiğini ve kapalı ağ olarak dışa aktarıldığını doğrular.
@@ -135,6 +143,7 @@
 | Büyük `hull` | ✅ 3 test (`tests/geom.test.ts`: 1 m kutu tablosu tam hacim + `check` temiz, 10 kat eğri tablo = ölçekli kopya, ızgara sınırı WASM'ı bozmadan reddeder). Elle: kutu/eğri tablo 20 mm–3 m, çözünürlük 12/96/192, her biri ayrı süreçte temiz; BoltRush'ın birebir tekrarı (`p3d apply --new` → `scene` → `check`) doğru kutu; 1 m gövdenin görüntüsü tabloya uyuyor. Tarayıcı sekmesinde büyük gövde **denenmedi** |
 | `hull` `maxTris` | ✅ 2 test (`tests/geom.test.ts`: 2,2 m muz gövdesi 1000/4000/200 üçgende bütçe aşılmaz, hacim farkı < %1 / %3, kutu doğru, bozuk üçgen yok; doğrulama: aralık dışı hata, 0/null varsayılan, kesir yuvarlanır). Elle: muz/kutu/Benchy 100–5000 üçgen, çözünürlük 12/96; `p3d apply --new` + `check --profile game` temiz; görünmez Chrome görüntüsünde 2000/500 üçgenlik gövdeler tabloya uyuyor. Gerçek Claude ile ve Unreal'de **denenmedi** |
 | Eskiz katmanı | ✅ 31 test (`tests/sketch.test.ts`: Op'lar, özet, Bezier örnekleme, dosya gidiş-dönüş, Store seçimi; `tests/sketch-edit.test.ts`: ışın–düzlem, eksen kilidi, yakalama, tutamaç, kenar bölme; `cli.test.ts`: `p3d sketch`). Görünmez Chrome + CDP duman testi, gerçek fare/klavye (kare çiz/kapat, eğri nokta, Z kilidi + "15" Enter, çoklu seçim N kilidi, Ctrl+tık nokta ekle, Delete, Esc zinciri; konsol temiz; düzeltmelerden sonra tekrarlandı); `snapshot --file` izo/üst görüntüde yollar, ok, işaret ve adlar; `p3d-reviewer` incelemesi (10 bulgu, kritik yok) düzeltildi. Kullanıcının gerçek sekmesinde elle ve gerçek Claude ile eskiz yorumu **denenmedi** |
+| Loft çakışık nokta | ✅ 4 test (`tests/geom.test.ts`: BoltRush örneği tam hacim 533,33 cm³ + `check --profile game` temiz + ayna; kapanış tekrarı / kapanışta ve başta dejenere kenar (prizmatoid tam hacmi 750) / eşleşmeyi bozan tekrar / 1024 sınırı; uç kesit, 3 kesitte kısmi çakışma düz ve yumuşak, ayna + `sharp`; yumuşak loft'ta çakışık nokta hacmi değiştirmez), düzeltme olmadan kırılıyorlar. Çakışık noktasız 8 tip loft'un ağı HEAD ile bayt bayt aynı; `p3d-reviewer` 120 rastgele loft'ta fark bulmadı, 3 bulgusu (ayna + sharp, 1024 sınırı, test kapsamı) düzeltildi. Elle: `p3d apply --new` + `measure` + `check` (düz ve yumuşak, 3 kesit), görünmez Chrome görüntüsünde çıkıntı ön kesitte kenardan doğuyor |
 | v0.3 özellikleri | ✅ 67 test (tekne şekli: kutu tablosu tam hacim, sıfır genişlikte kapanma, doğrulama; dışa aktarılan örnek tekne kapalı ağ dahil) (örtük yüzey küre hacmi, `sliceMany` = `sliceGeometry`, Regularize iğne üçgen <%1 dahil): yumuşak loft hacmi (daireye yakınsama), uç (koni ≈ πr²h/3), sharp (tam kutu), cuts, çerçeve (kapalı/açık alan), eğik yüzeye dik oturtma, birleşim hacmi, `check` çakışma bulur/temizde susar |
 | OBJ çıktısı | ✅ Her şekil için kapalı/doğru yönlü ağ ve hacim ≈ analitik değer (`tests/io.test.ts`) |
 | Proje kaydet/yükle | ✅ Gidiş-dönüş ve bozuk dosya onarımı testleri; `examples/` dosyaları onarımsız yüklenir |
@@ -164,7 +173,9 @@
   çift başına 200 bin üçgen karşılaştırmasıyla sınırlıdır.
 - Kapalı olmayan (manifold olmayan) içe aktarılmış ağlar deliklerle kesilemez (uyarı verilir, ağ olduğu gibi kalır).
 - Loft kesitlerinde nokta karşılığı kullanıcıya/yapay zekâya bağlı; farklı sayıda noktada otomatik hizalama basittir
-  (alttaki nokta), bükülme olabilir. `smooth` olmadan yüzey kesitler arasında doğrusaldır.
+  (alttaki nokta), bükülme olabilir. `smooth` olmadan yüzey kesitler arasında doğrusaldır. Çakışık nokta yalnızca tam eşitse
+  (1e-4 mm yuvarlamadan sonra) dejenere kenar sayılır; dosyaya önceden kaydedilmiş (noktası atılmış) hatalı loft'lar kendiliğinden
+  düzelmez, kesitleri yeniden üretin.
 - `place_on_surface` deliksiz yüzeye göre çalışır ve en yakın noktayı kaba kuvvetle arar (çok büyük ağlarda yavaş).
 - Loft, ucunda sıfıra inen ya da topolojisi değişen gövdelerde (tekne başı/kıçı, küpeşte + kuyu) bozuk sonuç verir;
   bu gövdeler için `hull` şekli kullanılmalı.

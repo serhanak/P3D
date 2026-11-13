@@ -54,24 +54,66 @@ function selfIntersects(pts: Pt2[]): boolean {
   return false;
 }
 
-/** Kapalı çokgeni temizler: sayıya çevirir, ardışık/kapanış tekrarlarını atar, alan ve kesişme denetler. */
-export function cleanLoop(raw: unknown, what: string): Pt2[] {
+const samePt = (a: Pt2, b: Pt2) => a[0] === b[0] && a[1] === b[1];
+
+/** Nokta listesini sayıya çevirir ve 1e-4 mm'ye yuvarlar (tekrarları atmaz). */
+function loopPoints(raw: unknown, what: string): Pt2[] {
   if (!Array.isArray(raw)) throw new GeomError(`${what}: nokta listesi gerekli.`);
-  const out: Pt2[] = [];
-  for (const p of raw) {
+  return raw.map((p) => {
     if (!Array.isArray(p) || p.length < 2) throw new GeomError(`${what}: her nokta [a, b] olmalı.`);
     const q: Pt2 = [r4(Number(p[0])), r4(Number(p[1]))];
     if (!Number.isFinite(q[0]) || !Number.isFinite(q[1])) throw new GeomError(`${what}: geçersiz sayı.`);
-    const last = out[out.length - 1];
-    if (last && last[0] === q[0] && last[1] === q[1]) continue;
-    out.push(q);
-  }
-  while (out.length > 1 && out[0][0] === out[out.length - 1][0] && out[0][1] === out[out.length - 1][1]) out.pop();
+    return q;
+  });
+}
+
+/** Ardışık tekrarları (`interior`) ve sonda ilk noktayı tekrarlayan kapanış noktalarını (`closing`) atar. */
+function dropRepeats(pts: Pt2[], interior: boolean, closing: boolean): Pt2[] {
+  const out = interior ? pts.filter((p, i) => i === 0 || !samePt(p, pts[i - 1])) : pts.slice();
+  if (closing) while (out.length > 1 && samePt(out[0], out[out.length - 1])) out.pop();
+  return out;
+}
+
+/** Tekrarsız kapalı çokgeni denetler: nokta sayısı, kendini kesme, alan. */
+function checkLoop(out: Pt2[], what: string): void {
   if (out.length < 3) throw new GeomError(`${what}: en az 3 farklı nokta gerekli.`);
   if (out.length > MAX_POINTS) throw new GeomError(`${what}: en fazla ${MAX_POINTS} nokta.`);
   if (selfIntersects(out)) throw new GeomError(`${what}: kenarlar birbirini kesiyor; noktaları çevre boyunca sırayla verin.`);
   if (Math.abs(signedArea(out)) < 1e-6) throw new GeomError(`${what}: alanı sıfır (noktalar aynı doğru üzerinde).`);
+}
+
+/** Kapalı çokgeni temizler: sayıya çevirir, ardışık/kapanış tekrarlarını atar, alan ve kesişme denetler. */
+export function cleanLoop(raw: unknown, what: string): Pt2[] {
+  const out = dropRepeats(loopPoints(raw, what), true, true);
+  checkLoop(out, what);
   return out;
+}
+
+/**
+ * Loft'un halka kesitleri birlikte temizlenir: ardışık çakışık noktalar (dejenere kenar) kesitler arası indis
+ * eşleşmesinin yer tutucusudur — bir kesitte "erimiş" nokta öbür kesitte açılır (ör. kesit boyunca doğup büyüyen
+ * çıkıntı). Tekrarları atmak nokta sayısını değiştirip eşleşmeyi kaydırırdı. Biçimler sırasıyla: kapanış tekrarı
+ * atılmış, hiçbir tekrarı atılmamış, tüm tekrarları atılmış; halka kesitlerin nokta sayısını eşit tutan ilk biçim
+ * seçilir (`MAX_POINTS`'i aşan biçim atlanır). Hiçbiri eşit tutmuyorsa tekrarsız biçim döner (farklı sayılar yeniden
+ * örneklenir). `closing`: kapanış tekrarı atılan biçimde ham nokta sayısı — n…closing−1 indisleri atılan, ilk noktayla
+ * çakışık kapanış noktalarıdır (`sharp` bunları 0'a eşler; ör. aynada 0–1 çakışık çifti sona geçer).
+ */
+function loftLoops(items: { raw: unknown; what: string }[]): { loops: Pt2[][]; closing: number } {
+  if (!items.length) return { loops: [], closing: 0 };
+  const raws: Pt2[][] = [];
+  const forms = items.map(({ raw, what }) => {
+    const pts = loopPoints(raw, what);
+    const strict = dropRepeats(pts, true, true);
+    checkLoop(strict, what);
+    raws.push(pts);
+    return [dropRepeats(pts, false, true), pts, strict];
+  });
+  for (let f = 0; f < 2; f++) {
+    const n = forms[0][f].length;
+    if (n > MAX_POINTS || !forms.every((x) => x[f].length === n)) continue;
+    return { loops: forms.map((x) => x[f]), closing: f === 0 ? Math.max(...raws.map((p) => p.length)) : n };
+  }
+  return { loops: forms.map((x) => x[2]), closing: 0 };
 }
 
 function axisOf(v: unknown): GeomAxis {
@@ -105,7 +147,7 @@ export function sanitizeGeom(shape: GeomShape, raw: unknown): PartGeom {
     case 'loft': {
       if (!Array.isArray(g.sections) || g.sections.length < 2) throw new GeomError('Loft için en az 2 kesit gerekli.');
       if (g.sections.length > MAX_SECTIONS) throw new GeomError(`Loft için en fazla ${MAX_SECTIONS} kesit.`);
-      const sections = g.sections.map((s, i) => {
+      const parsed = g.sections.map((s, i) => {
         const o = (s ?? {}) as Record<string, unknown>;
         const at = r4(Number(o.at));
         if (!Number.isFinite(at)) throw new GeomError(`Kesit ${i + 1}: 'at' sayı olmalı.`);
@@ -114,10 +156,13 @@ export function sanitizeGeom(shape: GeomShape, raw: unknown): PartGeom {
           const q = o.points[0] as unknown[];
           const pt: Pt2 = [r4(Number(q?.[0])), r4(Number(q?.[1]))];
           if (!pt.every(Number.isFinite)) throw new GeomError(`Kesit ${i + 1}: geçersiz uç noktası.`);
-          return { at, points: [pt] };
+          return { at, apex: pt };
         }
-        return { at, points: cleanLoop(o.points, `Kesit ${i + 1}`) };
+        return { at, raw: o.points, what: `Kesit ${i + 1}` };
       });
+      const { loops, closing } = loftLoops(parsed.flatMap((s) => (s.apex ? [] : [{ raw: s.raw, what: s.what! }])));
+      let r = 0;
+      const sections = parsed.map((s) => ({ at: s.at, points: s.apex ? [s.apex] : loops[r++] }));
       sections.sort((a, b) => a.at - b.at);
       for (let i = 1; i < sections.length; i++) {
         if (sections[i].at - sections[i - 1].at < 1e-3) throw new GeomError(`İki kesit aynı konumda (at = ${sections[i].at}).`);
@@ -131,7 +176,8 @@ export function sanitizeGeom(shape: GeomShape, raw: unknown): PartGeom {
       if (Array.isArray(g.sharp) && g.sharp.length) {
         const n = rings[0].points.length;
         if (rings.some((s) => s.points.length !== n)) throw new GeomError("'sharp' için tüm kesitlerde nokta sayısı aynı olmalı.");
-        const sharp = [...new Set(g.sharp.map(Number))].sort((a, b) => a - b);
+        // Atılan kapanış noktası (ilk noktayla çakışık) ilk noktanın kendisidir.
+        const sharp = [...new Set(g.sharp.map(Number).map((k) => (Number.isInteger(k) && k >= n && k < closing ? 0 : k)))].sort((a, b) => a - b);
         if (sharp.some((k) => !Number.isInteger(k) || k < 0 || k >= n)) throw new GeomError(`'sharp' indisleri 0…${n - 1} arası tam sayı olmalı.`);
         out.sharp = sharp;
       }
@@ -443,25 +489,49 @@ function pchipTangents(f: number[], t: number[], closed: boolean, sharp?: Set<nu
 }
 
 /**
+ * Halkadaki ardışık çakışık noktaları (dejenere kenar; döngüsel, sondaki nokta ilkiyle de) gruplar: `group[i]` i.
+ * noktanın tekil nokta numarası (çevre sırasıyla 0…count−1). Çakışık nokta yoksa group[i] = i.
+ */
+function repeatGroups(pts: Pt2[]): { group: number[]; count: number } {
+  const n = pts.length;
+  const prev = (i: number) => (i - 1 + n) % n;
+  let s = 0;
+  while (s < n && samePt(pts[s], pts[prev(s)])) s++;
+  if (s === n) return { group: new Array<number>(n).fill(0), count: 1 };
+  const group = new Array<number>(n);
+  let count = 0;
+  for (let j = 0; j < n; j++) {
+    const i = (s + j) % n;
+    group[i] = j > 0 && samePt(pts[i], pts[prev(i)]) ? group[prev(i)] : count++;
+  }
+  return { group, count };
+}
+
+/**
  * Kapalı çokgeni monoton kübikle yumuşatır (parametre: kiriş uzunluğu); her kenar `sub` parçaya bölünür.
  * Keskin köşeler korunur. Dönen dizide i·sub indisli nokta özgün i. noktadır (kesitler arası eşleşme korunur).
+ * Çakışık noktalar yumuşatmayı etkilemez: teğetler tekil noktalardan, dejenere kenar `sub` kopya olarak kalır.
  */
 function smoothLoop(pts: Pt2[], sub: number, sharp: Set<number>): Pt2[] {
   const n = pts.length;
+  const { group, count: m } = repeatGroups(pts);
+  const u: Pt2[] = new Array(m);
+  group.forEach((g, i) => (u[g] = pts[i]));
   const t = [0];
-  for (let i = 0; i < n; i++) t.push(t[i] + Math.max(1e-6, Math.hypot(pts[(i + 1) % n][0] - pts[i][0], pts[(i + 1) % n][1] - pts[i][1])));
-  const tu = pchipTangents(pts.map((p) => p[0]), t, true, sharp);
-  const tv = pchipTangents(pts.map((p) => p[1]), t, true, sharp);
+  for (let g = 0; g < m; g++) t.push(t[g] + Math.max(1e-6, Math.hypot(u[(g + 1) % m][0] - u[g][0], u[(g + 1) % m][1] - u[g][1])));
+  const sharpU = new Set([...sharp].map((k) => group[k]));
+  const tu = pchipTangents(u.map((p) => p[0]), t, true, sharpU);
+  const tv = pchipTangents(u.map((p) => p[1]), t, true, sharpU);
   const out: Pt2[] = [];
   for (let i = 0; i < n; i++) {
-    const j = (i + 1) % n;
-    const h = t[i + 1] - t[i];
+    const [a, b] = [group[i], group[(i + 1) % n]];
+    const h = t[a + 1] - t[a];
     for (let k = 0; k < sub; k++) {
       const s = k / sub;
       out.push(
-        k === 0
+        k === 0 || a === b
           ? pts[i]
-          : [hermite1(pts[i][0], pts[j][0], tu[i][1] * h, tu[j][0] * h, s), hermite1(pts[i][1], pts[j][1], tv[i][1] * h, tv[j][0] * h, s)],
+          : [hermite1(u[a][0], u[b][0], tu[a][1] * h, tu[b][0] * h, s), hermite1(u[a][1], u[b][1], tv[a][1] * h, tv[b][0] * h, s)],
       );
     }
   }
@@ -555,12 +625,17 @@ function loftRaw(g: LoftGeom, seg: number): RawMesh {
   const N = Math.max(...rings.map((r) => r.length));
   const pos: number[] = [];
   const idx: number[] = [];
+  // Halkanın ardışık çakışık noktaları (dejenere kenar) tek köşedir: yan dörtgen üçgene iner, ağ kapalı kalır.
+  const groups = rings.map((ring) => repeatGroups(ring));
   const base: number[] = [];
   rings.forEach((ring, k) => {
     base.push(pos.length / 3);
-    for (const [u, v] of ring) pos.push(u, v, ats[k]);
+    const { group, count } = groups[k];
+    const first = new Array<number>(count);
+    group.forEach((g, i) => (first[g] ??= i));
+    for (const i of first) pos.push(ring[i][0], ring[i][1], ats[k]);
   });
-  const vid = (k: number, i: number) => (rings[k].length === 1 ? base[k] : base[k] + (i % N));
+  const vid = (k: number, i: number) => (rings[k].length === 1 ? base[k] : base[k] + groups[k].group[i % N]);
   const tri = (a: number, b: number, c: number) => {
     if (a !== b && b !== c && a !== c) idx.push(a, b, c);
   };
@@ -581,9 +656,12 @@ function loftRaw(g: LoftGeom, seg: number): RawMesh {
   // Kapaklar (uç noktası olmayan uçlar): ilk kesit -w, son kesit +w yönüne bakar.
   const cap = (k: number, up: boolean) => {
     if (rings[k].length === 1) return;
-    const contour = rings[k].map(([u, v]) => new THREE.Vector2(u, v));
+    // Kontur tekil köşelerden (köşe sırası = pos'a yazılış sırası).
+    const pts = new Array<Pt2>(groups[k].count);
+    groups[k].group.forEach((g, i) => (pts[g] ??= rings[k][i]));
+    const contour = pts.map(([u, v]) => new THREE.Vector2(u, v));
     for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(contour, [])) {
-      const [pa, pb, pc] = [rings[k][a], rings[k][b], rings[k][c]];
+      const [pa, pb, pc] = [pts[a], pts[b], pts[c]];
       const z = (pb[0] - pa[0]) * (pc[1] - pa[1]) - (pb[1] - pa[1]) * (pc[0] - pa[0]);
       if ((z > 0) === up) idx.push(base[k] + a, base[k] + b, base[k] + c);
       else idx.push(base[k] + a, base[k] + c, base[k] + b);

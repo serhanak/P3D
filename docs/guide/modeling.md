@@ -44,7 +44,10 @@ noktalar çevre boyunca sıralıdır. Nokta sayısını makul tutun (çokgen ba�
 - **`loft`** `{kind, axis, sections: [{at, points}], smooth, sharp}`: kesitler arası yüzey. Her kesitte **aynı nokta sayısı**,
   aynı başlangıç noktası ve aynı dönüş yönü (ör. alt orta, saat yönünün tersi). Uçta tek noktalı kesit sivri bitirir.
   `smooth: true` organik yüzey (monoton kübik, taşmaz), `sharp` keskin kalacak indisler. Kesit noktalarını eğri boyunca eşit
-  yay uzunluğuyla dağıtın. **Loft, kesiti ucunda sıfıra inen ya da topolojisi değişen gövdelerde zayıftır** → `hull`.
+  yay uzunluğuyla dağıtın. Bir kesitte **ardışık iki noktayı çakıştırmak** (dejenere kenar) noktanın orada erimiş olması
+  demektir: nokta sayısı ve indis eşleşmesi korunur, nokta öbür kesitte açılır (kesit boyunca doğup büyüyen çıkıntı/oyuk;
+  `smooth` yüzeyini değiştirmez). Çakışık noktalar sayılınca da kesitlerin nokta sayısı eşit değilse tekrarlar atılır ve
+  kesitler yeniden örneklenir. **Loft, kesiti ucunda sıfıra inen ya da topolojisi değişen gövdelerde zayıftır** → `hull`.
 - **`hull`** `{kind, stations: [{x, keel, sheer, breadth[]}]}`: x boyunca, y'de simetrik gövde (endaze). `breadth` omurgadan
   küpeşteye eşit aralıklı yarı genişliklerdir, her istasyonda aynı sayı; x artan sırada. İlk/son istasyon düz ayna ile kapanır;
   tüm genişlikleri 0 olan istasyon sivri uçtur. Tekne, kano, gövde, araç kaportası gibi sivrilen gövdeler için. Oyuk (güverte)

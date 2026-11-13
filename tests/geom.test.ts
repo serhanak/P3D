@@ -159,6 +159,87 @@ describe('loft', () => {
     applyOps(p, [{ op: 'scale', part: 'kutu', factor: 2 }], null);
     expect(solid(p, 'kutu').vol).toBeCloseTo(64 * 8, 3);
   });
+
+  // BoltRush isteği #8: ardışık çakışık nokta atılınca kesitler farklı sayıya düşüp yeniden örnekleniyor, eşleşme kayıyordu.
+  it('ardışık çakışık noktalar (dejenere kenar) indis eşleşmesini korur: doğan çıkıntının hacmi tam', () => {
+    const sec = (t: number): [number, number][] => [[0, 0], [20, 0], [20, 30], [20 + 40 * t, 30 + 10 * t], [20 + 40 * t, 70 - 10 * t], [20, 70], [20, 100], [0, 100]];
+    const p = project([create('çıkıntı', 'loft', { kind: 'loft', axis: 'y', sections: [{ at: -100, points: sec(0) }, { at: 100, points: sec(1) }] })]);
+    const part = p.parts[0];
+    expect(part.geom?.kind === 'loft' && part.geom.sections.map((x) => x.points.length)).toEqual([8, 8]);
+    const s = solid(p, 'çıkıntı');
+    expect(s.bad).toBe(0);
+    // Kesit alanı A(t) = 2000 + 1600t − 400t² (t: 0…1), y boyunca 200 mm; yan dörtgenler düzlemsel → tam.
+    expect(s.vol).toBeCloseTo(200 * (2000 + 800 - 400 / 3), 1);
+    expect(checkProject(p, { profile: 'game' })).toEqual([]); // bozuk (alanı ~0) üçgen de yok
+    // Ayna: nokta sayısı ve hacim korunur.
+    const r = applyOps(p, [{ op: 'mirror', part: 'çıkıntı', plane: 'x', at: 0, name: 'ayna' }], null);
+    expect(r.errors).toEqual([]);
+    const m = solid(p, 'ayna');
+    expect(m.bad).toBe(0);
+    expect(m.vol).toBeCloseTo(s.vol, 1);
+  });
+
+  it('çakışık nokta biçimleri: kapanış tekrarı, kapanışta dejenere kenar, eşleşmeyi bozan tekrar', () => {
+    const lens = (p: Project, name: string) => {
+      const g = p.parts.find((x) => x.name === name)!.geom;
+      return g?.kind === 'loft' ? g.sections.map((x) => x.points.length) : [];
+    };
+    // Tüm kesitler ilk noktayı sonda tekrarlıyorsa (kapalı çokgen yazımı) tekrar atılır — eski davranış.
+    const sq: [number, number][] = [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]];
+    const p1 = project([create('kapalı', 'loft', { kind: 'loft', axis: 'z', sections: [{ at: 0, points: sq }, { at: 5, points: sq }] })]);
+    expect(lens(p1, 'kapalı')).toEqual([4, 4]);
+    expect(solid(p1, 'kapalı').vol).toBeCloseTo(500, 3);
+    // Üçgen → kare: sol köşe ikiye açılır. Çakışık nokta kapanışta ya da başta olsun, eşleşme aynı → aynı gövde.
+    const tri = (a: [number, number][], b: [number, number][], name: string) =>
+      create(name, 'loft', { kind: 'loft', axis: 'z', sections: [{ at: 0, points: a }, { at: 10, points: b }] });
+    const [p0, p1_, p2] = [[0, 5], [10, 0], [10, 10]] as [number, number][];
+    const [q0, q1, q2, q3] = [[0, 0], [10, 0], [10, 10], [0, 10]] as [number, number][];
+    const p2p = project([tri([p0, p1_, p2, p0], [q0, q1, q2, q3], 'sonda'), tri([p0, p0, p1_, p2], [q3, q0, q1, q2], 'başta')]);
+    expect(lens(p2p, 'sonda')).toEqual([4, 4]);
+    const [a, b] = [solid(p2p, 'sonda'), solid(p2p, 'başta')];
+    expect(a.bad).toBe(0);
+    expect(b.bad).toBe(0);
+    // Tüm köşeler iki paralel düzlemde (prizmatoid): V = h/6·(A0 + 4·Aorta + A1) = 10/6·(50 + 4·75 + 100) tam.
+    expect(a.vol).toBeCloseTo(750, 4);
+    expect(b.vol).toBeCloseTo(750, 4);
+    // Tekrar korununca sayılar yine farklıysa tekrarlar atılır (4 = 4 nokta eşleşmesi).
+    const p3 = project([tri([q0, q1, q1, q2, q3], [q0, q1, q2, q3], 'atılır')]);
+    expect(lens(p3, 'atılır')).toEqual([4, 4]);
+    // Çakışık noktalarla MAX_POINTS (1024) aşılıyorsa tekrarsız biçime düşülür (hata değil).
+    const big = Array.from({ length: 1020 }, (_, i) => [10 * Math.cos((2 * Math.PI * i) / 1020), 10 * Math.sin((2 * Math.PI * i) / 1020)] as [number, number]);
+    const bigDup = big.flatMap((p, i) => (i % 102 === 0 ? [p, p] : [p]));
+    const p4 = project([tri(bigDup, bigDup, 'büyük')]);
+    expect(lens(p4, 'büyük')).toEqual([1020, 1020]);
+  });
+
+  it('çakışık nokta: uç kesit, 3 kesitte kısmi çakışma (düz ve yumuşak), ayna + sharp', () => {
+    const sec = (t: number): [number, number][] => [[0, 0], [20, 0], [20, 30], [20 + 40 * t, 30 + 10 * t], [20 + 40 * t, 70 - 10 * t], [20, 70], [20, 100], [0, 100]];
+    // Parçalar X'te ayrık (üst üste binip check'te çakışma vermesin).
+    const loft = (name: string, x: number, sections: { at: number; points: [number, number][] }[], extra: Record<string, unknown> = {}) =>
+      create(name, 'loft', { kind: 'loft', axis: 'y', sections, ...extra } as PartGeom, { position: { x, y: 0, z: 0 } });
+    const three = [{ at: -100, points: sec(0) }, { at: 0, points: sec(0.5) }, { at: 100, points: sec(1) }];
+    const p = project([
+      loft('uç', -100, [{ at: -100, points: sec(0) }, { at: 100, points: [[10, 50]] }]),
+      loft('düz', 0, three),
+      loft('yumuşak', 100, three, { smooth: true }),
+    ]);
+    for (const name of ['uç', 'düz', 'yumuşak']) {
+      const s = solid(p, name);
+      expect(s.bad, name).toBe(0);
+      expect(s.vol, name).toBeGreaterThan(0);
+    }
+    // Düz 3 kesit: ara kesit sec(0.5) tam olarak doğrusal ara değer → hacim 2 kesitlinin aynısı.
+    expect(solid(p, 'düz').vol).toBeCloseTo(200 * (2000 + 800 - 400 / 3), 1);
+    expect(checkProject(p, { profile: 'game' })).toEqual([]);
+    // Tüm kesitlerde 0–1 çakışık + sharp o noktada: aynada çift sona geçip kapanış tekrarı olarak atılır, sharp 0'a eşlenir.
+    const sq: [number, number][] = [[0, 0], [0, 0], [10, 0], [10, 10], [0, 10]];
+    const q = project([create('a', 'loft', { kind: 'loft', axis: 'z', sections: [{ at: 0, points: sq }, { at: 10, points: sq }], smooth: true, sharp: [1] })]);
+    const r = applyOps(q, [{ op: 'mirror', part: 'a', plane: 'x', at: 0, name: 'b' }], null);
+    expect(r.errors).toEqual([]);
+    const gb = q.parts.find((x) => x.name === 'b')!.geom;
+    expect(gb?.kind === 'loft' && [gb.sections[0].points.length, gb.sharp]).toEqual([4, [0]]);
+    expect(solid(q, 'b').vol).toBeCloseTo(solid(q, 'a').vol, 3);
+  });
 });
 
 describe('geom doğrulama', () => {
@@ -292,6 +373,18 @@ describe('loft yumuşatma, uç ve keskin köşeler', () => {
     const s = solid(p, 'kutu');
     expect(s.bad).toBe(0);
     expect(s.vol).toBeCloseTo(1000, 3);
+  });
+
+  it('smooth: çakışık nokta yüzeyi değiştirmez (teğetler tekil noktalardan)', () => {
+    const oct = ngon(10, 8);
+    const dup = [...oct.slice(0, 4), oct[3], ...oct.slice(4)];
+    const make = (pts: [number, number][], name: string) =>
+      create(name, 'loft', { kind: 'loft', axis: 'z', sections: [0, 10, 20].map((at) => ({ at, points: pts })), smooth: true, sharp: [] });
+    const p = project([make(oct, 'düz'), make(dup, 'çakışık')]);
+    expect(p.parts[1].geom?.kind === 'loft' && p.parts[1].geom.sections[0].points.length).toBe(9);
+    const [a, b] = [solid(p, 'düz'), solid(p, 'çakışık')];
+    expect(b.bad).toBe(0);
+    expect(b.vol).toBeCloseTo(a.vol, 4);
   });
 
   it('uç yalnızca ilk/son kesit olabilir; sharp eş nokta sayısı ister', () => {
