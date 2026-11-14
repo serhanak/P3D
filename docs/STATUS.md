@@ -1,6 +1,7 @@
 # Proje durumu
 
-> Son güncelleme: **2026-11-13** — BoltRush istekleri #11–13: `solidBox`/`solidPartsBox` (delikler çıkarılmış kutu; `measure`
+> Son güncelleme: **2026-11-14** — parça saydamlığı (`opacity`) ve parça başına çözünürlük (`resolution`), BoltRush istekleri
+> #17 / #15; `sweep` tasarımı onaylandı ([`SWEEP.md`](SWEEP.md), #14 / #16). Önceki: **2026-11-13** — BoltRush istekleri #11–13: `solidBox`/`solidPartsBox` (delikler çıkarılmış kutu; `measure`
 > kutusu da kesimli), `snapshot --size` sessiz kırpma yerine 4096'ya kadar orantılı oturtma + uyarı, prizma köşe fazı rehberde.
 > Önceki: **2026-11-11** — loft: kesitte ardışık çakışık nokta (dejenere kenar) nokta eşleşmesini korur (BoltRush isteği #8:
 > nokta atılınca kesitler yeniden örneklenip yüzey sessizce yanlış çıkıyordu). Önceki: **2026-11-09** — eskiz katmanı: kalem aracıyla ekranda çizerek niyet tarifi (`Project.sketch`, `sketch_*` işlemleri,
@@ -14,7 +15,7 @@
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (265 test, ~30 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
+1. `npm install` · `npm run typecheck` · `npm test` (298 test, ~30 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
    (README → Kurulum; `p3d status` kurulu skill eskiyse uyarır).
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
@@ -89,6 +90,19 @@
   tablosu. Kurallar: `sketch_update` tüm noktalar düzlem normalinde aynı konumdaysa `plane.at`'ı da taşır; kapalı yol en az 3 nokta ister
   (azsa açık kalır); dosyadaki bozuk eskiz yolu uyarıyla atlanır (parça kaybı sayılmaz, `export`/`apply`'ı durdurmaz); ~3°'den sığ
   açıyla düzleme tıklama yok sayılır. Rehber `p3d guide sketch`, skill güncellendi. Eskiz → geometri dönüşümü bilinçli olarak yok (yol haritası 10).
+- **Parça saydamlığı ve parça çözünürlüğü (2026-11-14, BoltRush istekleri #17 / #15):**
+  - `Part.opacity` (0–1): `create`/`update` alanı (grupta da), panelde Opaklık, yerel ayrıştırıcı ("yarı saydam yap", "%30 saydam",
+    "camı 30 saydam yap", "opak yap"; saydamlık = 1 − opaklık; sonuç 0 olacaksa hata → "gizle"). Yalnızca görsel: dışa aktarım,
+    hacim, `check`, delik değişmez. Görünen değer rol varsayılanının (referans 0,35, delik 0,3) yerine geçer; katıda 1 alanı siler,
+    referans/delikte 1 açık değerdir (opak referans). GLB alfa + `BLEND` (malzeme renk + saydamlığa göre), 3MF `#RRGGBBAA`, MTL `d`.
+    Claude yolunda `opacity: 0` "verilmedi" sayılır (şema boş sayıyı 0 ile doldurabiliyor). Saydamlığı 0 olan parça seçimde atlanır.
+  - `Part.resolution` (6–192): silindir, boru, koni, küre, torus, revolve ve yumuşak loft'ta proje çözünürlüğünün yerine geçer
+    (`shapes.partSeg`; kutu, hacim, önbellek anahtarları, delik kesimi, `check`, `place_on_surface`, görünüm). Başka şekillerde
+    (kutu, prizma, extrude, hull, mesh, yumuşak olmayan loft) hata değil uyarı + yok sayma (Claude "hepsini low-poly yap" derken parça
+    kaybolmasın); dosyadan gelirse uyarıyla kaldırılır. Grupta verilemez (0/null yok sayılır). Küre enlemi segmentten türer
+    (6 → 36, 8 → 48 üçgen; ayrı parametre yok). `check --profile game` bütçe aşımında büyük yuvarlak parçalara `resolution` önerir.
+  - `update` artık tüm alanları uygulamadan önce doğrular: hatalı alan parçada yarım değişiklik bırakmaz (`cuts` dahil).
+  - Sekmeden gelen sahnede onarım uyarıları CLI'de stdout'a basılır (eskiden stderr).
 - **Kesimli kutu, snapshot boyutu, prizma fazı (2026-11-13, BoltRush istekleri #11–13):**
   - `partBox`/`partsBox` şeklin **kesimsiz** kutusudur (sözleşme; yerleştirme işlemleri, delik eşleştirmesi, sahne `bbox`'ı onu
     kullanır) ama bu belgelenmemişti; betikler kesilen parçada yanlış sınır yazıyordu. Kararlı yüzeye `solidBox(project, part)` /
@@ -158,6 +172,7 @@
 | Büyük `hull` | ✅ 3 test (`tests/geom.test.ts`: 1 m kutu tablosu tam hacim + `check` temiz, 10 kat eğri tablo = ölçekli kopya, ızgara sınırı WASM'ı bozmadan reddeder). Elle: kutu/eğri tablo 20 mm–3 m, çözünürlük 12/96/192, her biri ayrı süreçte temiz; BoltRush'ın birebir tekrarı (`p3d apply --new` → `scene` → `check`) doğru kutu; 1 m gövdenin görüntüsü tabloya uyuyor. Tarayıcı sekmesinde büyük gövde **denenmedi** |
 | `hull` `maxTris` | ✅ 2 test (`tests/geom.test.ts`: 2,2 m muz gövdesi 1000/4000/200 üçgende bütçe aşılmaz, hacim farkı < %1 / %3, kutu doğru, bozuk üçgen yok; doğrulama: aralık dışı hata, 0/null varsayılan, kesir yuvarlanır). Elle: muz/kutu/Benchy 100–5000 üçgen, çözünürlük 12/96; `p3d apply --new` + `check --profile game` temiz; görünmez Chrome görüntüsünde 2000/500 üçgenlik gövdeler tabloya uyuyor. Gerçek Claude ile ve Unreal'de **denenmedi** |
 | Eskiz katmanı | ✅ 31 test (`tests/sketch.test.ts`: Op'lar, özet, Bezier örnekleme, dosya gidiş-dönüş, Store seçimi; `tests/sketch-edit.test.ts`: ışın–düzlem, eksen kilidi, yakalama, tutamaç, kenar bölme; `cli.test.ts`: `p3d sketch`). Görünmez Chrome + CDP duman testi, gerçek fare/klavye (kare çiz/kapat, eğri nokta, Z kilidi + "15" Enter, çoklu seçim N kilidi, Ctrl+tık nokta ekle, Delete, Esc zinciri; konsol temiz; düzeltmelerden sonra tekrarlandı); `snapshot --file` izo/üst görüntüde yollar, ok, işaret ve adlar; `p3d-reviewer` incelemesi (10 bulgu, kritik yok) düzeltildi. Kullanıcının gerçek sekmesinde elle ve gerçek Claude ile eskiz yorumu **denenmedi** |
+| Parça saydamlığı / çözünürlüğü | ✅ `tests/part-look.test.ts` + ayrıştırıcı/CLI/köprü testleri (toplam 33 yeni): Op'lar, aralık ve tip hataları, grup, `normalizeLlmOp`, rol varsayılanı ve opak referans, dosya gidiş-dönüşü ve onarım uyarıları, GLB alfa/BLEND (iskelet dahil), 3MF/MTL alfa, opacity 0'da dışa aktarım/hacim/check/delik aynı; analitik üçgen sayıları, 6 segmentte kapalılık, önbellek ayrımı, delikte etkin seg, yuvarlak olmayan şekilde uyarı, `update` atomikliği. Alan yokken STL/GLB/OBJ çıktısı HEAD ile bayt bayt aynı (9 dosya). `p3d-reviewer` incelemesi (kritik yok; 6 bulgu düzeltildi). Görünmez Chrome görüntüsünde cam yarı saydam, 8/96 segment küre, 6 segment torus doğru. Panel alanları ve saydam parçada tıklama gerçek tarayıcıda elle, yeni alanlar gerçek Claude ile ve Unreal'de **denenmedi** |
 | Kesimli kutu / snapshot boyutu / prizma fazı | ✅ 5 test (`tests/geom.test.ts`: BoltRush örneği `partsBox` 50 / `solidPartsBox` 0 = `worldMesh`, döndürülmüş + taşınmış parça (önbellek), deliksiz = `partBox`, tümüyle kesilen = boş; prizma n = 3–16 için rehberdeki üç kural ve BoltRush ölçümleri; `tests/bridge.test.ts`: `fitSnapshotSize` ve köprünün sekmeye ilettiği boyut; `tests/cli.test.ts`: geçersiz `--size` / görünüm). Elle: `p3d run` ile BoltRush yeniden üretimi, `measure --file` kesimli kutu, görünmez Chrome'da 4096x800 ve 6000x6000 → 4096x4096 PNG (başlık doğrulandı), altıgen prizma `y 90, z 30` önden düz tabanlı. Kullanıcının gerçek sekmesinde (donanım GPU) 4096 görüntü **denenmedi** |
 | Loft çakışık nokta | ✅ 4 test (`tests/geom.test.ts`: BoltRush örneği tam hacim 533,33 cm³ + `check --profile game` temiz + ayna; kapanış tekrarı / kapanışta ve başta dejenere kenar (prizmatoid tam hacmi 750) / eşleşmeyi bozan tekrar / 1024 sınırı; uç kesit, 3 kesitte kısmi çakışma düz ve yumuşak, ayna + `sharp`; yumuşak loft'ta çakışık nokta hacmi değiştirmez), düzeltme olmadan kırılıyorlar. Çakışık noktasız 8 tip loft'un ağı HEAD ile bayt bayt aynı; `p3d-reviewer` 120 rastgele loft'ta fark bulmadı, 3 bulgusu (ayna + sharp, 1024 sınırı, test kapsamı) düzeltildi. Elle: `p3d apply --new` + `measure` + `check` (düz ve yumuşak, 3 kesit), görünmez Chrome görüntüsünde çıkıntı ön kesitte kenardan doğuyor |
 | v0.3 özellikleri | ✅ 67 test (tekne şekli: kutu tablosu tam hacim, sıfır genişlikte kapanma, doğrulama; dışa aktarılan örnek tekne kapalı ağ dahil) (örtük yüzey küre hacmi, `sliceMany` = `sliceGeometry`, Regularize iğne üçgen <%1 dahil): yumuşak loft hacmi (daireye yakınsama), uç (koni ≈ πr²h/3), sharp (tam kutu), cuts, çerçeve (kapalı/açık alan), eğik yüzeye dik oturtma, birleşim hacmi, `check` çakışma bulur/temizde susar |
@@ -215,6 +230,10 @@
   verin. Çok küçük bütçede (≲ 300) sivri uçlar birkaç mm kısalabilir (2,2 m gövde 500 üçgende baş ucu ~10 mm), yumuşak
   kırılımlar (küpeşte altındaki dikey bant) yuvarlanır.
 - Otomatik yerleşim tabla doluysa parçayı tablanın dışına (sağa) koyar.
+- Saydam parçalar `depthWrite` kapalı çizilir: içbükey tek bir saydam ağda yüz sıralama kusurları görülebilir (three.js'te olağan).
+- Deliksiz yuvarlak parçada panel hacmi analitiktir (çözünürlükten bağımsız); düşük çözünürlükte (ör. 6 segment küre) dışa
+  aktarılan ağın hacmi daha küçüktür. Gerçek ağ hacmi: `p3d measure` → birleşik hacim.
+- Parça çözünürlüğü değişince parça merkezi yerinde kalır (taban sabitlenmez; proje çözünürlüğü değişince de böyle).
 - `set_position` X/Y'yi parçanın merkezine uygular; tek kenarlı prizma/koni döndürülmüşse sınırlayıcı kutu
   merkezi ile küçük fark olabilir.
 
@@ -294,7 +313,8 @@
 7. Hizala/dağıt ("4 köşeye yerleştir"); ayna ve dizi (`duplicate.count`) v0.4'te var.
 8. Geri-al geçmişini kalıcı tutma; birden çok proje listesi.
 9. three.js için kod bölme.
-10. **Eskizden geometri (ertelendi; eskiz v1 yalnızca niyet tarifidir, tartışılacak):** eskiz yolu → ekstrüde et / delik kes balonu;
+10. **Eskizden geometri:** `sweep` tasarımı onaylandı ([`SWEEP.md`](SWEEP.md); Faz 1 = `geom.path` ile süpürme, Faz 2 = eskiz
+    yolundan kopya). Kalan (ertelendi, tartışılacak): eskiz yolu → ekstrüde et / delik kes balonu;
     `geom.sketch` bağı (nokta oynayınca bağlı parça yeniden üretilir); paralel düzlemlerdeki kapalı yollar → loft kesitleri
     (yol yüksekliği = `at`); açık 3B yol + profil (daire/dikdörtgen) → yeni `sweep` geom türü (boru, kulp, kablo kanalı, pist
     korkuluğu; dönme-minimize çerçeveler, dar büküm/keskin köşe uyarısı).

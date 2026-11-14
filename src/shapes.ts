@@ -311,6 +311,33 @@ export function sanitizeParams(shape: ShapeType, p: Params): void {
   def.fix?.(p);
 }
 
+/** Yuvarlak yüzey çözünürlüğünün (segment) sınırları: proje ayarı (arayüz) ve parça başına `resolution`. */
+export const MIN_RESOLUTION = 6;
+export const MAX_RESOLUTION = 192;
+
+/**
+ * Segment sayısı kullanabilen şekiller (loft yalnızca `smooth` iken; bkz. `usesResolution`). `hull` (üçgen bütçesi
+ * `geom.maxTris`), `mesh`, kutu, prizma ve ekstrüzyon segment kullanmaz.
+ */
+export const RESOLUTION_SHAPES: readonly ShapeType[] = ['cylinder', 'tube', 'cone', 'sphere', 'torus', 'revolve', 'loft'];
+
+/** Parçanın geometrisi segment sayısına bağlı mı: RESOLUTION_SHAPES, loft'ta yalnızca `geom.smooth` iken. */
+export function usesResolution(part: { shape: ShapeType; geom?: PartGeom }): boolean {
+  if (part.shape === 'loft') return part.geom?.kind === 'loft' && part.geom.smooth === true;
+  return RESOLUTION_SHAPES.includes(part.shape);
+}
+
+/**
+ * Parçanın etkin yuvarlak yüzey çözünürlüğü: geçerli `Part.resolution` (yalnızca `usesResolution` iken) ya da proje ayarı
+ * `seg`. Parçanın geometrisini üreten her yer (kutu, hacim, dışa aktarım, boolean, görünüm anahtarı) bunu çağırır; böylece
+ * proje çözünürlüğünü geçen çağıranlar değişmez. Alan yoksa `seg` aynen döner (ağ bayt bayt aynı).
+ */
+export function partSeg(part: { shape: ShapeType; resolution?: number; geom?: PartGeom }, seg: number): number {
+  const r = part.resolution;
+  if (r === undefined || !usesResolution(part)) return seg;
+  return Number.isInteger(r) && r >= MIN_RESOLUTION && r <= MAX_RESOLUTION ? r : seg;
+}
+
 /** Geometri üretilemezse (ör. çerçeve için boolean çekirdeği yüklenmedi) bunun yerine çizilen küçük küp. */
 export const PLACEHOLDER_SIZE = 5;
 

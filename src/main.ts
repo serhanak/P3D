@@ -63,7 +63,7 @@ let initial: Project | null = null;
 let unreadable = restored?.error ?? '';
 /** Kayıt okundu ama bazı parçaları atlandı ("ad: neden"). */
 const droppedOnRestore: string[] = [];
-/** Kayıttan atlanan eskiz yolları (yalnızca bilgi: kayıt yedeğe alınmaz, sekme kirli sayılmaz). */
+/** Kayıttan atlanan eskiz yolları ve onarılan parça alanları (saydamlık, çözünürlük; yalnızca bilgi: kayıt yedeğe alınmaz, sekme kirli sayılmaz). */
 const restoreNotes: string[] = [];
 if (restored && !unreadable) {
   try {

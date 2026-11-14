@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyOps, partBox } from '../src/engine';
+import { displayOpacity } from '../src/model';
 import { parseCommand } from '../src/nlp/parser';
 import { newProject, type Project } from '../src/types';
 
@@ -281,5 +282,132 @@ describe('delik ve roller', () => {
     run(p, '10x10x10 kutu oluştur adı k');
     const r = parseCommand('k parçasına delik aç', p, null);
     expect(r.errors.join(' ')).toMatch(/çapı kaç mm/);
+  });
+});
+
+describe('saydamlık', () => {
+  const setup = () => {
+    const p = newProject();
+    run(p, '40x2x30 kutu oluştur adı cam');
+    run(p, '20 mm çaplı 40 mm yüksekliğinde silindir ekle adı mil');
+    return p;
+  };
+
+  it('"yarı saydam yap" = 0,5 · "%30 saydam" = 0,7 · "saydamlığını %40 yap" = 0,6 · "%70 opak" = 0,7', () => {
+    const p = setup();
+    const cases: [string, number][] = [
+      ['camı yarı saydam yap', 0.5],
+      ['camı %30 saydam yap', 0.7],
+      ['camı yüzde 20 şeffaf yap', 0.8],
+      ['camın saydamlığını %40 yap', 0.6],
+      ['camın saydamlığını 0,3 yap', 0.7],
+      ['camı %70 opak yap', 0.7],
+      ['camın opaklığını 0.25 yap', 0.25],
+      ['camı saydam yap', 0.5], // oran yoksa yarı saydam
+    ];
+    for (const [text, value] of cases) {
+      const { parsed, res } = run(p, text);
+      expect(parsed.unrecognized, text).toEqual([]);
+      expect(res.errors, text).toEqual([]);
+      expect(byName(p, 'cam').opacity, text).toBe(value);
+    }
+    expect(byName(p, 'mil').opacity).toBeUndefined();
+  });
+
+  it('"opak yap" ve "saydamlığı kaldır / sil" = 1: alan kalkar, parça silinmez ve taşınmaz', () => {
+    const p = setup();
+    for (const text of ['camı opak yap', 'camın saydamlığını kaldır', 'camın saydamlığını sil', 'cam saydam olmasın']) {
+      run(p, 'camı yarı saydam yap');
+      expect(byName(p, 'cam').opacity).toBe(0.5);
+      const pos = { ...byName(p, 'cam').position };
+      const { parsed } = run(p, text);
+      expect(parsed.ops, text).toEqual([{ op: 'update', part: byName(p, 'cam').id, opacity: 1 }]);
+      expect(byName(p, 'cam'), text).toBeDefined();
+      expect('opacity' in byName(p, 'cam'), text).toBe(false);
+      expect(byName(p, 'cam').position, text).toEqual(pos);
+    }
+    // saydamlık kelimesi yokken silme ve "kaldır" taşıması eskisi gibi
+    run(p, 'mili 10 mm yukarı kaldır');
+    expect(bottom(p, 'mil')).toBeCloseTo(10);
+    run(p, 'mili sil');
+    expect(p.parts.map((x) => x.name)).toEqual(['cam']);
+  });
+
+  it('bağlam, renk, tümü ve hatalı oran', () => {
+    const p = setup();
+    const sel = { id: byName(p, 'mil').id };
+    run(p, 'yarı saydam yap', sel); // seçili parça
+    expect(byName(p, 'mil').opacity).toBe(0.5);
+    run(p, 'camı %60 saydam mavi yap');
+    expect(byName(p, 'cam').opacity).toBe(0.4);
+    expect(byName(p, 'cam').color).toBe('#1e88e5');
+    run(p, 'tümünü opak yap');
+    expect(p.parts.some((x) => 'opacity' in x)).toBe(false);
+    const bad = parseCommand('camı %130 saydam yap', p, null);
+    expect(bad.ops).toEqual([]);
+    expect(bad.errors.join(' ')).toMatch(/saydamlık %0–100 arası olmalı/);
+  });
+
+  it('yüzdesiz sayı: 1 < N ≤ 100 yüzde, ≤ 1 kesir (saydamlık = 1 − opaklık), 100 üstü hata', () => {
+    const p = setup();
+    const cases: [string, number][] = [
+      ['camı 30 saydam yap', 0.7],
+      ['camı 0,3 saydam yap', 0.7],
+      ['camın saydamlığı 0,3', 0.7],
+      ['camı 70 opak yap', 0.7],
+      ['camın saydamlığını 25 yap', 0.75],
+    ];
+    for (const [text, value] of cases) {
+      const { parsed } = run(p, text);
+      expect(parsed.errors, text).toEqual([]);
+      expect(byName(p, 'cam').opacity, text).toBe(value);
+    }
+    for (const text of ['camı 130 saydam yap', 'camın saydamlığını 150 yap']) {
+      const r = parseCommand(text, p, null);
+      expect(r.ops, text).toEqual([]);
+      expect(r.errors.join(' '), text).toMatch(/saydamlık %0–100 arası olmalı/);
+    }
+  });
+
+  it('sonuç tamamen saydamsa işlem üretilmez: gizlemek için "gizle"', () => {
+    const p = setup();
+    run(p, 'camı yarı saydam yap');
+    for (const text of ['camın saydamlığını 1 yap', 'camın saydamlığı 1', 'camı %100 saydam yap', 'camın opaklığını 0 yap', '%100 saydam küre ekle']) {
+      const r = parseCommand(text, p, null);
+      expect(r.ops, text).toEqual([]);
+      expect(r.errors.join(' '), text).toContain("tamamen saydam parça görünmez olur; gizlemek için 'gizle' kullanın");
+    }
+    expect(byName(p, 'cam').opacity).toBe(0.5);
+    expect(p.parts).toHaveLength(2);
+  });
+
+  it('referansı opak yap: referans tamamen opak olur (rol varsayılanı 0,35 yerine 1)', () => {
+    const p = newProject();
+    applyOps(p, [{ op: 'create', shape: 'box', name: 'referans', role: 'reference' }], null);
+    expect(displayOpacity(byName(p, 'referans'))).toBe(0.35);
+    const { res } = run(p, 'referansı opak yap');
+    expect(res.errors).toEqual([]);
+    expect(byName(p, 'referans').opacity).toBe(1);
+    expect(displayOpacity(byName(p, 'referans'))).toBe(1);
+    const q = newProject(); // ayrı proje: "referans" adlı parça yokken "referans yap" rol kalıbıdır
+    run(q, '20x20x20 kutu oluştur adı model');
+    run(q, 'modeli referans yap');
+    expect(byName(q, 'model').role).toBe('reference');
+    run(q, 'modeli opak yap');
+    expect(displayOpacity(byName(q, 'model'))).toBe(1);
+  });
+
+  it('oluştururken: "yarı saydam küre ekle", oran ölçü sayılarına karışmaz', () => {
+    const p = newProject();
+    run(p, 'yarı saydam küre ekle adı balon');
+    expect(byName(p, 'balon').opacity).toBe(0.5);
+    run(p, '20 mm çaplı %30 saydam kırmızı silindir ekle adı far');
+    const far = byName(p, 'far');
+    expect(far.params).toEqual({ diameter: 20, height: 20 });
+    expect(far.opacity).toBe(0.7);
+    expect(far.color).toBe('#e53935');
+    run(p, 'saydamlığı 40 olan 12 mm küre ekle adı top');
+    expect(byName(p, 'top').params.diameter).toBe(12);
+    expect(byName(p, 'top').opacity).toBe(0.6);
   });
 });

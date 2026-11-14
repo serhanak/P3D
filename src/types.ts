@@ -22,6 +22,16 @@ export interface Part {
   cuts?: string[];
   /** Üyesi olduğu grubun adı (`Project.groups`); yoksa gruplanmamış. Bir parça yalnızca bir grupta olabilir. */
   group?: string;
+  /**
+   * Görsel saydamlık (0–1; 0 = tamamen saydam). Yoksa 1 (opak); yalnızca < 1 iken tutulur. Yalnızca görünüm ve malzemedir
+   * (GLB alfa, 3MF/MTL): parça yine dışa aktarılır, hacme ve `check`'e girer, delikler onu keser.
+   */
+  opacity?: number;
+  /**
+   * Parça başına yuvarlak yüzey çözünürlüğü (segment, 6–192 tamsayı). Yoksa proje ayarı (`settings.resolution`). Yalnızca
+   * segment kullanan şekillerde bulunur (shapes.ts → RESOLUTION_SHAPES; `hull` ve `mesh` hariç); etkin değer: `partSeg`.
+   */
+  resolution?: number;
 }
 
 export interface Project {

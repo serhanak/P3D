@@ -202,6 +202,10 @@ export type Op =
       role?: Role | '';
       /** Delik hedefleri (ad ya da id); boş/yok = kesiştiği tüm katılar. */
       cuts?: string[] | null;
+      /** Görsel saydamlık 0–1 (1 = opak, 0 = tamamen saydam); yok/null = opak. */
+      opacity?: number | null;
+      /** Parça başına yuvarlak yüzey çözünürlüğü (6–192 segment); yok/null/0 = proje ayarı. */
+      resolution?: number | null;
     }
   | {
       op: 'update';
@@ -216,6 +220,10 @@ export type Op =
       role?: Role | '';
       /** Delik hedefleri; [] / yok = değişmez, ["*"] = kesiştiği tüm katılar. */
       cuts?: string[] | null;
+      /** Görsel saydamlık 0–1; 1 = opak (alan kalkar); yok/null = değişmez. Grupta tüm üyelere uygulanır. */
+      opacity?: number | null;
+      /** Parça başına çözünürlük (6–192); 0 = alan kalkar (proje ayarı); yok/null = değişmez. */
+      resolution?: number | null;
     }
   | { op: 'move'; part: string; dx: number; dy: number; dz: number }
   /** Yalnızca yerel kullanım: x/y merkezi, z ise parçanın tabanı (alt yüzü) için mutlak değer. */
@@ -290,6 +298,7 @@ const vec3 = {
   additionalProperties: false,
 };
 const nullableVec3 = { anyOf: [vec3, { type: 'null' }] };
+const nullableNum = { anyOf: [num, { type: 'null' }] };
 const paramList = {
   type: 'array',
   items: {
@@ -366,6 +375,8 @@ export const RESPONSE_SCHEMA = {
             geom: nullableGeom,
             role: roleEnum,
             cuts: { type: 'array', items: str },
+            opacity: nullableNum,
+            resolution: nullableNum,
           }),
           opSchema('update', {
             part: str,
@@ -378,6 +389,8 @@ export const RESPONSE_SCHEMA = {
             geom: nullableGeom,
             role: roleEnum,
             cuts: { type: 'array', items: str },
+            opacity: nullableNum,
+            resolution: nullableNum,
           }),
           opSchema('move', { part: str, dx: num, dy: num, dz: num }),
           opSchema('rotate', { part: str, axis: { type: 'string', enum: ['x', 'y', 'z'] }, degrees: num }),
@@ -420,6 +433,9 @@ export function normalizeLlmOp(raw: Record<string, unknown>): Op {
   }
   // duplicate.count şemada zorunlu: 0 ya da 1 = tek kopya (alan yokmuş gibi).
   if (out.op === 'duplicate' && (out.count === 0 || out.count === 1)) delete out.count;
+  // opacity şemada zorunlu: Claude boş sayıyı 0 ile doldurabilir, bu da parçayı görünmez yapardı. 0 = verilmedi (gizlemek
+  // için visible: false); yerel/köprü işlemleri 0'ı kabul etmeye devam eder.
+  if ((out.op === 'create' || out.op === 'update') && out.opacity === 0) delete out.opacity;
   return out as unknown as Op;
 }
 
@@ -441,6 +457,10 @@ export interface SceneSummaryPart {
   cuts?: string[];
   /** Üyesi olduğu grubun adı. */
   group?: string;
+  /** Görsel saydamlık (yalnızca < 1 iken). */
+  opacity?: number;
+  /** Parça başına yuvarlak yüzey çözünürlüğü (yalnızca ayarlıysa; yoksa proje ayarı). */
+  resolution?: number;
   /**
    * extrude/revolve/loft için tam geometri; mesh için yalnızca özet: kaynak dosyanın yalnızca adı (`src`, klasör yolu
    * yok — özet Claude'a ve köprüye gider), `maxTris` / `srcSize` / `srcHash` yok.

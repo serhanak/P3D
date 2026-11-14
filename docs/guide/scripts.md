@@ -33,6 +33,8 @@ console.log(new THREE.Vector3(width, 60, 30).length(), issues);
 - Kutular: `partBox(part, seg)` / `partsBox(parts, seg)` şeklin **kesimsiz** kutusudur (hızlı, delik uygulanmaz; sahne özetindeki
   `bbox` ile aynı). Delikler çıkarılmış, dışa aktarılan ağın kutusu: `solidBox(project, part)` / `solidPartsBox(project, parts)`
   (ör. `solidPartsBox(p, exportableParts(p.parts))`; kesen delik yoksa `partBox` ile aynı, boolean yapılmaz; `initCsg()` gerekir).
+- `seg` alan yardımcılar (`partBox`, `partsBox`, `baseIndexed`) ona proje çözünürlüğünü (`p.settings.resolution`) verin; kendi
+  `resolution`'ı olan parçada o kullanılır (`p3d guide modeling` → "Parça çözünürlüğü").
 - `initCsg()` delik/boolean ve sadeleştirmeden önce beklenmelidir (`loadProjectFile`/`exportFile` kendileri bekler).
 - Betik çıktısını sekmede görmek için: `p3d open --ws <alan> kutu.p3d.json` ya da tarayıcısız `p3d snapshot --file kutu.p3d.json`.
 - Tek seferlik işlem listeleri için betik yerine `p3d apply --file model.p3d.json --ops ops.json` yeterlidir.

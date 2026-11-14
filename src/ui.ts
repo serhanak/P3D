@@ -3,8 +3,8 @@ import { SKETCH_KIND_LABELS, type GeomAxis, type Op, type Role, type SketchPath,
 import { getAsset } from './assets';
 import { partBox, partsBox } from './engine';
 import { describeGeom } from './geom';
-import { exportableParts, roleOf, solidVolume } from './model';
-import { SHAPE_DEFS, fmt } from './shapes';
+import { displayOpacity, exportableParts, roleOf, solidVolume } from './model';
+import { MAX_RESOLUTION, MIN_RESOLUTION, SHAPE_DEFS, fmt, usesResolution } from './shapes';
 import { SKETCH_NOTE_MAX, isCurved, pathBox, pathLength, sketchKind } from './sketch';
 import type { Store } from './store';
 import type { Part, Project } from './types';
@@ -152,8 +152,15 @@ export function mountPanels(store: Store, apply: (ops: Op[]) => void, hooks: Pan
       t.setCustomValidity('');
       return apply([{ op: 'update', part: part.id, geom: geom as Part['geom'] }]);
     }
+    if (field === 'resolution') {
+      // Boş alan = proje ayarı (0 alanı kaldırır).
+      const r = t.value.trim() ? parseFloat(t.value.replace(',', '.')) : 0;
+      if (Number.isFinite(r)) apply([{ op: 'update', part: part.id, resolution: r }]);
+      return;
+    }
     const v = parseFloat(t.value.replace(',', '.'));
     if (!Number.isFinite(v)) return;
+    if (field === 'opacity') return apply([{ op: 'update', part: part.id, opacity: v }]);
     const [kind, key] = field.split(':');
     if (kind === 'param') apply([{ op: 'update', part: part.id, params: [{ name: key as never, value: v }] }]);
     else if (kind === 'pos') apply([{ op: 'set_position', part: part.id, [key]: v }]);
@@ -280,6 +287,22 @@ function partProps(part: Part, project: Project): string {
       ? `<div class="field"><label for="f-cuts" title="Virgülle ayrılmış parça adları; boş = kesiştiği tüm katılar">Keser</label>
           <input id="f-cuts" data-field="cuts" value="${esc(cutNames)}" placeholder="tümü" /></div>`
       : '';
+  const opacityField = `
+      <div class="field"><label for="f-opacity" title="1 = opak, 0 = tamamen saydam (referans varsayılanı 0,35, delik 0,3). Yalnızca görünüm ve malzeme (GLB/3MF/MTL): parça yine dışa aktarılır ve hacme girer">Opaklık</label>
+        <div class="unit-input">
+          <input id="f-opacity" type="number" data-field="opacity" value="${num(displayOpacity(part))}" min="0" max="1" step="0.05" />
+          <span></span>
+        </div>
+      </div>`;
+  const resolutionField = usesResolution(part)
+    ? `
+      <div class="field"><label for="f-res" title="Bu parçanın yuvarlak yüzey segment sayısı (${MIN_RESOLUTION}–${MAX_RESOLUTION}); boş = proje ayarı (${seg})">Çözünürlük</label>
+        <div class="unit-input">
+          <input id="f-res" type="number" data-field="resolution" value="${part.resolution ?? ''}" placeholder="${seg}" min="${MIN_RESOLUTION}" max="${MAX_RESOLUTION}" step="1" />
+          <span>seg</span>
+        </div>
+      </div>`
+    : '';
   const params = def.params
     .map(
       (d) => `
@@ -304,12 +327,14 @@ function partProps(part: Part, project: Project): string {
       <input class="name-input" data-field="name" value="${esc(part.name)}" spellcheck="false" aria-label="Parça adı" />
       <div class="sub">${def.label}</div>
       <div class="field"><label>Renk</label><input type="color" data-field="color" value="${part.color}" /></div>
+      ${opacityField}
       ${roleSelect}
       ${groupInfo}
       ${cutsField}
       ${note}
       <div class="section">Ölçüler</div>
       ${params}
+      ${resolutionField}
       ${geomBlock}
       <div class="section">Konum (mm)</div>
       ${vec('pos', ['X (merkez)', 'Y (merkez)', 'Z (taban)'], [part.position.x, part.position.y, box.min.z], 1)}

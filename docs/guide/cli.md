@@ -11,7 +11,7 @@ Hata olursa çıkış kodu 1.
 |---|---|
 | `status` | Sunucu, kurulu skill güncel mi, alan ve adresi, bağlı sekme, rev, parça sayısı, `p3d.json`, dosya bağı, diğer alanlar |
 | `view` | Alanın adresini varsayılan tarayıcıda açar |
-| `scene [--full] [--stale]` | Sahne özeti (parça, şekil, parametre, merkez, bbox, renk, grup; bbox şeklin kesimsiz kutusu); `--full` proje JSON'u (stdout yalnızca JSON) |
+| `scene [--full] [--stale]` | Sahne özeti (parça, şekil, parametre, merkez, bbox, renk, grup, ayarlıysa `opaklık=` ve `çözünürlük=`; bbox şeklin kesimsiz kutusu); `--full` proje JSON'u (stdout yalnızca JSON) |
 | `ops [--ops ops.json] [--label "metin"]` | İşlem listesini uygular (ya da stdin); tek geri-al adımı |
 | `undo` · `redo` · `fit` | Geri al, yinele, görünümü sığdır |
 | `open [dosya] [--force]` | Dosyayı sekmeye yükler (geri alınabilir). Sekmede kaydedilmemiş iş varsa `--force` ister |

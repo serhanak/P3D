@@ -246,6 +246,25 @@ describe('tarayıcısız komutlar (--file)', () => {
     expect(out).not.toMatch(/govde .*grup=/);
   }, 60_000);
 
+  it('scene --file: saydamlık ve parça çözünürlüğü yalnızca ayarlıyken satırda; bozuk değer uyarıyla onarılır', () => {
+    const ops = [
+      { op: 'create', shape: 'box', name: 'cam', opacity: 0.5, position: { x: 0, y: 0, z: 10 } },
+      { op: 'create', shape: 'sphere', name: 'top', resolution: 12, position: { x: 40, y: 0, z: 10 } },
+    ];
+    expect(p3dRun(['apply', '--file', 'gorunum.p3d.json', '--new'], dir, { input: JSON.stringify(ops) }).code).toBe(0);
+    const out = p3d(['scene', '--file', 'gorunum.p3d.json'], dir);
+    expect(out).toMatch(/ cam \[box\] width=20 depth=20 height=20 opaklık=0\.5 \| konum=0,0,10/);
+    expect(out).toMatch(/ top \[sphere\] diameter=20 çözünürlük=12 \| konum=40,0,10/);
+    const file = path.join(dir, 'gorunum.p3d.json');
+    const raw = JSON.parse(readFileSync(file, 'utf8'));
+    raw.parts[0].opacity = 3;
+    writeFileSync(file, JSON.stringify(raw));
+    const r = p3dRun(['scene', '--file', 'gorunum.p3d.json'], dir);
+    expect(r.code).toBe(0);
+    expect(r.stdout + r.stderr).toContain("'cam': saydamlık (opacity) 3 geçersiz (0–1 arası olmalı); opak yapıldı.");
+    expect(r.stdout).toMatch(/ cam \[box\] width=20 depth=20 height=20 \| konum/);
+  }, 60_000);
+
   it('check --file --profile game: üçgen bütçesi; geçersiz profil hata', () => {
     const r = p3dRun(['check', '--file', 'model.p3d.json', '--profile', 'game', '--max-tris', '10'], dir);
     expect(r.code).toBe(0); // yalnızca uyarı

@@ -9,6 +9,7 @@ import {
   type MeshGeom,
   type Op,
   type ParamChange,
+  type PartGeom,
   type Pt2,
   type Role,
   type SceneSummary,
@@ -22,7 +23,22 @@ import { decodedAsset, getAsset, makeAsset, newAssetId, registerAsset } from './
 import { resolveColor } from './colors';
 import { GeomError, defaultGeom, describeGeom, geometryVolume, loftCommonSections, meshSource, sanitizeGeom } from './geom';
 import { csgReady } from './csg';
-import { PALETTE, SHAPE_DEFS, buildGeometry, defaultParams, fmt, geometryError, sanitizeParams, type DimWord, type Params } from './shapes';
+import {
+  MAX_RESOLUTION,
+  MIN_RESOLUTION,
+  PALETTE,
+  RESOLUTION_SHAPES,
+  SHAPE_DEFS,
+  buildGeometry,
+  defaultParams,
+  fmt,
+  geometryError,
+  partSeg,
+  sanitizeParams,
+  usesResolution,
+  type DimWord,
+  type Params,
+} from './shapes';
 import {
   SKETCH_NAME_MAX,
   SKETCH_NOTE_MAX,
@@ -44,15 +60,16 @@ import type { Part, Project } from './types';
 
 const positionCache = new Map<string, Float32Array>();
 
+/** Geometri önbellek anahtarı; `seg` proje ayarıdır, anahtara parçanın etkin çözünürlüğü (`partSeg`) girer. */
 function geometryKey(part: Part, seg: number): string {
-  return `${part.shape}|${JSON.stringify(part.params)}|${part.geom ? JSON.stringify(part.geom) : ''}|${seg}`;
+  return `${part.shape}|${JSON.stringify(part.params)}|${part.geom ? JSON.stringify(part.geom) : ''}|${partSeg(part, seg)}`;
 }
 
 function positionsFor(part: Part, seg: number): Float32Array {
   const key = geometryKey(part, seg);
   let arr = positionCache.get(key);
   if (!arr) {
-    const g = buildGeometry(part.shape, part.params, seg, part.geom);
+    const g = buildGeometry(part.shape, part.params, partSeg(part, seg), part.geom);
     arr = (g.getAttribute('position').array as Float32Array).slice();
     g.dispose();
     if (positionCache.size > 300) positionCache.clear();
@@ -104,7 +121,7 @@ export function partVolume(part: Part, seg = 96): number {
   const key = geometryKey(part, seg);
   let v = volumeCache.get(key);
   if (v === undefined) {
-    const g = buildGeometry(part.shape, part.params, seg, part.geom);
+    const g = buildGeometry(part.shape, part.params, partSeg(part, seg), part.geom);
     v = Math.abs(geometryVolume(g));
     g.dispose();
     if (volumeCache.size > 300) volumeCache.clear();
@@ -277,6 +294,13 @@ function unitOf(key: string): string {
 
 /** Parametre değişikliklerini uygular; değişiklik açıklamalarını döndürür. */
 function applyParamChanges(part: Part, changes: ParamChange[]): string[] {
+  const r = computeParams(part, changes);
+  part.params = r.params;
+  return r.notes;
+}
+
+/** Parametre değişikliklerinin sonucu (parçaya yazmaz; hatalı değişiklik OpError): yeni parametreler ve açıklamalar. */
+function computeParams(part: Part, changes: ParamChange[]): { params: Params; notes: string[] } {
   const def = SHAPE_DEFS[part.shape];
   const p: Params = { ...part.params };
   const notes: string[] = [];
@@ -315,8 +339,7 @@ function applyParamChanges(part: Part, changes: ParamChange[]): string[] {
     notes.push(`${paramLabel(key)} ${fmt(cur)} → ${fmt(next)}${unitOf(key)}`);
   }
   sanitizeParams(part.shape, p);
-  part.params = p;
-  return notes;
+  return { params: p, notes };
 }
 
 /** Ölçü/döndürme değişince parçanın tabanı (min Z) ve XY merkezi yerinde kalsın. */
@@ -554,17 +577,72 @@ function roleValue(r: string | undefined): Role | null {
 function setRole(part: Part, role: Role): void {
   if (role === 'solid') delete part.role;
   else part.role = role;
+  // Katıda açık 1 tutulmaz (opak zaten varsayılan); referans/delikte 1 rolün yarı saydam varsayılanını geçersiz kılar.
+  if (role === 'solid' && part.opacity === 1) delete part.opacity;
 }
 
-/** Delik hedeflerini (ad ya da id) parça kimliklerine çevirir. */
-function cutsFor(part: Part, refs: string[], find: (ref: string) => Part): string[] | undefined {
-  if (part.role !== 'hole') throw new OpError(`'${part.name}' delik değil; hedef (cuts) yalnızca delik parçalarına verilir.`);
+/** Delik hedeflerini (ad ya da id) parça kimliklerine çevirir; `role` parçanın (işlemden sonraki) rolüdür. */
+function cutsFor(part: Part, role: Role, refs: string[], find: (ref: string) => Part): string[] | undefined {
+  if (role !== 'hole') throw new OpError(`'${part.name}' delik değil; hedef (cuts) yalnızca delik parçalarına verilir.`);
   if (refs.includes('*')) return undefined;
   return [...new Set(refs.map((r) => find(r).id))];
 }
 
-/** geom doğrulama hatalarını işlem hatasına çevirir. */
-function geomFor(part: Part, raw: unknown, seg: number): void {
+/** Saydamlık girdisi: 0 (tamamen saydam) – 1 (opak) arası sayı, 3 ondalığa yuvarlanır. */
+function opacityOf(v: unknown): number {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1) {
+    throw new OpError(`Geçersiz saydamlık (opacity): ${JSON.stringify(v)}; 0 (tamamen saydam) ile 1 (opak) arasında bir sayı olmalı (ör. yarı saydam 0.5).`);
+  }
+  return round(v);
+}
+
+/**
+ * Saklanacak saydamlık: katıda 1 = alan yok (opak varsayılandır); referans ve delikte 1 açık değer olarak tutulur, çünkü
+ * onların varsayılanı yarı saydamdır (0,35 / 0,3) ve opak yapılabilmeleri gerekir.
+ */
+function storedOpacity(role: Role, o: number): number | undefined {
+  return o >= 1 && role === 'solid' ? undefined : Math.min(1, o);
+}
+
+function setOpacity(part: Part, o: number): void {
+  const v = storedOpacity(part.role ?? 'solid', o);
+  if (v === undefined) delete part.opacity;
+  else part.opacity = v;
+}
+
+const opacityNote = (o: number) => (o >= 1 ? 'opak' : `opaklık ${fmt(o)}`);
+
+const RESOLUTION_LABELS = RESOLUTION_SHAPES.map((s) => (s === 'loft' ? 'yumuşak loft' : SHAPE_DEFS[s].label.toLocaleLowerCase('tr'))).join(', ');
+
+/** Çözünürlük girdisi: sonlu sayı olmalı (yoksa OpError); 0 → null (alan kalkar, proje ayarı); değilse yuvarlanmış tamsayı. */
+function resolutionInput(v: unknown): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v)) {
+    throw new OpError(`Geçersiz çözünürlük (resolution): ${JSON.stringify(v)}; ${MIN_RESOLUTION}–${MAX_RESOLUTION} arası tamsayı olmalı (0 = proje ayarı).`);
+  }
+  const r = Math.round(v);
+  return r === 0 ? null : r;
+}
+
+/**
+ * Parçaya verilen çözünürlük (`r` > 0, `geom` işlemden sonraki geometri): segment kullanmayan şekilde (ve yumuşak olmayan
+ * loft'ta) yok sayılır ve uyarı döner — "hepsini düşük poligon yap" gibi toplu bir istekte kutuya verilen değer işlemi
+ * düşürmesin. Segment kullanan şekilde aralık dışı değer OpError.
+ */
+function resolutionFor(part: Part, r: number, geom: Part['geom']): { value?: number; warning?: string } {
+  if (!usesResolution({ shape: part.shape, geom })) {
+    const hint = part.shape === 'hull' ? ' Teknenin üçgen sayısı için geom.maxTris verin.' : part.shape === 'loft' ? ' Loft ancak smooth: true iken segment kullanır.' : '';
+    return {
+      warning: `'${part.name}': çözünürlük (resolution) yalnızca yuvarlak şekillerde geçerli (${RESOLUTION_LABELS}); ${SHAPE_DEFS[part.shape].label.toLocaleLowerCase('tr')} için yok sayıldı.${hint}`,
+    };
+  }
+  if (r < MIN_RESOLUTION || r > MAX_RESOLUTION) {
+    throw new OpError(`'${part.name}': çözünürlük ${r} olamaz; ${MIN_RESOLUTION}–${MAX_RESOLUTION} arası segment olmalı (0 = proje ayarı).`);
+  }
+  return { value: r };
+}
+
+/** geom doğrulaması: temizlenmiş geometriyi döndürür (parçaya yazmaz); hatalar işlem hatasıdır. */
+function geomValue(part: Part, raw: unknown, seg: number): PartGeom {
   if (!isGeomShape(part.shape)) throw new OpError(`${SHAPE_DEFS[part.shape].label} şekli geom almaz; ölçüleri params ile verin.`);
   let geom;
   try {
@@ -577,10 +655,10 @@ function geomFor(part: Part, raw: unknown, seg: number): void {
   // yüklenmemişse (Node'da initCsg beklenmedi) denenmez: parça sonra tarayıcıda/başka süreçte üretilebilir. Tekne ağı
   // önbelleğe girer, görünüm yeniden üretmez.
   if (geom.kind !== 'mesh' && csgReady()) {
-    const err = geometryError(part.shape, part.params, seg, geom);
+    const err = geometryError(part.shape, part.params, partSeg({ ...part, geom }, seg), geom);
     if (err) throw new OpError(`'${part.name}': ${SHAPE_DEFS[part.shape].label.toLocaleLowerCase('tr')} geometrisi üretilemedi: ${err}`);
   }
-  part.geom = geom;
+  return geom;
 }
 
 // ---------------------------------------------------------------------------
@@ -715,16 +793,24 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
             color: colorOf(op.color) ?? PALETTE[project.parts.length % PALETTE.length],
             visible: true,
           };
-          if (isGeomShape(op.shape)) {
-            if (op.geom) geomFor(part, op.geom, seg);
-            else part.geom = defaultGeom(op.shape);
-          } else if (op.geom) geomFor(part, op.geom, seg);
+          const opacity = given(op.opacity) ? opacityOf(op.opacity) : undefined;
+          const resIn = given(op.resolution) ? resolutionInput(op.resolution) : null;
+          if (isGeomShape(op.shape)) part.geom = op.geom ? geomValue(part, op.geom, seg) : defaultGeom(op.shape);
+          else if (op.geom) part.geom = geomValue(part, op.geom, seg);
           if (role) setRole(part, role);
+          if (opacity !== undefined) setOpacity(part, opacity); // rolden sonra: referans/delikte 1 açık değerdir
+          // Çözünürlük geometriden sonra (loft'ta smooth'a bağlı), yerleşimden önce (kutu etkin değeri kullanır).
+          let resWarning: string | undefined;
+          if (resIn !== null) {
+            const r = resolutionFor(part, resIn, part.geom);
+            if (r.value !== undefined) part.resolution = r.value;
+            resWarning = r.warning;
+          }
           if (op.cuts?.length) {
-            const cuts = cutsFor(part, op.cuts, must);
+            const cuts = cutsFor(part, part.role ?? 'solid', op.cuts, must);
             if (cuts) part.cuts = cuts;
           }
-          if (op.params?.length) applyParamChanges(part, op.params);
+          if (op.params?.length) part.params = computeParams(part, op.params).params;
           const pos = checkVec(op.position, 'konum');
           if (pos) part.position = pos;
           else autoPlace(project, part);
@@ -737,7 +823,10 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           }
           touch(part);
           const roleNote = part.role ? `, ${ROLE_LABEL[part.role]}` : '';
-          res.messages.push(`'${part.name}' ${def.label.toLocaleLowerCase('tr')} oluşturuldu (${describeParams(part)}${roleNote}).`);
+          const look =
+            (part.opacity !== undefined ? `, ${opacityNote(part.opacity)}` : '') + (part.resolution !== undefined ? `, çözünürlük ${part.resolution}` : '');
+          res.messages.push(`'${part.name}' ${def.label.toLocaleLowerCase('tr')} oluşturuldu (${describeParams(part)}${roleNote}${look}).`);
+          if (resWarning) res.messages.push(resWarning);
           break;
         }
         case 'import_mesh': {
@@ -771,31 +860,48 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
         case 'update': {
           const t = target(op.part);
           if (t.group) {
-            if (op.name?.trim() || op.params?.length || op.position || op.rotation || op.geom || op.role || op.cuts?.length) {
+            // Çözünürlük 0 / null "verilmedi" sayılır (Claude boş alanı 0 ile doldurabilir).
+            const resolutionGiven = given(op.resolution) && op.resolution !== 0;
+            if (op.name?.trim() || op.params?.length || op.position || op.rotation || op.geom || op.role || op.cuts?.length || resolutionGiven) {
               throw new OpError(
-                `'${t.group.name}' bir grup: grupta yalnızca renk ve görünürlük değiştirilebilir (taşımak/döndürmek için move/rotate; ölçü ve ad için üyeleri tek tek düzenleyin).`,
+                `'${t.group.name}' bir grup: grupta yalnızca renk, görünürlük ve saydamlık değiştirilebilir (taşımak/döndürmek için move/rotate; ölçü, ad ve çözünürlük için üyeleri tek tek düzenleyin).`,
               );
             }
             const color = colorOf(op.color);
+            const opacity = given(op.opacity) ? opacityOf(op.opacity) : undefined;
             const notes: string[] = [];
             for (const m of t.members) {
               if (color) m.color = color;
               if (typeof op.visible === 'boolean') m.visible = op.visible;
+              if (opacity !== undefined) setOpacity(m, opacity);
             }
             if (color) notes.push(`renk ${color}`);
             if (typeof op.visible === 'boolean') notes.push(op.visible ? 'gösterildi' : 'gizlendi');
+            if (opacity !== undefined) notes.push(opacityNote(opacity));
             touch(t.members[t.members.length - 1]);
             res.messages.push(notes.length ? `'${t.group.name}' grubu (${t.members.length} parça): ${notes.join('; ')}.` : `'${t.group.name}' grubu değişmedi.`);
             break;
           }
           const part = t.part;
-          const notes: string[] = [];
-          if (op.name?.trim()) {
-            const nn = explicitPartName(project, op.name, part.id);
-            if (nn !== part.name) notes.push(`ad '${part.name}' → '${nn}'`);
-            part.name = nn;
-          }
+          // Önce tüm alanlar doğrulanır, sonra uygulanır: hatalı bir alan parçada yarım değişiklik bırakmaz.
+          const newName = op.name?.trim() ? explicitPartName(project, op.name, part.id) : undefined;
           const color = colorOf(op.color);
+          const role = roleValue(op.role);
+          const nextRole: Role = role ?? part.role ?? 'solid';
+          const opacity = given(op.opacity) ? opacityOf(op.opacity) : undefined;
+          const cuts = op.cuts?.length ? { ids: cutsFor(part, nextRole, op.cuts, must) } : undefined;
+          const pos = checkVec(op.position, 'konum');
+          const rot = checkVec(op.rotation, 'döndürme');
+          const geom = op.geom ? geomValue(part, op.geom, seg) : undefined;
+          const resIn = given(op.resolution) ? resolutionInput(op.resolution) : undefined;
+          const resolution = typeof resIn === 'number' ? resolutionFor(part, resIn, geom ?? part.geom) : undefined;
+          const params = op.params?.length ? computeParams(part, op.params) : undefined;
+
+          const notes: string[] = [];
+          if (newName !== undefined) {
+            if (newName !== part.name) notes.push(`ad '${part.name}' → '${newName}'`);
+            part.name = newName;
+          }
           if (color && color !== part.color) {
             part.color = color;
             notes.push(`renk ${color}`);
@@ -804,28 +910,48 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
             part.visible = op.visible;
             notes.push(op.visible ? 'gösterildi' : 'gizlendi');
           }
-          const role = roleValue(op.role);
           if (role && role !== (part.role ?? 'solid')) {
             setRole(part, role);
             notes.push(`rol: ${ROLE_LABEL[role]}`);
             if (role !== 'hole') delete part.cuts;
           }
-          if (op.cuts?.length) {
-            const cuts = cutsFor(part, op.cuts, must);
-            if (cuts) part.cuts = cuts;
-            else delete part.cuts;
-            notes.push(`keser: ${cuts ? cuts.map((id) => project.parts.find((p) => p.id === id)?.name ?? id).join(', ') : 'kesiştiği tüm katılar'}`);
+          if (opacity !== undefined) {
+            // Rolden sonra: referans/delikte 1 açık değerdir (opak yapılabilsinler), katıda alan kalkar.
+            const next = storedOpacity(nextRole, opacity);
+            if (next !== part.opacity) {
+              setOpacity(part, opacity);
+              notes.push(opacityNote(opacity));
+            }
           }
-          const pos = checkVec(op.position, 'konum');
-          const rot = checkVec(op.rotation, 'döndürme');
-          if (op.geom) {
+          if (cuts) {
+            if (cuts.ids) part.cuts = cuts.ids;
+            else delete part.cuts;
+            notes.push(`keser: ${cuts.ids ? cuts.ids.map((id) => project.parts.find((p) => p.id === id)?.name ?? id).join(', ') : 'kesiştiği tüm katılar'}`);
+          }
+          if (geom) {
             // Geometri mutlak koordinatlarla verilir; konum korunur (taban sabitleme yok).
-            geomFor(part, op.geom, seg);
+            part.geom = geom;
             notes.push(`geometri: ${describeGeom(part.geom)}`);
           }
-          if (op.params?.length || rot) {
+          // Çözünürlük: konum korunur (proje çözünürlüğü değişince olduğu gibi), parça merkezi yerinde kalır.
+          if (resIn === null && part.resolution !== undefined) {
+            delete part.resolution;
+            notes.push(`çözünürlük: proje ayarı (${seg})`);
+          } else if (resolution?.value !== undefined && resolution.value !== part.resolution) {
+            part.resolution = resolution.value;
+            notes.push(`çözünürlük ${resolution.value}`);
+          }
+          if (part.resolution !== undefined && !usesResolution(part)) {
+            // Geometri yumuşak olmayan loft'a döndü: alan etkisiz kalmasın (dosyada da tutulmaz).
+            delete part.resolution;
+            notes.push('çözünürlük kaldırıldı (yumuşak olmayan loft segment kullanmaz)');
+          }
+          if (params || rot) {
             const mutate = () => {
-              if (op.params?.length) notes.push(...applyParamChanges(part, op.params));
+              if (params) {
+                part.params = params.params;
+                notes.push(...params.notes);
+              }
               if (rot) {
                 part.rotation = { x: normAngle(rot.x), y: normAngle(rot.y), z: normAngle(rot.z) };
                 notes.push(`döndürme ${fmt(part.rotation.x)}°, ${fmt(part.rotation.y)}°, ${fmt(part.rotation.z)}°`);
@@ -840,6 +966,7 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           }
           touch(part);
           res.messages.push(notes.length ? `'${part.name}': ${notes.join('; ')}.` : `'${part.name}' değişmedi.`);
+          if (resolution?.warning) res.messages.push(resolution.warning);
           break;
         }
         case 'move': {
@@ -1270,7 +1397,7 @@ function countOf(v: unknown): number {
 
 /** Hedefin (deliksiz) yüzeyinde noktaya en yakın nokta ve oradaki dışa bakan, yumuşak ara değerli normal (dünya). */
 export function closestOnSurface(target: Part, seg: number, near: THREE.Vector3): { point: THREE.Vector3; normal: THREE.Vector3 } {
-  const g = buildGeometry(target.shape, target.params, seg, target.geom);
+  const g = buildGeometry(target.shape, target.params, partSeg(target, seg), target.geom);
   const m = partMatrix(target);
   const nm = new THREE.Matrix3().getNormalMatrix(m);
   const pos = g.getAttribute('position');
@@ -1361,6 +1488,8 @@ export function sceneSummary(project: Project, selectedId: string | null): Scene
         role: p.role ?? 'solid',
         ...(p.cuts ? { cuts: p.cuts.map((id) => project.parts.find((q) => q.id === id)?.name ?? id) } : {}),
         ...(p.group ? { group: p.group } : {}),
+        ...(p.opacity !== undefined ? { opacity: p.opacity } : {}),
+        ...(p.resolution !== undefined ? { resolution: p.resolution } : {}),
         ...(p.geom ? { geom: p.geom.kind === 'mesh' ? meshSummary(p.geom) : p.geom } : {}),
       };
     }),

@@ -4,7 +4,7 @@ import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer
 import type { SnapshotOptions, SnapshotView, Vec3 } from '../shared/ops';
 import { partBox, partsBox } from './engine';
 import { isScanLike } from './geom';
-import { roleOf, solidGeometry, solidKey } from './model';
+import { displayOpacity, roleOf, solidGeometry, solidKey } from './model';
 import { SHAPE_DEFS, bboxDims } from './shapes';
 import { EMPTY_SKETCH_STATE, SketchView, sketchBox, type SketchViewState } from './sketch-view';
 import type { Part, Project } from './types';
@@ -120,7 +120,8 @@ export class Viewer {
 
   private pick(e: PointerEvent): void {
     this.rayAt(e.clientX, e.clientY); // this.raycaster'ı kurar
-    const meshes = [...this.entries.values()].filter((en) => en.group.visible).map((en) => en.mesh);
+    // Tamamen saydam (görünen saydamlığı 0) parça tıklamayı yutmasın: arkasındaki parça seçilebilsin.
+    const meshes = [...this.entries.values()].filter((en) => en.group.visible && en.mesh.material.opacity > 0).map((en) => en.mesh);
     const hit = this.raycaster.intersectObjects(meshes, false)[0];
     this.onSelect(hit ? (hit.object.userData.partId as string) : null);
   }
@@ -149,15 +150,20 @@ export class Viewer {
       const role = roleOf(part);
       e.group.visible = part.visible && (role !== 'hole' || project.view.showHoles);
       const mat = e.mesh.material;
+      // Görünen saydamlık (displayOpacity): parçanın `opacity`'si rolün varsayılan yarı saydamlığının yerine geçer
+      // (referans ağı daha belirgin ya da daha silik yapılabilir).
       const ghost = role !== 'solid';
-      if (mat.transparent !== ghost) {
-        mat.transparent = ghost;
-        mat.depthWrite = !ghost;
+      const opacity = displayOpacity(part);
+      const see = opacity < 1;
+      if (mat.transparent !== see) {
+        mat.transparent = see;
+        mat.depthWrite = !see;
         mat.needsUpdate = true;
       }
-      mat.opacity = role === 'hole' ? 0.3 : role === 'reference' ? 0.35 : 1;
+      mat.opacity = opacity;
       mat.color.set(role === 'hole' ? HOLE_COLOR : part.color);
-      (e.edges.material as THREE.LineBasicMaterial).opacity = ghost ? 0.15 : 0.35;
+      // Kenar çizgileri de soluklaşır (opak katıda 0,35).
+      (e.edges.material as THREE.LineBasicMaterial).opacity = part.opacity !== undefined ? 0.35 * opacity : ghost ? 0.15 : 0.35;
       const selected = part.id === selectedId;
       mat.emissive.set(selected ? mat.color : 0x000000);
       mat.emissiveIntensity = selected ? 0.18 : 0;

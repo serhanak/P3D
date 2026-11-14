@@ -132,6 +132,7 @@ const HELP_LINES = [
   '• mili x yönünde 20 mm taşı · mili 15 mm yukarı taşı · mili x=10 y=20 konumuna taşı',
   '• mili x ekseninde 90 derece döndür · mili yatır · mili yere indir',
   '• tabanı mavi yap · milin adını şaft yap · mili kopyala · mili sil',
+  '• camı yarı saydam yap · camı %30 saydam yap (saydamlık = 1 − opaklık → 0,7) · camın saydamlığını kaldır (opak yap)',
   '• tabana 5 mm çaplı delik aç · milin üstüne 3 mm çaplı 8 mm derinliğinde delik aç',
   '• kutuyu delik yap · kutuyu katı yap · modeli referans yap · delikleri gizle',
   '• isimleri gizle · ölçüleri göster · mili gizle · tümünü göster',
@@ -493,9 +494,12 @@ function parseClause(c: Clause, st: State): boolean {
     return true;
   }
 
+  // Saydamlık kelimesi varsa ("saydamlığı kaldır / sil") silme ve taşıma kalıplarına düşmesin; işlem aşağıda (5b).
+  const opacityHit = findOpacity(plain);
+
   // 2) Silme
   const hasDirection = /\b(?:yukari|asagi|saga|sola|ileri|geri)\b/.test(plain);
-  if (words.some((w) => w === 'sil' || w === 'silin') || (words.includes('kaldir') && !hasDirection)) {
+  if (!opacityHit && (words.some((w) => w === 'sil' || w === 'silin') || (words.includes('kaldir') && !hasDirection))) {
     const ts = needTargets(true);
     if (ts) for (const t of ts) emit({ op: 'delete', part: t.ref });
     if (ts) st.ctx = null;
@@ -542,6 +546,19 @@ function parseClause(c: Clause, st: State): boolean {
       if (ts) emit({ op: 'update', part: ts[0].ref, name: newName }, { ...ts[0], name: newName });
       return true;
     }
+  }
+
+  // 5b) Saydamlık: "camı yarı saydam yap", "%30 saydam", "saydamlığı kaldır", "opak yap"; renk de verilmişse birlikte.
+  if (opacityHit) {
+    if ('error' in opacityHit) {
+      st.errors.push(`"${c.orig.trim()}": ${opacityHit.error}.`);
+      return true;
+    }
+    const ts = needTargets(true);
+    if (!ts) return true;
+    const color = findColor(c.f, plain);
+    for (const t of ts) emit({ op: 'update', part: t.ref, opacity: opacityHit.value, ...(color ? { color } : {}) }, t);
+    return true;
   }
 
   // 6) Üstüne / yanına koy
@@ -756,6 +773,15 @@ function parseCreate(c: Clause, st: State, refs: Ref[], hit: ShapeHit): boolean 
   // İsim ve referanslar sayı/renk aramasına karışmasın.
   const spans = [...refs, { start: hit.start, end: hit.end }];
   if (nameSpan) spans.push(nameSpan);
+  // Saydamlık ("yarı saydam", "%30 saydam") da ölçü sayılarına karışmasın.
+  const opacityHit = findOpacity(mask(c.f, spans));
+  if (opacityHit && 'error' in opacityHit) {
+    // Parça oluşturulmaz: istenen saydamlık uygulanamıyor (kullanıcı oranı düzeltip yeniden yazar).
+    st.errors.push(`"${c.orig.trim()}": ${opacityHit.error}.`);
+    return true;
+  }
+  if (opacityHit) spans.push(opacityHit);
+  const opacity = opacityHit && !('error' in opacityHit) && opacityHit.value < 1 ? opacityHit.value : undefined;
   const plain = mask(c.f, spans);
   const pp = preprocessNumbers(plain);
 
@@ -822,7 +848,7 @@ function parseCreate(c: Clause, st: State, refs: Ref[], hit: ShapeHit): boolean 
 
   for (let i = 0; i < count; i++) {
     const nm = name ? (count > 1 ? `${name} ${i + 1}` : name) : undefined;
-    st.ops.push({ op: 'create', shape, name: nm, params: [...params], color, place_on: onTarget?.ref });
+    st.ops.push({ op: 'create', shape, name: nm, params: [...params], color, place_on: onTarget?.ref, ...(opacity !== undefined ? { opacity } : {}) });
     if (besideTarget && besideM) {
       const w = besideM[0];
       const side: Side = w === 'soluna' ? '-x' : w === 'arkasina' ? '+y' : w === 'onune' ? '-y' : '+x';
@@ -883,6 +909,55 @@ function extractRename(c: Clause, refs: Ref[]): string | null {
   const raw = c.orig.slice(start, start + endM.index);
   const name = cleanName(raw);
   return name ? name : null;
+}
+
+// ---------------------------------------------------------------------------
+// Saydamlık
+
+const OPACITY_WORD = '(saydam|seffaf|transparan|opak)';
+const OPACITY_NUM = '(\\d+(?:[.,]\\d+)?)';
+/** "%30 saydam", "yüzde 30 şeffaf", "30% saydam", yüzdesiz "30 saydam" (1'den büyükse yüzde), "%70 opak". */
+const OPACITY_BEFORE = new RegExp(`(%\\s*|\\byuzde\\s*|\\b)${OPACITY_NUM}(\\s*%)?\\s*${OPACITY_WORD}\\w*`);
+/** "saydamlığı %40", "saydamlığını 0.3", "opaklığı %70 / 0,7". */
+const OPACITY_AFTER = new RegExp(`\\b${OPACITY_WORD}li\\w*\\s+(%\\s*|yuzde\\s*)?${OPACITY_NUM}(\\s*%)?`);
+const TRANSPARENT_WORD = /\b(?:yari\s+)?(?:saydam|seffaf|transparan)\w*/;
+const OPAQUE_WORD = /\bopak\w*/;
+/** Saydamlığı kaldırma: "saydamlığı kaldır / sil / sıfırla", "saydam olmasın", "saydam değil". */
+const TRANSPARENT_OFF = /\b(?:kaldir\w*|sil|silin|sifirla\w*|kapat\w*|iptal\w*|gider\w*|olmasin|degil)\b/;
+
+interface OpacityHit {
+  /** Opaklık (0–1; 1 = opak). */
+  value: number;
+  start: number;
+  end: number;
+}
+
+/**
+ * Cümledeki (katlanmış) saydamlık isteği → opaklık ve metindeki yeri; saydamlık kelimesi yoksa null, oran geçersizse ya da
+ * sonuç tamamen saydamsa (görünmez parça) hata. Saydamlık = 1 − opaklık: "yarı saydam" ve oransız "saydam" = 0,5 ·
+ * "%30 saydam" / "30 saydam" / "saydamlığı %30" / "saydamlığı 0,3" = 0,7 · "%70 opak" / "opaklığı 0,7" = 0,7 · "opak yap" /
+ * "saydamlığı kaldır" = 1. Oran yüzde (% ya da "yüzde"; işaretsiz sayı 1'den büyükse yüzde, 100'ü aşamaz) veya 0–1 kesirdir.
+ */
+function findOpacity(plain: string): OpacityHit | { error: string } | null {
+  const tr = TRANSPARENT_WORD.exec(plain);
+  const op = OPAQUE_WORD.exec(plain);
+  if (!tr && !op) return null;
+  const numbered = (raw: string, pct: boolean, word: string, m: RegExpExecArray): OpacityHit | { error: string } => {
+    const n = parseFloat(raw.replace(',', '.'));
+    const frac = pct || n > 1 ? n / 100 : n;
+    if (!(frac >= 0 && frac <= 1)) return { error: `saydamlık %0–100 arası olmalı ('${m[0].trim()}')` };
+    const value = Number((word === 'opak' ? frac : 1 - frac).toFixed(3));
+    if (value === 0) return { error: "tamamen saydam parça görünmez olur; gizlemek için 'gizle' kullanın" };
+    return { value, start: m.index, end: m.index + m[0].length };
+  };
+  const before = OPACITY_BEFORE.exec(plain);
+  if (before) return numbered(before[2], !!(before[1].trim() || before[3]), before[4], before);
+  const after = OPACITY_AFTER.exec(plain);
+  if (after) return numbered(after[3], !!(after[2] || after[4]), after[1], after);
+  const hit = (tr ?? op)!;
+  const span = { start: hit.index, end: hit.index + hit[0].length };
+  if (tr && TRANSPARENT_OFF.test(plain)) return { value: 1, ...span };
+  return { value: tr ? 0.5 : 1, ...span };
 }
 
 // ---------------------------------------------------------------------------

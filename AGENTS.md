@@ -143,7 +143,8 @@ tests/               parser.test.ts (ayrıştırıcı+motor), io.test.ts (OBJ ma
                      yardımcıları, ağ src), cli.test.ts (p3d komutu alt süreçle: run, apply, export, --file, guide),
                      bridge.test.ts (köprü protokolü gerçek http sunucusuyla, open/save korumaları),
                      workspace.test.ts (ws adı, p3d.json keşfi, kök kayıt biçimi, Store), guide.test.ts (rehber kapsamı),
-                     sketch.test.ts (eskiz Op'ları, özet, örnekleme, dosya, Store seçimi), sketch-edit.test.ts (kalem matematiği)
+                     sketch.test.ts (eskiz Op'ları, özet, örnekleme, dosya, Store seçimi), sketch-edit.test.ts (kalem matematiği),
+                     part-look.test.ts (parça saydamlığı ve parça çözünürlüğü: Op, dosya, GLB/3MF/MTL, önbellek, delik)
 examples/            Örnek .p3d.json projeleri (Aç… ile yüklenir); io.test.ts hepsinin onarımsız yüklendiğini doğrular
 examples/tools/      Örnek üreteçleri (tsx ile çalışır, tsconfig dışı): build-3dbenchy.ts referans STL'den Benchy'yi kurar
 docs/STATUS.md       Güncel durum, doğrulama durumu, bilinen sorunlar, yol haritası
@@ -230,7 +231,15 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
 **Gruplar**
 - Üyelik parçada tutulur (`Part.group`), grup tanımı `Project.groups` (`{name, pivot}`); ikisi de opsiyoneldir, yoksa
   `parseProject` alan eklemez. Boş grup tutulmaz (`pruneGroups`). Parça ve grup adları tek ad alanıdır (çakışamaz).
-  Grup adı move/rotate/duplicate/mirror/delete/update(renk, görünürlük) işlemlerinde parça yerine geçer.
+  Grup adı move/rotate/duplicate/mirror/delete/update(renk, görünürlük, saydamlık) işlemlerinde parça yerine geçer.
+
+**Parça görünüşü: saydamlık ve çözünürlük**
+- `Part.opacity` (0–1, yalnızca < 1 iken saklanır) **yalnızca görseldir**: dışa aktarımı, hacmi, `check`'i ve deliği etkilemez
+  (opacity 0 da dışa aktarılır). Görünen değer `model.displayOpacity(part)`: alan rolün varsayılanının (referans 0,35,
+  delik 0,3) yerine geçer, çarpılmaz. GLB'de alfa + `BLEND`, 3MF `#RRGGBBAA`, MTL `d`.
+- `Part.resolution` (6–192) yuvarlak şekillerde proje çözünürlüğünün yerine geçer. Parçanın geometrisini üreten **her**
+  çağrı etkin değeri `shapes.partSeg(part, seg)` ile almalı ve önbellek anahtarları bu değeri içermeli (aksi hâlde eski ağ
+  görünür ya da dışa aktarılır). `hull` (`maxTris`) ve `mesh` etkilenmez.
 
 **Çalışma alanları ve otomatik kayıt**
 - Kök `/` localStorage anahtarları **değişmez**: `p3d.autosave.v1`, `p3d.autosave.assets.v1` (+ dosya bağı için

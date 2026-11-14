@@ -187,6 +187,8 @@ export interface WorldMesh {
   color: string;
   pos: Float32Array;
   tris: number[];
+  /** Parçanın görsel saydamlığı (0–1; yoksa opak): 3MF `displaycolor` alfası. */
+  opacity?: number;
 }
 
 /** İkili STL (tüm ağlar tek dosyada). */
@@ -227,7 +229,10 @@ const f4 = (v: number) => {
   return s.includes('.') ? s.replace(/\.?0+$/, '') : s;
 };
 
-/** 3MF: her parça ayrı nesne ve kendi rengiyle (çok renkli baskı için dilimleyicide parça/renk ataması kolay). */
+/** `#RRGGBBAA` için alfa: saydamlık yoksa `FF`. */
+const alphaHex = (opacity?: number) => Math.round(Math.min(1, Math.max(0, opacity ?? 1)) * 255).toString(16).padStart(2, '0').toUpperCase();
+
+/** 3MF: her parça ayrı nesne ve kendi rengiyle (çok renkli baskı için dilimleyicide parça/renk ataması kolay); saydamlık alfa olarak. */
 export function build3mf(title: string, meshes: WorldMesh[]): Uint8Array {
   const out: string[] = [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -236,7 +241,7 @@ export function build3mf(title: string, meshes: WorldMesh[]): Uint8Array {
     '  <metadata name="Application">P3D</metadata>',
     '  <resources>',
     '    <basematerials id="1">',
-    ...meshes.map((m) => `      <base name="${xmlEsc(m.name)}" displaycolor="${m.color.toUpperCase()}FF" />`),
+    ...meshes.map((m) => `      <base name="${xmlEsc(m.name)}" displaycolor="${m.color.toUpperCase()}${alphaHex(m.opacity)}" />`),
     '    </basematerials>',
   ];
   meshes.forEach((m, i) => {

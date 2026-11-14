@@ -77,12 +77,48 @@ noktalar çevre boyunca sıralıdır. Nokta sayısını makul tutun (çokgen ba�
   tek parçaya bağlayın; birden fazla parça oyulacaksa her biri için ayrı delik kullanın ve kesim yüzünü diğer parçanın malzemesi
   içinde bırakın. Çerçeve açıklığını deliğinden ~0,1 mm büyük çizin. `p3d check` bulur.
 
+## Saydamlık (`opacity`)
+- `create` / `update` alanı = **opaklık**, 0 (tamamen saydam) – 1 (opak); yoksa opak. **Saydamlık = 1 − opaklık** ("%30
+  saydam" = `opacity: 0.7`). Katıda yalnızca `< 1` iken saklanır, `update` ile 1 vermek alanı kaldırır; aralık dışı değer işlem
+  hatasıdır. Cam, vizör, far camı, rüzgârlık için (ör. füme cam: koyu renk + `0.4`). Parçayı gizlemek için `visible: false`
+  kullanın; Claude yolunda `opacity: 0` "verilmedi" sayılır (şemadaki boş sayı parçayı görünmez yapmasın), yerel/köprü
+  işlemleri 0'ı kabul eder.
+- **Yalnızca görseldir:** parça yine katıdır; dışa aktarılır (opacity 0 da), hacme ve `check`'e girer, delikler onu keser, delik
+  parçası saydam olsa da keser. Ekranda yarı saydam çizilir (kenar çizgileri de soluklaşır), `snapshot` görüntüsüne girer.
+  Görünen saydamlığı 0 olan parça tıklamada atlanır (arkasındaki seçilir).
+- Dışa aktarımda: GLB'de malzeme alfası (`baseColorFactor[3]`) + `alphaMode: "BLEND"` (aynı renk ve saydamlık tek malzeme),
+  3MF'te `displaycolor` `#RRGGBBAA`, OBJ+MTL'de `d`. STL'de karşılığı yoktur.
+- **Roller:** görünen saydamlık parçanın `opacity`'sidir; alan yoksa katı opak, `reference` 0,35, `hole` 0,3 çizilir. Yani
+  `opacity` rolün varsayılan yarı saydamlığının yerine geçer: referans ağı `opacity: 0.7` ile daha belirgin, `0.15` ile daha
+  silik, `1` ile tamamen opak yapılabilir (referans ve delikte `1` açık değer olarak saklanır; parça katıya dönerse kalkar).
+- Yerel komutlar (oran yüzde ya da 0–1 kesir; işaretsiz sayı 1'den büyükse yüzdedir, 100'ü aşamaz): "camı yarı saydam yap"
+  (0,5; oran verilmezse de 0,5), "%30 saydam yap" / "30 saydam yap" / "saydamlığını 0,3 yap" (0,7), "saydamlığını %40 yap"
+  (0,6), "%70 opak" / "opaklığını 0,7 yap" (0,7), "opak yap" / "saydamlığını kaldır" (1; referansta da); oluştururken "yarı
+  saydam küre ekle". Sonuç tamamen saydam olacaksa ("%100 saydam", "saydamlığını 1 yap") işlem üretilmez, hata verir: gizlemek
+  için "gizle".
+
+## Parça çözünürlüğü (`resolution`)
+- Proje çözünürlüğü (`settings.resolution`, Ayarlar) tüm yuvarlak yüzeylerin segment sayısıdır. Bir parçaya kendi değerini
+  vermek için `create` / `update` alanı `resolution` (6–192 tamsayı; kesir yuvarlanır): `0` / null proje ayarıdır (`update`'te
+  `0` alanı kaldırır). Yuvarlak şekilde sınır dışı değer işlem hatasıdır. Panelde **Çözünürlük** alanı (boş = proje ayarı).
+- Geçerli şekiller: `cylinder`, `tube`, `cone`, `sphere`, `torus`, `revolve`, `loft` (yalnızca `smooth: true` iken). Kutu,
+  prizma, ekstrüzyon, yumuşak olmayan loft segment kullanmaz; `hull` (üçgen bütçesi `geom.maxTris`) ve `mesh` etkilenmez. Bunlara
+  verilen `resolution` **yok sayılır** ve işlem mesajına uyarı yazılır (işlem hata vermez; toplu "düşük poligon" isteği parça
+  kaybettirmez). Yumuşak loft'un geometrisi yumuşak olmayana dönerse alan kalkar. Grupta `resolution` > 0 hatadır (0/null yok).
+- Etkin değer ekranda, kutuda (`bbox`), hacimde, deliklerde (delik parçası kendi çözünürlüğüyle keser), `check`'te ve tüm dışa
+  aktarımlarda kullanılır. Değişince parçanın merkezi yerinde kalır.
+- Kürede enlem sayısı segmentten türer (`max(4, segment/2)`), torusta kesit segmenti de (`max(4, min(12, segment − 4),
+  segment/3)`). Üçgen sayıları: küre `2·s·(enlem − 1)` (8 → 48, 16 → 224), silindir `4·s`, torus `2·s·kesit` (16 → 384).
+- Oyun için tipik kullanım: proje ayarı düşük (ör. 8), göze batan büyük yuvarlaklar (teker) `resolution: 16`; ya da proje
+  ayarı yüksek, küçük küreler/eklemler `resolution: 6–8`.
+
 ## Yüzeye oturtma
 `place_on_surface {part, target, near, offset}`: parçayı hedefin `near` noktasına en yakın yüzey noktasına koyar ve yerel +Z
 eksenini yüzey normaline çevirir; `offset` normal boyunca kaydırır. Eğri/eğik yüzeydeki flanş, perçin, topuz için.
 
 ## Bir nesneyi orijinaline yakın çizmek
-1. Referansı yarı saydam alın: `p3d import ref.stl --role reference --keep-position`.
+1. Referansı yarı saydam alın: `p3d import ref.stl --role reference --keep-position` (daha belirgin/silik için `update` ile
+   `opacity`).
 2. `p3d section --file ref.stl --axis … --at …` ile istasyon / su hattı / boyuna kesitlerden ölçün.
 3. Yapıyı (hangi özellik hangi şekil) siz kurun, sayıları ölçümden alın.
 4. `snapshot` + `measure` (birleşik hacim) ile karşılaştırın. Örnek akış: P3D deposunda `examples/README.md` (3DBenchy).

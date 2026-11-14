@@ -710,6 +710,22 @@ describe('p3d: --ops dosyası, import kaynağı, sekmeden export/check, save ve 
     expect(c.stdout).toContain('Toplam 24 üçgen; bütçe 10 aşıldı');
   }, 60_000);
 
+  it('sekmeden check / save: onarılan alanların uyarısı stdout’ta (dosya yolundaki gibi), stderr’e düşmez', async () => {
+    const t = await openTab('cekirdek');
+    const broken = { ...project(['a']), parts: [{ ...box('a'), opacity: 3, resolution: 8 }] };
+    await t.put(['a'], { project: broken });
+    const c = await p3d(['check'], dir);
+    expect(c.stderr).toBe('');
+    expect(c.stdout).toContain("⚠ 'a': saydamlık (opacity) 3 geçersiz (0–1 arası olmalı); opak yapıldı.");
+    expect(c.stdout).toContain("⚠ 'a': çözünürlük (resolution) 'box' şeklinde kullanılmaz; kaldırıldı.");
+    t.auto([]);
+    const s = await p3d(['save', 'onarim.p3d.json'], dir);
+    expect(s.stderr).toBe('');
+    expect(s.stdout).toContain("⚠ 'a': saydamlık (opacity) 3 geçersiz");
+    const saved = JSON.parse(readFileSync(path.join(dir, 'onarim.p3d.json'), 'utf8'));
+    expect('opacity' in saved.parts[0] || 'resolution' in saved.parts[0]).toBe(false);
+  }, 60_000);
+
   it('save: kaynağı olan ağ gömülmez (yol dosyaya göreli), --embed ile gömülür', async () => {
     const t = await openTab('cekirdek');
     t.auto([]);

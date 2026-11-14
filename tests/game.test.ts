@@ -617,7 +617,7 @@ describe('gruplar ve pivot', () => {
     expect(p.parts.filter((x) => x.group === 'teker').every((x) => x.color === '#112233' && !x.visible)).toBe(true);
     expect(byName(p, 'gövde').visible).toBe(true);
     const r = applyOps(p, [{ op: 'update', part: 'teker', params: [{ name: 'height', value: 3 }] }], null);
-    expect(r.errors.join(' ')).toMatch(/yalnızca renk ve görünürlük/);
+    expect(r.errors.join(' ')).toMatch(/yalnızca renk, görünürlük ve saydamlık/);
   });
 });
 

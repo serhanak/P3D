@@ -5,11 +5,13 @@ Kaynak tanım: P3D deposunda `shared/ops.ts` → `Op`. Her liste tek geri-al ad�
 
 Ortak alanlar: `part` parça adı (ya da kimliği; birçok işlemde **grup adı** da olur), `position`/`near`/`pivot`/`offset`
 `{x, y, z}` mm, `params` dizisi `[{name, value, mode?: 'set'|'add'|'mul'}]`. Koordinat kuralları: `p3d guide modeling`.
+`opacity` (saydamlık, yalnızca görünüm/malzeme) ve `resolution` (parça başına yuvarlak yüzey segmenti): `p3d guide modeling` →
+"Saydamlık" (saydamlık = 1 − opaklık) ve "Parça çözünürlüğü"; aralık dışı değer işlem hatasıdır.
 
 | İşlem | Alanlar | Not |
 |---|---|---|
-| `create` | `shape`, `name?`, `params?`, `position?` (merkez; null = tablaya otomatik), `rotation?` (derece), `color?` (`#rrggbb`), `place_on?`, `geom?`, `role?` (`solid`/`hole`/`reference`), `cuts?` | Yeni parça |
-| `update` | `part`, `name?`, `params?` (mutlak), `position?`, `rotation?`, `color?`, `visible?`, `geom?`, `role?`, `cuts?` (`["*"]` = hepsi) | Konum verilmezse taban ve XY merkezi korunur. Grupta yalnızca `color`/`visible` |
+| `create` | `shape`, `name?`, `params?`, `position?` (merkez; null = tablaya otomatik), `rotation?` (derece), `color?` (`#rrggbb`), `place_on?`, `geom?`, `role?` (`solid`/`hole`/`reference`), `cuts?`, `opacity?` (opaklık 0–1; null = opak; referans/delikte 1 = opak), `resolution?` (6–192; null/0 = proje ayarı; yuvarlak olmayan şekilde uyarıyla yok sayılır) | Yeni parça |
+| `update` | `part`, `name?`, `params?` (mutlak), `position?`, `rotation?`, `color?`, `visible?`, `geom?`, `role?`, `cuts?` (`["*"]` = hepsi), `opacity?` (1 = opak), `resolution?` (0 = proje ayarı) | Önce tüm alanlar doğrulanır: hata varsa parça hiç değişmez. Konum verilmezse taban ve XY merkezi korunur (çözünürlük değişince merkez yerinde kalır). Grupta yalnızca `color`/`visible`/`opacity` |
 | `move` | `part`, `dx`, `dy`, `dz` | Göreli; grup adıyla tüm üyeler |
 | `set_position` | `part`, `x?`, `y?`, `z?` | **z tabandır**; yalnızca yerel/köprü |
 | `rotate` | `part`, `axis` (`x`/`y`/`z`), `degrees` | Göreli; taban korunur. Grupta üyeler pivot etrafında döner |
@@ -40,6 +42,7 @@ Ortak alanlar: `part` parça adı (ya da kimliği; birçok işlemde **grup adı*
   {"op":"mirror","part":"ayak","plane":"x","at":0,"name":"ayak_2"},
   {"op":"group","name":"ön_ayaklar","parts":["ayak","ayak_2"],"pivot":null},
   {"op":"mirror","part":"ön_ayaklar","plane":"y","at":0,"name":"arka_ayaklar"},
-  {"op":"create","shape":"cylinder","name":"vida_deliği","role":"hole","cuts":["taban"],"params":[{"name":"diameter","value":3.2},{"name":"height","value":6}],"position":{"x":0,"y":0,"z":2}}
+  {"op":"create","shape":"cylinder","name":"vida_deliği","role":"hole","cuts":["taban"],"params":[{"name":"diameter","value":3.2},{"name":"height","value":6}],"position":{"x":0,"y":0,"z":2}},
+  {"op":"create","shape":"sphere","name":"topuz","params":[{"name":"diameter","value":8}],"resolution":8,"opacity":0.5,"place_on":"taban"}
 ]
 ```

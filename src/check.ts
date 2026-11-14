@@ -6,7 +6,7 @@ import { partBox } from './engine';
 import { worldMesh } from './io';
 import type { WorldMesh } from './meshio';
 import { exportableParts, holesFor, roleOf, solidGeometry } from './model';
-import { PLACEHOLDER_SIZE, geometryError } from './shapes';
+import { PLACEHOLDER_SIZE, geometryError, partSeg, usesResolution } from './shapes';
 import type { Part, Project } from './types';
 
 export interface CheckIssue {
@@ -147,20 +147,25 @@ function degenerateCount(m: WorldMesh): number {
 }
 
 /** Oyun profili: toplam üçgen bütçesi (aşılırsa parça başına dağılım) ve bozuk üçgenler. */
-function gameChecks(solids: Part[], meshOf: (p: Part) => WorldMesh, maxTris: number): CheckIssue[] {
+function gameChecks(solids: Part[], meshOf: (p: Part) => WorldMesh, maxTris: number, seg: number): CheckIssue[] {
   const out: CheckIssue[] = [];
   const counts = solids.map((p) => ({ part: p, tris: meshOf(p).tris.length / 3 }));
   const total = counts.reduce((s, c) => s + c.tris, 0);
   if (total > maxTris) {
-    const list = counts
-      .sort((a, b) => b.tris - a.tris)
-      .map((c) => `${c.part.name} ${c.tris.toLocaleString('tr-TR')}`)
-      .join(', ');
+    counts.sort((a, b) => b.tris - a.tris);
+    const list = counts.map((c) => `${c.part.name} ${c.tris.toLocaleString('tr-TR')}`).join(', ');
+    // En çok üçgenli yuvarlak parçalar (bütçenin ≥ %5'i): parça başına çözünürlükle tek tek sadeleşir.
+    const heavy = counts
+      .filter((c) => usesResolution(c.part) && c.tris >= maxTris * 0.05)
+      .slice(0, 5)
+      .map((c) => `${c.part.name} (${partSeg(c.part, seg)})`);
+    const hint = heavy.length ? ` Çok üçgenli yuvarlak parçalar (segment): ${heavy.join(', ')} — bunlara parça başına \`resolution\` (ör. 8–16) verin.` : '';
     out.push({
       level: 'uyarı',
       message:
         `Toplam ${total.toLocaleString('tr-TR')} üçgen; bütçe ${maxTris.toLocaleString('tr-TR')} aşıldı. Parça başına: ${list}. ` +
-        "Yuvarlak yüzey çözünürlüğünü düşürün (6–16), `hull` parçalarına `geom.maxTris` verin ya da ayrıntıyı azaltın.",
+        'Yuvarlak yüzey çözünürlüğünü düşürün (proje ayarı 6–16 ya da parça başına `resolution`), `hull` parçalarına `geom.maxTris` verin ya da ayrıntıyı azaltın.' +
+        hint,
     });
   }
   for (const p of solids) {
@@ -182,7 +187,7 @@ export function checkProject(project: Project, opts: CheckOptions = {}): CheckIs
 
   // Üretilemeyen geometri yerine çizilen yer tutucu küp ekranda/dosyada parça gibi görünür; açıkça hata olarak bildirilir.
   for (const p of project.parts.filter((x) => x.visible)) {
-    const err = geometryError(p.shape, p.params, seg, p.geom);
+    const err = geometryError(p.shape, p.params, partSeg(p, seg), p.geom);
     if (err) out.push({ level: 'hata', message: `'${p.name}': geometri üretilemedi, yerine ${PLACEHOLDER_SIZE} mm'lik yer tutucu küp çiziliyor (${err}).` });
   }
   for (const p of solids) {
@@ -193,7 +198,7 @@ export function checkProject(project: Project, opts: CheckOptions = {}): CheckIs
   for (const h of project.parts.filter((p) => p.visible && roleOf(p) === 'hole')) {
     if (!solids.some((s) => holesFor(project, s).includes(h))) out.push({ level: 'uyarı', message: `Delik '${h.name}' hiçbir katıyı kesmiyor.` });
   }
-  if (game) out.push(...gameChecks(solids, meshOf, opts.maxTris ?? DEFAULT_MAX_TRIS));
+  if (game) out.push(...gameChecks(solids, meshOf, opts.maxTris ?? DEFAULT_MAX_TRIS, seg));
   else {
     for (const p of solids) {
       const s = partBox(p, seg).getSize(new THREE.Vector3());

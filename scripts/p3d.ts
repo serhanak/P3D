@@ -275,15 +275,19 @@ async function readProjectFile(file: string, strict: boolean): Promise<LoadedPro
   return { project, dropped, warnings };
 }
 
-/** Sekmenin tam projesini doğrular; okunamayan parçalar `dropped`'a (sayı tutmazsa nedeni bilinmeyen olarak). */
-async function parseTabProject(scene: unknown): Promise<{ project: Project; dropped: string[] }> {
+/**
+ * Sekmenin tam projesini doğrular; okunamayan parçalar `dropped`'a (sayı tutmazsa nedeni bilinmeyen olarak), onarılan alanlar
+ * ve atlanan eskiz yolları `warnings`'e (dosya yolundaki gibi printLoadNotes ile basılır, stderr'e kaybolmaz).
+ */
+async function parseTabProject(scene: unknown): Promise<LoadedProject> {
   const { parseProject } = await import('../src/io.ts');
   const dropped: string[] = [];
-  const project = parseProject(scene, dropped);
+  const warnings: string[] = [];
+  const project = parseProject(scene, dropped, warnings);
   const raw = (scene as { parts?: unknown } | null)?.parts;
   const rawCount = Array.isArray(raw) ? raw.length : 0;
   if (rawCount !== project.parts.length && !dropped.length) dropped.push(`${rawCount - project.parts.length} parça (neden bilinmiyor)`);
-  return { project, dropped };
+  return { project, dropped, warnings };
 }
 
 /**
@@ -306,12 +310,12 @@ async function sourceProject(command: string, strict = false): Promise<LoadedPro
   const { initCsg } = await import('../src/csg.ts');
   await initCsg();
   const r = await getScene({ full: true });
-  const { project, dropped } = await parseTabProject(r.scene);
+  const { project, dropped, warnings } = await parseTabProject(r.scene);
   const source = `çalışma alanı: ${wsLabel(r.ws)} (rev ${r.rev})`;
   if (strict && dropped.length) {
     throw new Error(`Sekmedeki ${dropped.length} parça okunamadı (${source}):${listed(dropped)}\nHiçbir şey yazılmadı; parçaları düzeltin ya da silin.`);
   }
-  return { project, dropped, warnings: [], source };
+  return { project, dropped, warnings, source };
 }
 
 /** Adresi varsayılan tarayıcıda açar. */
@@ -408,8 +412,10 @@ function partLine(p: SceneSummaryPart, selected: string | null): string {
           ? ` tekne:${p.geom.stations.length}istasyon×${p.geom.stations[0].breadth.length}`
           : ` ${p.geom.kind}:${p.geom.profile.length}nokta/${p.geom.axis}`;
   const group = p.group ? ` grup=${p.group}` : '';
+  // Yalnızca ayarlıyken: saydamlık (opaklık < 1) ve parça başına çözünürlük (yoksa proje ayarı).
+  const look = `${p.opacity !== undefined ? ` opaklık=${n(p.opacity)}` : ''}${p.resolution !== undefined ? ` çözünürlük=${p.resolution}` : ''}`;
   return (
-    `${p.name === selected ? '*' : ' '} ${p.name} [${p.shape}${role}]${geom} ${params}${group} | konum=${vec(p.position)}${rot}` +
+    `${p.name === selected ? '*' : ' '} ${p.name} [${p.shape}${role}]${geom} ${params}${group}${look} | konum=${vec(p.position)}${rot}` +
     ` | bbox=${vec(p.bbox.min)} → ${vec(p.bbox.max)} | ${p.color}${p.visible ? '' : ' (gizli)'}`
   );
 }
@@ -494,8 +500,9 @@ async function listSketch(): Promise<void> {
   } else {
     const r = await getScene({ full: true });
     out(sceneHeader(r));
-    const { project, dropped } = await parseTabProject(r.scene);
-    printLoadNotes({ dropped, warnings: [] }, json);
+    const loaded = await parseTabProject(r.scene);
+    printLoadNotes(loaded, json);
+    const { project } = loaded;
     const { sketchSummary } = await import('../src/sketch.ts');
     list = sketchSummary(project, seg);
   }
@@ -1020,10 +1027,11 @@ async function main(): Promise<void> {
       const r = await getScene({ full: true });
       // Sekmenin projesi (sunucunun eklediği `assets` hariç): özeti sekme kendi JSON'uyla karşılaştırır.
       const { assets: _assets, ...tabProject } = r.scene as Record<string, unknown>;
-      const { project, dropped } = await parseTabProject(r.scene);
+      const { project, dropped, warnings } = await parseTabProject(r.scene);
       if (dropped.length) {
         throw new Error(`Sekmedeki ${dropped.length} parça dosyaya yazılamazdı (okunamadı):${listed(dropped)}\nDosya yazılmadı.`);
       }
+      for (const w of warnings) console.log(`⚠ ${w}`);
       if (existing && !force) {
         if (!r.file || !samePath(r.file, file)) {
           throw new Error(

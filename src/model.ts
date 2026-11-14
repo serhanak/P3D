@@ -5,13 +5,22 @@ import { mergeVertices, toCreasedNormals } from 'three/addons/utils/BufferGeomet
 import { CsgError, csgReady, manifoldVolume, subtract } from './csg';
 import { partBox, partMatrix } from './engine';
 import { buildGeomIndexed, creaseFor, geometryVolume } from './geom';
-import { SHAPE_DEFS, buildGeometry } from './shapes';
+import { SHAPE_DEFS, buildGeometry, partSeg } from './shapes';
 import type { Part, Project } from './types';
 
 export const roleOf = (p: Part) => p.role ?? 'solid';
 
+/**
+ * Ekranda görünen saydamlık: parçanın `opacity`'si; yoksa katı opak, referans 0,35, delik 0,3 (opacity rolün varsayılan
+ * yarı saydamlığının yerine geçer). Yalnızca görünüm; dışa aktarım malzemesi `Part.opacity`'yi kullanır.
+ */
+export function displayOpacity(p: Part): number {
+  return p.opacity ?? (p.role === 'hole' ? 0.3 : p.role === 'reference' ? 0.35 : 1);
+}
+
+/** Parça geometrisinin önbellek anahtarı; `seg` proje ayarıdır, anahtara etkin çözünürlük (`partSeg`) girer. */
 export function geometryKey(part: Part, seg: number): string {
-  return `${part.shape}|${JSON.stringify(part.params)}|${part.geom ? JSON.stringify(part.geom) : ''}|${seg}`;
+  return `${part.shape}|${JSON.stringify(part.params)}|${part.geom ? JSON.stringify(part.geom) : ''}|${partSeg(part, seg)}`;
 }
 
 /** Katıyı kesen görünür delik parçaları (sınırlayıcı kutular kesişenler). `view.showHoles` yalnızca görüntüyü etkiler. */
@@ -43,16 +52,18 @@ function relMatrix(solid: Part, hole: Part): THREE.Matrix4 {
 /**
  * Kesimsiz, indisli, kapalı ağ (parçanın yerel koordinatlarında): geom şekillerinde üreticinin kendi indisli ağı,
  * three.js ilkellerinde (indissiz) dikiş kopyaları kaynaklanmış görüntü ağı. Boolean girdisi ve dışa aktarım bunu kullanır.
+ * `seg` proje çözünürlüğüdür; parçanın kendi `resolution`'ı varsa o kullanılır (`partSeg`).
  */
 export function baseIndexed(part: Part, seg: number): THREE.BufferGeometry {
+  const s = partSeg(part, seg);
   if (part.geom) {
     try {
-      return buildGeomIndexed(part.geom, part.params, seg);
+      return buildGeomIndexed(part.geom, part.params, s);
     } catch {
       // üretilemeyen geom: görüntüdeki yer tutucuyla aynı küp (aşağıda)
     }
   }
-  const g = buildGeometry(part.shape, part.params, seg, part.geom);
+  const g = buildGeometry(part.shape, part.params, s, part.geom);
   for (const name of Object.keys(g.attributes)) if (name !== 'position') g.deleteAttribute(name);
   g.clearGroups();
   const merged = mergeVertices(g, 1e-6);
@@ -100,7 +111,7 @@ export interface SolidGeometry {
 
 /** Görünüm için son geometri, normalleriyle (yeni nesne; çağıran dispose eder). */
 export function solidGeometry(project: Project, part: Part, boxes?: Map<string, THREE.Box3>): SolidGeometry {
-  const seg = project.settings.resolution;
+  const seg = partSeg(part, project.settings.resolution);
   if (!holesFor(project, part, boxes).length) return { geometry: buildGeometry(part.shape, part.params, seg, part.geom), cut: false };
   const r = cutIndexed(project, part, boxes);
   if (!r.cut) {

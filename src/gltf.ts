@@ -51,6 +51,9 @@ function hexToLinear(hex: string): V3 {
   return [0, 2, 4].map((i) => Number(srgbToLinear(parseInt(h.slice(i, i + 2), 16) / 255).toFixed(6))) as V3;
 }
 
+/** Malzeme anahtarı: renk (küçük harf) + saydamlık; aynı anahtarlı parçalar tek malzemeyi paylaşır. */
+const materialKey = (p: Part) => `${p.color.toLowerCase()}|${p.opacity ?? 1}`;
+
 const toGl = (v: { x: number; y: number; z: number }, s: number): V3 => [v.x * s + 0, v.z * s + 0, -v.y * s + 0];
 const sub = (a: V3, b: V3): V3 => [a[0] - b[0] + 0, a[1] - b[1] + 0, a[2] - b[2] + 0];
 
@@ -335,7 +338,8 @@ export function selectParts(project: Project, refs?: string[]): Part[] {
 /**
  * Projeyi GLB (glTF 2.0 ikili) olarak yazar. Parça başına düğüm + mesh (düğüm çevirisi parçanın merkezi, döndürme
  * köşelere gömülü); grup bir düğümdür (çevirisi pivot, üyeleri çocuk düğüm). Renk → lineer `baseColorFactor`
- * (metallic 0, roughness 0,9); aynı renkler tek malzeme. `skeleton` için bkz. GlbOptions.
+ * (metallic 0, roughness 0,9), saydamlık (`Part.opacity`) → alfa + `alphaMode: BLEND`; aynı renk ve saydamlık tek malzeme.
+ * `skeleton` için bkz. GlbOptions.
  * Delikler tarafından tamamen yenen (üçgensiz) parçalar atlanır: glTF boş erişimciye izin vermez.
  */
 export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
@@ -352,15 +356,19 @@ export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
   const bin = new BinBuilder();
   const materials: object[] = [];
   const materialIndex = new Map<string, number>();
-  const material = (color: string) => {
-    const key = color.toLowerCase();
+  /** Renk + saydamlık başına tek malzeme; saydam malzeme alfa = opacity, `alphaMode: BLEND` (opakta glTF varsayılanı OPAQUE). */
+  const material = (p: Part) => {
+    const key = materialKey(p);
     let i = materialIndex.get(key);
     if (i === undefined) {
       i = materials.length;
       materialIndex.set(key, i);
+      const color = p.color.toLowerCase();
+      const alpha = p.opacity ?? 1;
       materials.push({
-        name: `P3D_${key.replace('#', '')}`,
-        pbrMetallicRoughness: { baseColorFactor: [...hexToLinear(key), 1], metallicFactor: 0, roughnessFactor: 0.9 },
+        name: `P3D_${color.replace('#', '')}${alpha < 1 ? `_a${Math.round(alpha * 100)}` : ''}`,
+        pbrMetallicRoughness: { baseColorFactor: [...hexToLinear(color), alpha], metallicFactor: 0, roughnessFactor: 0.9 },
+        ...(alpha < 1 ? { alphaMode: 'BLEND' } : {}),
       });
     }
     return i;
@@ -397,13 +405,13 @@ export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
     if (children.length) nodes[0].children = children;
     const jointCount = groups.length + 1;
 
-    // Renk başına tek primitif; köşeler dünya (glTF) koordinatlarında, ağ düğümü kökte ve dönüşümsüz.
-    const byColor = new Map<string, { sh: Shaded; joint: number[] }>();
+    // Malzeme (renk + saydamlık) başına tek primitif; köşeler dünya (glTF) koordinatlarında, ağ düğümü kökte ve dönüşümsüz.
+    const byColor = new Map<string, { part: Part; sh: Shaded; joint: number[] }>();
     for (const { part: p, mesh } of items) {
       const sh = shade(mesh, [0, 0, 0]);
-      const key = p.color.toLowerCase();
+      const key = materialKey(p);
       let acc = byColor.get(key);
-      if (!acc) byColor.set(key, (acc = { sh: { pos: [], nor: [], idx: [] }, joint: [] }));
+      if (!acc) byColor.set(key, (acc = { part: p, sh: { pos: [], nor: [], idx: [] }, joint: [] }));
       const base = acc.sh.pos.length / 3;
       for (const v of sh.pos) acc.sh.pos.push(v); // büyük ağlarda push(...dizi) yığını taşırır
       for (const v of sh.nor) acc.sh.nor.push(v);
@@ -411,7 +419,7 @@ export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
       const j = (p.group && jointOf.get(p.group)) || 0;
       for (let i = 0; i < sh.pos.length / 3; i++) acc.joint.push(j);
     }
-    const primitives = [...byColor].map(([color, acc]) => bin.primitive(acc.sh, material(color), acc.joint, jointCount));
+    const primitives = [...byColor.values()].map((acc) => bin.primitive(acc.sh, material(acc.part), acc.joint, jointCount));
     const meshName = nameOf(project.name, 'model');
     meshes.push({ name: meshName, primitives });
     const meshNode = nodes.length;
@@ -429,7 +437,7 @@ export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
     const groupNode = new Map<string, number>();
     for (const { part: p, mesh: m } of items) {
       const mesh = meshes.length;
-      meshes.push({ name: p.name, primitives: [bin.primitive(shade(m, m.center), material(p.color))] });
+      meshes.push({ name: p.name, primitives: [bin.primitive(shade(m, m.center), material(p))] });
       const g = groupOf(p);
       if (!g) {
         roots.push(nodes.length);

@@ -7,9 +7,14 @@ biçimler. Bunlar gerekiyorsa GLB'yi Blender'da sürdürün.
 ## Modelleme
 - Birimler yine mm, Z yukarı, önü −Y. Gerçek ölçüde çizin (araba ≈ 4000 mm). Tabla en fazla 20 000 × 20 000 mm
   (`settings.bedX/bedY`; 2 m üstünde ızgara 100/500 mm); yalnızca görseldir, `check` oyun profilinde tabla kurallarına bakmaz.
-- **Düşük poligon:** proje çözünürlüğü (yuvarlak yüzey segmenti) 6–16 arası seçilebilir (arayüz → Ayarlar). `hull`
-  çözünürlükle sadeleşmez; gövdeye `geom.maxTris` ile üçgen bütçesi verin (ör. `{"kind": "hull", "stations": […],
-  "maxTris": 1500}`): ağ bütçeyi aşmaz, keskin küpeşte/ayna kalır, bozuk üçgen bırakmaz.
+- **Düşük poligon:** proje çözünürlüğü (yuvarlak yüzey segmenti) 6–16 arası seçilebilir (arayüz → Ayarlar). Parça başına
+  `resolution` (6–192) proje ayarını o parçada geçersiz kılar: ör. proje 8, teker `resolution: 16`; ya da eklem/eldiven
+  küreleri `resolution: 6` (küre 6 segmentte 36, 8'de 48 üçgen). Silindir, boru, koni, küre, torus, döndürme ve yumuşak
+  loft'ta geçerlidir; diğer şekillerde uyarıyla yok sayılır (`p3d guide modeling` → "Parça çözünürlüğü"). `hull` çözünürlükle sadeleşmez; gövdeye `geom.maxTris`
+  ile üçgen bütçesi verin (ör. `{"kind": "hull", "stations": […], "maxTris": 1500}`): ağ bütçeyi aşmaz, keskin
+  küpeşte/ayna kalır, bozuk üçgen bırakmaz.
+- **Saydam parçalar** (cam, vizör, far camı): `opacity` = opaklık (0–1; saydamlık = 1 − opaklık; ör. füme cam koyu renk + 0,4).
+  GLB'ye malzeme alfası olarak gider; parça yine katı ağdır.
 - **Simetri:** bir tarafı kurun, `mirror` ile kopyalayın (`p3d guide ops`).
 - **Birlikte hareket eden parçalar** (teker = lastik + jant + göbek) bir **grup**tur; grubun `pivot`u dönme merkezidir
   (göbek merkezi). Grup adı move/rotate/duplicate/mirror/delete'te parça yerine kullanılabilir.
@@ -22,7 +27,10 @@ p3d export araba.glb [--file model.p3d.json] [--units m|mm] [--normals flat|smoo
 - Standart glTF 2.0: **Y yukarı, metre** (varsayılan), önü +Z. Dönüşüm `(x, y, z)_p3d → (x, z, −y) × 0,001`. Unreal'in glTF
   içe aktarıcısı kendi Z-yukarı / cm düzenine çevirir.
 - `--normals flat` (varsayılan) düşük poligon görünümü; `smooth` 50° kırılımlı.
-- Renk → `baseColorFactor` (sRGB → lineer), metallic 0, roughness 0,9; aynı renk tek malzeme.
+- Renk → `baseColorFactor` (sRGB → lineer), metallic 0, roughness 0,9; aynı renk ve saydamlık tek malzeme. Saydam parça
+  (`opacity` < 1): alfa = `baseColorFactor[3]` (= opacity) ve `alphaMode: "BLEND"`, malzeme adı `P3D_rrggbb_aNN`
+  (NN = opacity × 100); opak malzemelerde `alphaMode` yazılmaz (glTF varsayılanı OPAQUE). İskelet modunda primitifler de
+  malzemeye (renk + saydamlık) göre ayrışır.
 - Düğümler: gruplanmamış parça = düğüm (çevirisi parçanın merkezi); grup = düğüm (çevirisi pivot), üyeleri çocuk.
   Delikler uygulanmış haldedir; tamamen boşalan parça atlanır.
 - **`--skeleton` (Unreal Chaos Vehicles):** tek bir skinned mesh; kökte `root` eklemi, her grup için pivotunda bir eklem
@@ -32,7 +40,8 @@ p3d export araba.glb [--file model.p3d.json] [--units m|mm] [--normals flat|smoo
 
 ## Kontrol
 `p3d check --profile game [--max-tris 20000]`: z-fighting, boolean hatası, boş delik, **toplam üçgen bütçesi** (parça başına
-dağılım) ve bozuk (alanı ~0) üçgenler. Tabla teması ve 0,8 mm ince parça kuralları atlanır.
+dağılım; bütçenin ≥ %5'ini tutan yuvarlak parçalar etkin segmentleriyle listelenip parça başına `resolution` önerilir) ve bozuk
+(alanı ~0) üçgenler. Tabla teması ve 0,8 mm ince parça kuralları atlanır.
 
 ## Doğrulanmayanlar
 - Gerçek Unreal içe aktarımı ve glTF Validator henüz denenmedi (yalnızca kendi ayrıştırıcı testlerimiz + three.js GLTFLoader).

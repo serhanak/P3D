@@ -8,14 +8,14 @@ import { sanitizeGeom } from './geom';
 import { build3mf, buildStl, type WorldMesh } from './meshio';
 import { unionGeometries } from './csg';
 import { exportGeometry, exportableParts } from './model';
-import { PALETTE, defaultParams, sanitizeParams } from './shapes';
+import { MAX_RESOLUTION, MIN_RESOLUTION, PALETTE, defaultParams, sanitizeParams, usesResolution } from './shapes';
 import { sanitizeSketch } from './sketch';
 import { buildGlb } from './gltf';
 import { fold } from './text';
 import { newProject, type GroupDef, type Part, type Project } from './types';
 
-/** Yuvarlak yüzey çözünürlüğünün alt sınırı (düşük poligonlu oyun modelleri için 6). */
-export const MIN_RESOLUTION = 6;
+/** Yuvarlak yüzey çözünürlüğünün alt sınırı (düşük poligonlu oyun modelleri için 6; tanım shapes.ts'te). */
+export { MIN_RESOLUTION };
 /** Tabla kenarı üst sınırı (mm): baskı tablaları için 2000 yeterliydi; oyun varlıkları (araba, pist) gerçek ölçüde çizilir. */
 export const MAX_BED = 20000;
 
@@ -43,7 +43,8 @@ export function meshPartsWithoutData(project: Project): Part[] {
  * Dosyadan/otomatik kayıttan gelen veriyi doğrular; bilinmeyen alanları atar, eksikleri tamamlar.
  * Okunamayan parçalar atlanır; `dropped` verilirse her biri için "ad: neden" eklenir (sessiz kayıp olmasın).
  * Okunamayan eskiz yolları da atlanır ama parça kaybı sayılmaz (niyet verisidir; yükleme durmasın): "eskiz 'ad' atlandı:
- * neden" `warnings` verilmişse oraya, verilmemişse `console.warn`'a yazılır.
+ * neden" `warnings` verilmişse oraya, verilmemişse `console.warn`'a yazılır. Parçanın bozuk saydamlık (`opacity`) ve
+ * çözünürlük (`resolution`) değerleri onarılır ve aynı yolla bildirilir ("'ad': saydamlık (opacity) … yapıldı").
  */
 export function parseProject(data: unknown, dropped?: string[], warnings?: string[]): Project {
   if (!data || typeof data !== 'object') throw new Error('Geçersiz proje dosyası.');
@@ -90,6 +91,12 @@ export function parseProject(data: unknown, dropped?: string[], warnings?: strin
     }
   }
 
+  // Onarılan (ama atlanmayan) alanlar ve eskiz yolları: `warnings` verilmişse oraya, verilmemişse console.warn'a.
+  const warn = (msg: string) => {
+    if (warnings) warnings.push(msg);
+    else console.warn(`[p3d] ${msg}`);
+  };
+
   const ids = new Set<string>();
   const parts = Array.isArray(d.parts) ? d.parts : [];
   parts.forEach((raw, i) => {
@@ -119,6 +126,9 @@ export function parseProject(data: unknown, dropped?: string[], warnings?: strin
     let id = typeof r.id === 'string' && r.id ? r.id : newId();
     if (ids.has(id)) id = newId();
     ids.add(id);
+    const role = r.role === 'hole' || r.role === 'reference' ? r.role : undefined;
+    const opacity = readOpacity(r.opacity, role !== undefined, (why) => warn(`${label}: saydamlık (opacity) ${why}`));
+    const resolution = readResolution(r.resolution, { shape, geom }, (why) => warn(`${label}: çözünürlük (resolution) ${why}`));
     base.parts.push({
       id,
       name: typeof r.name === 'string' && r.name.trim() ? r.name.trim() : `Parça ${i + 1}`,
@@ -129,20 +139,62 @@ export function parseProject(data: unknown, dropped?: string[], warnings?: strin
       color: typeof r.color === 'string' && isHexColor(r.color) ? normalizeHex(r.color) : PALETTE[i % PALETTE.length],
       visible: r.visible !== false,
       ...(geom ? { geom } : {}),
-      ...(r.role === 'hole' || r.role === 'reference' ? { role: r.role } : {}),
+      ...(role ? { role } : {}),
       ...(r.role === 'hole' && Array.isArray(r.cuts) && r.cuts.length ? { cuts: r.cuts.filter((c): c is string => typeof c === 'string') } : {}),
       ...(typeof r.group === 'string' && groups.some((g) => g.name === r.group) ? { group: r.group } : {}),
+      ...(opacity !== undefined ? { opacity } : {}),
+      ...(resolution !== undefined ? { resolution } : {}),
     });
   });
   const used = groups.filter((g) => base.parts.some((p) => p.group === g.name));
   if (used.length) base.groups = used;
   // Eskiz yolları (niyet verisi): okunamayan yol atlanır ve uyarı olarak bildirilir; alan yalnızca yol varsa eklenir.
-  const sketch = sanitizeSketch(d.sketch, (msg) => {
-    if (warnings) warnings.push(msg);
-    else console.warn(`[p3d] ${msg}`);
-  });
+  const sketch = sanitizeSketch(d.sketch, warn);
   if (sketch.length) base.sketch = sketch;
   return base;
+}
+
+/**
+ * Dosyadaki saydamlık: 0–1 arası sayı olduğu gibi kalır. 1 katıda alan olarak tutulmaz (opak varsayılan), referans ve delikte
+ * tutulur (yarı saydam varsayılanlarını geçersiz kılar; `ghost`). Bozuk değer onarılır ve `warn` ile bildirilir (parça atlanmaz):
+ * 0'ın altı 0, 1'in üstü opak, sayı olmayan değer kaldırılır (katıda opak, referans/delikte rol varsayılanı).
+ */
+function readOpacity(v: unknown, ghost: boolean, warn: (why: string) => void): number | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (v === 1) return ghost ? 1 : undefined;
+  if (typeof v !== 'number' || !Number.isFinite(v)) {
+    warn(`geçersiz (${JSON.stringify(v)}); ${ghost ? 'rolün varsayılanı kullanılıyor' : 'opak yapıldı'}.`);
+    return undefined;
+  }
+  if (v < 0) {
+    warn(`${v} geçersiz (0–1 arası olmalı); 0 yapıldı.`);
+    return 0;
+  }
+  if (v > 1) {
+    warn(`${v} geçersiz (0–1 arası olmalı); opak yapıldı.`);
+    return ghost ? 1 : undefined;
+  }
+  return v;
+}
+
+/**
+ * Dosyadaki parça çözünürlüğü: segment kullanan şekilde 6–192 tamsayı olduğu gibi kalır; 0 alan olarak tutulmaz (proje
+ * ayarı). Bozuk değer onarılır ve `warn` ile bildirilir: kesir yuvarlanır, aralık dışı sınıra çekilir, sayı olmayan değer ve
+ * segment kullanmayan şekildeki (yumuşak olmayan loft dahil) alan kaldırılır (proje ayarı).
+ */
+function readResolution(v: unknown, part: Pick<Part, 'shape' | 'geom'>, warn: (why: string) => void): number | undefined {
+  if (v === undefined || v === null || v === 0) return undefined;
+  if (typeof v !== 'number' || !Number.isFinite(v)) {
+    warn(`geçersiz (${JSON.stringify(v)}); kaldırıldı, proje ayarı kullanılıyor.`);
+    return undefined;
+  }
+  if (!usesResolution(part)) {
+    warn(`'${part.shape}'${part.shape === 'loft' ? ' (yumuşak olmayan)' : ''} şeklinde kullanılmaz; kaldırıldı.`);
+    return undefined;
+  }
+  const r = Math.min(MAX_RESOLUTION, Math.max(MIN_RESOLUTION, Math.round(v)));
+  if (r !== v) warn(`${v} geçersiz (${MIN_RESOLUTION}–${MAX_RESOLUTION} arası tamsayı olmalı); ${r} yapıldı.`);
+  return r;
 }
 
 // ---------------------------------------------------------------------------
@@ -186,7 +238,7 @@ export function worldMesh(project: Project, part: Part): WorldMesh {
     if (a !== b && b !== c && a !== c) tris.push(a, b, c); // kutup/tepe noktalarındaki dejenere üçgenler
   }
   g.dispose();
-  return { name: part.name, color: part.color, pos, tris };
+  return { name: part.name, color: part.color, pos, tris, ...(part.opacity !== undefined ? { opacity: part.opacity } : {}) };
 }
 
 function objName(part: Part): string {
@@ -219,7 +271,8 @@ export function buildObj(parts: Part[], project: Project, mtlFile: string | null
     usedNames.add(name);
     const { pos, tris } = worldMesh(project, part);
     const c = new THREE.Color(part.color);
-    mtl.push('', `newmtl mat_${name}`, `Kd ${f4(c.r)} ${f4(c.g)} ${f4(c.b)}`, 'Ka 0 0 0', 'Ks 0 0 0', 'd 1', 'illum 1');
+    // d: saydamlık (dissolve; 1 = opak).
+    mtl.push('', `newmtl mat_${name}`, `Kd ${f4(c.r)} ${f4(c.g)} ${f4(c.b)}`, 'Ka 0 0 0', 'Ks 0 0 0', `d ${f4(part.opacity ?? 1)}`, 'illum 1');
     lines.push('', `o ${name}`, `# ${part.name}`);
     if (mtlFile) lines.push(`usemtl mat_${name}`);
     for (let i = 0; i < pos.length; i += 3) lines.push(`v ${f4(pos[i])} ${f4(pos[i + 1])} ${f4(pos[i + 2])}`);
