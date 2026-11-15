@@ -705,6 +705,31 @@ describe('ayna', () => {
       },
     ],
     ['hull', { op: 'create', shape: 'hull', name: 'hull' }],
+    // Süpürme: 3B yol (yay + gönye), asimetrik profil 'up' çerçevesinde (köşeler arası burulan dörtgenler: köşegen seçimi)
+    [
+      'sweep',
+      {
+        op: 'create',
+        shape: 'sweep',
+        name: 'sweep',
+        geom: { kind: 'sweep', path: [[0, 0, 0], [30, 0, 4, 5], [30, 20, 10], [5, 25, 16]], profile: [[-2, 0], [3, 0], [3, 4], [-3, 4], [-3, 1]] },
+      },
+    ],
+    // Yuvarlak, içi boş, açık 3B boru (rmf, son uç up'a hizalı) ve kapalı 3B boru (dikişte halka indisi kayar; 8 kenar)
+    [
+      'sweep rmf',
+      { op: 'create', shape: 'sweep', name: 'sweep rmf', resolution: 8, geom: { kind: 'sweep', path: [[0, 0, 0], [30, 0, 4], [30, 20, 10], [5, 25, 16]], bend: 5, diameter: 4, innerDiameter: 2 } },
+    ],
+    [
+      'sweep kapalı',
+      {
+        op: 'create',
+        shape: 'sweep',
+        name: 'sweep kapalı',
+        resolution: 8,
+        geom: { kind: 'sweep', path: [[0, 0, 0], [40, 0, 0], [40, 30, 20], [0, 30, 40], [0, 0, 60]], closed: true, bend: 8, diameter: 6 },
+      },
+    ],
   ];
 
   /** Her köşenin yansıması öbür ağda bir köşeye denk gelir. */
@@ -765,7 +790,7 @@ describe('ayna', () => {
       expect(b.pos.length).toBe(a.pos.length);
       sameUnderReflection(a.pos, b.pos, plane, at, 2e-3);
     }
-    if (orig.shape === 'loft') onReflectedSurface(a, b, plane, at, 2e-3);
+    if (orig.shape === 'loft' || orig.shape === 'sweep') onReflectedSurface(a, b, plane, at, 2e-3);
     // det(R') = +1: geçerli döndürme
     expect(new THREE.Matrix4().extractRotation(partMatrix(copy)).determinant()).toBeCloseTo(1, 6);
   }

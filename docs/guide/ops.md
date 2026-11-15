@@ -6,7 +6,9 @@ Kaynak tanım: P3D deposunda `shared/ops.ts` → `Op`. Her liste tek geri-al ad�
 Ortak alanlar: `part` parça adı (ya da kimliği; birçok işlemde **grup adı** da olur), `position`/`near`/`pivot`/`offset`
 `{x, y, z}` mm, `params` dizisi `[{name, value, mode?: 'set'|'add'|'mul'}]`. Koordinat kuralları: `p3d guide modeling`.
 `opacity` (saydamlık, yalnızca görünüm/malzeme) ve `resolution` (parça başına yuvarlak yüzey segmenti): `p3d guide modeling` →
-"Saydamlık" (saydamlık = 1 − opaklık) ve "Parça çözünürlüğü"; aralık dışı değer işlem hatasıdır.
+"Saydamlık" (saydamlık = 1 − opaklık) ve "Parça çözünürlüğü"; aralık dışı değer işlem hatasıdır. `geom` serbest biçimlerde
+(`extrude`, `revolve`, `loft`, `hull`, `sweep`) zorunludur (yoksa örnek geometri); biçimleri `p3d guide modeling` → "Serbest
+biçimler" ve "Süpürme".
 
 | İşlem | Alanlar | Not |
 |---|---|---|
@@ -25,7 +27,7 @@ Ortak alanlar: `part` parça adı (ya da kimliği; birçok işlemde **grup adı*
 | `group` | `name`, `parts?` (üyeleri değiştirir; boş = değişmez), `pivot?` (null: yeni grupta üyelerin kutu merkezi) | Ad parça adlarından farklı olmalı; bir parça tek grupta |
 | `ungroup` | `name` | Parçalar kalır |
 | `set_pivot` | `group`, `pivot` | Dünya noktası (ör. teker göbeği) |
-| `mirror` | `part` (parça ya da grup), `plane` (`x`/`y`/`z`), `at?` (null = 0), `name?` | Aynalanmış **kopya**; geometri de yansır. `hull` ~0,5 mm'ye kadar simetrik. Aynalanmış loft `mirrored` bayrağı taşır; geom'u yeniden yazmak bayrağı düşürür (aslını düzenleyip yeniden aynalayın) |
+| `mirror` | `part` (parça ya da grup), `plane` (`x`/`y`/`z`), `at?` (null = 0), `name?` | Aynalanmış **kopya**; geometri de yansır (süpürmede yol ve `up` yansır, profilde u işaret değiştirir; birebir). `hull` ~0,5 mm'ye kadar simetrik. Aynalanmış loft `mirrored` bayrağı taşır; geom'u yeniden yazmak bayrağı düşürür (aslını düzenleyip yeniden aynalayın) |
 | `select` | `part` | Arayüz seçimi |
 | `view` | `show_names?`, `show_dimensions?`, `show_holes?` | Görünüm anahtarları |
 | `import_mesh` | `asset`, `name?`, `role?`, `color?`, `position?` | Yerel; normalde `p3d import dosya.stl` kullanın |
@@ -43,6 +45,7 @@ Ortak alanlar: `part` parça adı (ya da kimliği; birçok işlemde **grup adı*
   {"op":"group","name":"ön_ayaklar","parts":["ayak","ayak_2"],"pivot":null},
   {"op":"mirror","part":"ön_ayaklar","plane":"y","at":0,"name":"arka_ayaklar"},
   {"op":"create","shape":"cylinder","name":"vida_deliği","role":"hole","cuts":["taban"],"params":[{"name":"diameter","value":3.2},{"name":"height","value":6}],"position":{"x":0,"y":0,"z":2}},
-  {"op":"create","shape":"sphere","name":"topuz","params":[{"name":"diameter","value":8}],"resolution":8,"opacity":0.5,"place_on":"taban"}
+  {"op":"create","shape":"sphere","name":"topuz","params":[{"name":"diameter","value":8}],"resolution":8,"opacity":0.5,"place_on":"taban"},
+  {"op":"create","shape":"sweep","name":"kulp","position":{"x":0,"y":0,"z":0},"geom":{"kind":"sweep","path":[[-25,0,4],[-25,0,24],[25,0,24],[25,0,4]],"bend":6,"diameter":6}}
 ]
 ```

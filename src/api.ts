@@ -15,7 +15,7 @@ export * as THREE from 'three';
 export { newProject } from './types';
 export type { GroupDef, MeshAsset, Part, PartGeom, Project, Role, ShapeType, Vec3 } from './types';
 export { SHAPES } from '../shared/ops';
-export type { Axis, LoftGeom, LoftSection, MeshGeom, Op, OpName, ParamChange, Pt2, SceneSummary, SceneSummaryPart, Side } from '../shared/ops';
+export type { Axis, LoftGeom, LoftSection, MeshGeom, Op, OpName, ParamChange, Pt2, SceneSummary, SceneSummaryPart, Side, SweepGeom, SweepPoint } from '../shared/ops';
 export { applyOps, partBox, partMatrix, partsBox, sceneSummary } from './engine';
 export type { ApplyResult } from './engine';
 

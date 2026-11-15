@@ -273,6 +273,7 @@ const extrudeShape = geomShape('extrude', 'Ekstrüzyon', [len('height', 'Uzunluk
 const revolveShape = geomShape('revolve', 'Döndürme', [scaleParam], {});
 const loftShape = geomShape('loft', 'Loft', [scaleParam], {});
 const hullShape = geomShape('hull', 'Tekne', [scaleParam], {});
+const sweepShape = geomShape('sweep', 'Süpürme', [scaleParam], {});
 const meshShape = geomShape('mesh', 'Mesh', [scaleParam], {});
 
 export const SHAPE_DEFS: Record<ShapeType, ShapeDef> = {
@@ -287,6 +288,7 @@ export const SHAPE_DEFS: Record<ShapeType, ShapeDef> = {
   revolve: revolveShape,
   loft: loftShape,
   hull: hullShape,
+  sweep: sweepShape,
   mesh: meshShape,
 };
 
@@ -316,14 +318,21 @@ export const MIN_RESOLUTION = 6;
 export const MAX_RESOLUTION = 192;
 
 /**
- * Segment sayısı kullanabilen şekiller (loft yalnızca `smooth` iken; bkz. `usesResolution`). `hull` (üçgen bütçesi
- * `geom.maxTris`), `mesh`, kutu, prizma ve ekstrüzyon segment kullanmaz.
+ * Segment sayısı kullanabilen şekiller (loft yalnızca `smooth` iken, sweep yalnızca yay ya da yuvarlak kesit varken; bkz.
+ * `usesResolution`). `hull` (üçgen bütçesi `geom.maxTris`), `mesh`, kutu, prizma ve ekstrüzyon segment kullanmaz.
  */
-export const RESOLUTION_SHAPES: readonly ShapeType[] = ['cylinder', 'tube', 'cone', 'sphere', 'torus', 'revolve', 'loft'];
+export const RESOLUTION_SHAPES: readonly ShapeType[] = ['cylinder', 'tube', 'cone', 'sphere', 'torus', 'revolve', 'loft', 'sweep'];
 
-/** Parçanın geometrisi segment sayısına bağlı mı: RESOLUTION_SHAPES, loft'ta yalnızca `geom.smooth` iken. */
+/**
+ * Parçanın geometrisi segment sayısına bağlı mı: RESOLUTION_SHAPES; loft'ta yalnızca `geom.smooth` iken, sweep'te yalnızca
+ * yuvarlak kesitte (`diameter`: kenar sayısı) ya da yaylı köşe varken (`bend` / noktadaki r > 0: yay başına kiriş).
+ */
 export function usesResolution(part: { shape: ShapeType; geom?: PartGeom }): boolean {
   if (part.shape === 'loft') return part.geom?.kind === 'loft' && part.geom.smooth === true;
+  if (part.shape === 'sweep') {
+    const g = part.geom;
+    return g?.kind === 'sweep' && (g.diameter !== undefined || (g.bend ?? 0) > 0 || g.path.some((p) => ((p as number[])[3] ?? 0) > 0));
+  }
   return RESOLUTION_SHAPES.includes(part.shape);
 }
 

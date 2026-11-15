@@ -558,7 +558,7 @@ describe('parça çözünürlüğü: işlemler ve dosya', () => {
     const warnings = res.messages.filter((m) => m.includes('yok sayıldı'));
     expect(warnings).toHaveLength(5);
     expect(warnings[0]).toBe(
-      "'kutu': çözünürlük (resolution) yalnızca yuvarlak şekillerde geçerli (silindir, boru, koni, küre, torus, döndürme, yumuşak loft); kutu için yok sayıldı.",
+      "'kutu': çözünürlük (resolution) yalnızca yuvarlak şekillerde geçerli (silindir, boru, koni, küre, torus, döndürme, yumuşak loft, yaylı ya da yuvarlak kesitli süpürme); kutu için yok sayıldı.",
     );
     expect(warnings[3]).toContain('geom.maxTris');
     expect(warnings[4]).toContain('smooth: true');

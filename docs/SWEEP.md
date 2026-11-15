@@ -1,6 +1,6 @@
 # Süpürme (`sweep`) — tasarım taslağı
 
-> **Durum: tasarım onaylandı (2026-11-14), Faz 1 uygulanacak.** Boltrush istekleri #14 (düzlemde yol boyunca süpürme) ve
+> **Durum: tasarım onaylandı (2026-11-14), Faz 1 uygulandı (2026-11-15); Faz 2 (eskiz bağı) bekliyor.** Boltrush istekleri #14 (düzlemde yol boyunca süpürme) ve
 > #16 (3B yol boyunca boru) ile yol haritası 10'daki ertelenmiş `sweep`. Kararlar: (1) çerçeve varsayılanı `up`, yuvarlak
 > kesitte kendiliğinden `rmf`, yuvarlak olmayan kesitte düşey bölüm hatası; (2) sığmayan köşe yarıçapı hata (sığan en büyük
 > yarıçapı söyler); (3) eskiz bağı kopya (Faz 2).
@@ -134,3 +134,64 @@ Faz 1 (bu taslak, eskiz bağı hariç):
 - ~10 test.
 
 Uygulayıcı ajanla yaklaşık bir oturum sürer. Faz 2 (eskizden kopya) ayrı ve küçüktür.
+
+## Uygulama notları (Faz 1)
+
+Kod: `src/geom.ts` → "Süpürme" bölümü (`sanitizeSweep`, `sweepPlan`, `sweepSamples`, `sweepFrames`, `checkSweep`,
+`checkUpTwist`, `sweepRaw`); testler `tests/sweep.test.ts`, ayna `tests/game.test.ts`, CLI `tests/cli.test.ts`.
+
+### Tasarımdan sapmalar ve verilen kararlar
+- **`rmf` uç hizalaması:** tasarımda yalnızca kapalı yolun kapanış farkı dağıtılıyordu. Açık yolda da son uçtaki fark (son teğet
+  up'a ~1°'den yakın değilse) dağıtılır; böylece aynı kesitle uç uca süpürülen borular dikişsiz birleşir ve iki uçta da kesit
+  up'a hizalıdır. Fark yay boyuna göre **yalnızca yaylara** dağıtılır (düz kenarlar burulmaz, düşük poligonda yüzler düz kalır);
+  yolda yay yoksa tüm uzunluğa. Yuvarlak kesitte fark 360°/kenar kipine indirilir (çokgen kendi simetrisiyle döner, burulma en
+  fazla yarım kenar); kapalı yolda dikişte halka indisi o kadar kayar.
+- **RMF hesabı:** her adımda teğetten kirişe, kirişten sonraki teğete iki en küçük dönme. Düz kenarda ve düzlemsel yayda (yol
+  yalnızca bunlardan oluşur) kesindir; double reflection bu iki durumda aynı sonucu verir. İlk teğet up'a ~1°'den yakınsa
+  başlangıç çerçevesi up'ın tanımlı olduğu ilk örnekten geri taşınır.
+- **Kısa köşegen kuralı:** yan dörtgenler kısa köşegeninden bölünür. Kural konumdan gelir (indis sırasından değil); aynada kesit
+  sırası ters dönse de aynı köşegen seçilir, `mirrored` bayrağı gerekmez.
+- **Yay sığma:** bir yay, komşu köşesi de yay olan kenar zincirinin en az yarısını (komşunun payı yarıdan azsa kalanını), komşusu
+  gönye ya da yolun ucu olan zincirin tamamını kullanabilir. Hata o köşede sığan en büyük yarıçapı (0,01'e aşağı yuvarlı) söyler.
+- **Katlanma:** yayda yarıçap > kesitin dönüşün iç yanındaki uzanımı; gönyede her kesit noktası için iki uçtaki pay (gönye payı ya
+  da yay teğeti) toplamı < zincir uzunluğu (nokta nokta, yöne bağlı). Yuvarlak kesitte daire sınırı kullanılır (güvenli yanda).
+  Denetimler çözünürlükten bağımsızdır (yaylar 2°'lik adımla örneklenir) ve `sanitizeGeom`'dadır.
+- **Kapaklar:** içi boş yuvarlak boruda iki halka arasında şerit üçgenlenir; diğer kesitlerde earcut. Earcut'un atladığı doğrusal
+  kapak köşeleri (ör. aynı hizadaki boşluklar) T-kavşağı onarımıyla kapanır (`fixTJunctions`: eşsiz yönlü kenarın üstüne düşen köşede
+  üçgen bölünür). Aynı onarım `extrude`'a da uygulanır; kapalı ağlarda hiçbir şey değiştirmez (örnek ve test extrude'larında
+  ağlar bayt bayt aynı).
+- **Sınırlar ve eşikler:** gönye ≤ 150°; `up` çerçevesinde dikey bölüm 10°; düz geçiş < 1e-6 rad (köşe ve halka yok); tam 180°
+  geri dönüş hata; çakışık örnekler (< 1e-6 mm) birleşir; yay sığma toleransı 1e-9 mm. Yol ≤ 1024 nokta, kesit ≤ 1024 nokta;
+  ağ ≤ 1 milyon köşe (halka × kesit noktası) — doğrulamada çözünürlükten bağımsız alt sınır (yol noktası × kesit noktası;
+  yuvarlak kesit en az 6 kenar), üretimde gerçek sayı.
+- **Çözünürlük:** sweep yalnızca yuvarlak kesit ya da yaylı köşe varken çözünürlük kullanır (`usesResolution`); yay başına
+  ⌈s · dönüş / 360°⌉ kiriş, yuvarlak kesitte s kenar.
+
+### İncelemeden gelen kurallar (2026-11-15)
+- **`up` burulma sınırı:** `up` çerçevesinde ardışık halkalar arasındaki burulma (en küçük dönmeyle taşınan çerçeveye göre açı;
+  gönyede ayrıca gönye halkası ile kenarın kendi çerçevesi arasında; yayda toplam burulmanın en düşük çözünürlükteki kiriş sayısına
+  bölümü) 45°'yi aşarsa hata: "up bu yolda hızla dönüyor … frame: "rmf" verin, köşeye yarıçap verin (bend) …". Düzlemsel yollarda
+  (up düzlemin içinde ya da normali) burulma 0'dır; yatay tampon, rampa, düşey kemer, sarmal küpeşte (yaylı ya da gönyeli,
+  ~37° eğime kadar) geçer. Tırmanırken 90° dönen **keskin gönye** (ör. %50 eğimli merdivende) ~48° burulur ve reddedilir:
+  kesit gerçekten kenar boyunca o kadar dönerdi; `bend` ile ~24°'ye iner.
+- **Tamamen up yönündeki yol:** yuvarlak olmayan kesitte hata ("yol baştan sona up yönünde: kesit yönünü belirlemek için up'ı yola
+  dik verin"); yedek eksen (+Y/+X) aynaya göre eşdeğişken olmadığından kullanılmaz. Yuvarlak kesitte yedek kalır. Verilen `up` aynada
+  yansıdığından bu yol da birebir aynalanır.
+- **Mutlak koordinat sınırı:** yol, kesit (profil, boşluk, çap), `bend` ve `up` değerleri en fazla ±1 000 000 mm (1e150 NaN ağ
+  üretiyordu).
+- **4. değer kuralı:** yol noktasındaki r yalnızca > 0 iken `bend`'i ezer; 0 ya da yok = `bend` (sanitize 0'ı yazmaz). Her noktaya
+  "yarıçap yok" anlamında 0 yazan bir model `bend`'i sessizce kapatmaz. Tek köşede gönye: `bend` verilmez, yaylı köşelere r verilir.
+- **Doğrusal ara noktalar:** tam doğrusal noktalar (dönüş < 1e-6 rad) yay payı ve katlanma denetiminde kenar zincirine katılır
+  (zincir uzunluğu = toplam); eskizden örneklenen yollar sahte "sığmıyor" / "yetmiyor" hatası vermez.
+- **Boşluk doğrulaması (yalnızca sweep):** boşluklar profilin içinde, profil kenarına değmeyen, birbirini kesmeyen ve kapsamayan
+  çokgenler olmalı. Extrude'a eklenmedi (var olan dosyalar yüklenmeye devam etsin); extrude'da bu eksik bilinen sorundur.
+
+### Bilinen sınırlar
+- Yolun kendine çok yaklaşması ya da kendini kesmesi denetlenmez (sarmal, kendini kesen halka): ağ kapalı kalır ama kendini keser.
+- Tek çözünürlük hem yuvarlak kesitin kenar sayısını hem yay kiriş sayısını belirler (ör. "10 kenar + 22,5° kiriş" kurulamaz:
+  10 → 3 kiriş/90°, 16 → 16 kenar).
+- Yuvarlak kesitte gönye katlanma sınırı daireyle hesaplanır: iç yanları zıt yönde olan kısa S dönüşlerinde gerekenden tutucudur.
+- Kısa köşegen eşitliğinde (düzlemsel dörtgen, ör. düz kenar ya da burulmasız yay) özgün ve aynadaki parça farklı köşegeni seçebilir:
+  geometri birebir aynadır, üçgen kümesi değil.
+- Yalnızca yol tümüyle up yönündeyken yuvarlak kesitte kullanılan yedek eksen y aynasında çokgeni (tek kenar sayısında) 180°
+  döndürebilir; köşe kümesi kenar sayısı çiftse aynıdır.

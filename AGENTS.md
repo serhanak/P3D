@@ -88,6 +88,11 @@ Köprü `server/bridge.ts` (sunucu) ↔ `src/bridge.ts` (tarayıcı, SSE + PUT s
   yeni bir örtük yüzey/boolean kullanımı eklerken bu sınırlara uyun.
 - Ağ sadeleştirme `meshoptimizer` + `Regularize` (iğne üçgen bırakmaz); `initCsg()` meshoptimizer'ı da hazırlar.
   `mesh` ve `hull` parçalarında gölge kırılımı ve kenar çizgisi eşiği 50°'dir.
+- Sweep (`docs/SWEEP.md`): geometri yeniden merkezlenmez; kesit düzlemi `v` = `up`'ın teğete dik bileşeni, `u` = teğet × v
+  (gidiş yönünün sağı); yuvarlak kesitte (`diameter`) çerçeve kendiliğinden `rmf`, `rmf`'de açık yolun son ucu da `up`'a
+  hizalanır (fark yaylara dağıtılır; uç uca dikişsiz ekleme için). Yan dörtgenler **kısa köşegenden** bölünür (konuma bağlı
+  kural): ayna `u` = −u + ters sırayla birebirdir, `mirrored` bayrağı gerekmez. Sınırlar: yol ve kesit ≤ 1024 nokta, ağ ≤ 1 milyon
+  köşe. Doğrulama (katlanma, sığmayan yarıçap, ≥ 150° gönye, düşey bölüm) çözünürlükten bağımsızdır; yolun kendini kesmesi denetlenmez.
 - Loft: farklı nokta sayılı kesitler yeniden örneklenir, başlangıç alttaki noktaya hizalanır (`loftRings`). Aynalanmış
   kopya `mirrored: true` taşır ve dörtgenleri öbür köşegenden böler (birebir ayna); geom'u yeniden yazmak bayrağı düşürür.
 - Örnek mesh gömmeyin: örnekler ve kalıcı modeller uygulamanın kendi şekilleriyle kurulmalı (3DBenchy: `examples/`).
@@ -98,7 +103,7 @@ Köprü `server/bridge.ts` (sunucu) ↔ `src/bridge.ts` (tarayıcı, SSE + PUT s
 shared/ops.ts        İşlem (Op) tipleri + Claude için JSON şeması (RESPONSE_SCHEMA) + istemci/sunucu sözleşmesi
 src/types.ts         Part / Project tipleri, newProject()
 src/shapes.ts        Şekil tanımları: parametreler, takma adlar, geometri, ölçü çizgileri, analitik hacim, kısıtlar
-src/geom.ts          extrude/revolve/loft/mesh: geom doğrulama (sanitizeGeom), kapalı ağ üretimi, varsayılanlar
+src/geom.ts          extrude/revolve/loft/hull/sweep/mesh: geom doğrulama (sanitizeGeom), kapalı ağ üretimi, varsayılanlar
 src/assets.ts        İçe aktarılmış ağ deposu (base64 Float32/Uint32); projede yalnızca kimlik tutulur
 src/sketch.ts        Eskiz (niyet verisi) saf yardımcıları: tür, Bezier örnekleme, düzlem, profil eşlemesi, dosya doğrulama, özet
 src/sketch-edit.ts   Kalem aracının saf matematiği: ışın–düzlem, eksen kilidi, yakalama, tutamaç, nokta taşıma (test edilir)
@@ -144,7 +149,8 @@ tests/               parser.test.ts (ayrıştırıcı+motor), io.test.ts (OBJ ma
                      bridge.test.ts (köprü protokolü gerçek http sunucusuyla, open/save korumaları),
                      workspace.test.ts (ws adı, p3d.json keşfi, kök kayıt biçimi, Store), guide.test.ts (rehber kapsamı),
                      sketch.test.ts (eskiz Op'ları, özet, örnekleme, dosya, Store seçimi), sketch-edit.test.ts (kalem matematiği),
-                     part-look.test.ts (parça saydamlığı ve parça çözünürlüğü: Op, dosya, GLB/3MF/MTL, önbellek, delik)
+                     part-look.test.ts (parça saydamlığı ve parça çözünürlüğü: Op, dosya, GLB/3MF/MTL, önbellek, delik),
+                     sweep.test.ts (süpürme: hacimler, çerçeve, doğrulama hataları, dikiş, ayna, çözünürlük, Retro boru)
 examples/            Örnek .p3d.json projeleri (Aç… ile yüklenir); io.test.ts hepsinin onarımsız yüklendiğini doğrular
 examples/tools/      Örnek üreteçleri (tsx ile çalışır, tsconfig dışı): build-3dbenchy.ts referans STL'den Benchy'yi kurar
 docs/STATUS.md       Güncel durum, doğrulama durumu, bilinen sorunlar, yol haritası

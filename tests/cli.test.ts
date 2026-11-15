@@ -265,6 +265,22 @@ describe('tarayıcısız komutlar (--file)', () => {
     expect(r.stdout).toMatch(/ cam \[box\] width=20 depth=20 height=20 \| konum/);
   }, 60_000);
 
+  it('sweep: apply --new, scene satırı (nokta, orta çizgi, kesit, bend), check game temiz, hatalı geom yazılmaz', () => {
+    const ops = [
+      { op: 'create', shape: 'sweep', name: 'tampon', position: { x: 0, y: 0, z: 0 }, geom: { kind: 'sweep', path: [[-20, -20, 0], [20, -20, 0], [20, 20, 0], [-20, 20, 0]], closed: true, bend: 20, diameter: 6 } },
+      { op: 'create', shape: 'sweep', name: 'pervaz', position: { x: 0, y: 60, z: 0 }, geom: { kind: 'sweep', path: [[0, 0, 0], [40, 0, 0], [40, 30, 0]], profile: [[-2, 0], [2, 0], [2, 3], [-2, 3]] } },
+    ];
+    expect(p3dRun(['apply', '--file', 'supurme.p3d.json', '--new'], dir, { input: JSON.stringify(ops) }).code).toBe(0);
+    const out = p3d(['scene', '--file', 'supurme.p3d.json'], dir);
+    expect(out).toMatch(/ tampon \[sweep\] süpürme:4nokta\/125\.66mm\/kapalı\/Ø6\/bend20 +\| konum=0,0,0/);
+    expect(out).toMatch(/ pervaz \[sweep\] süpürme:3nokta\/70mm\/açık\/profil4 +\| konum=0,60,0/);
+    expect(p3dRun(['check', '--file', 'supurme.p3d.json', '--profile', 'game'], dir).stdout).toContain('✓ Sorun bulunmadı.');
+    const bad = [{ op: 'update', part: 'pervaz', geom: { kind: 'sweep', path: [[0, 0, 0], [40, 0, 0], [40, 30, 0]], bend: 50, profile: [[-2, 0], [2, 0], [2, 3]] } }];
+    const r = p3dRun(['apply', '--file', 'supurme.p3d.json'], dir, { input: JSON.stringify(bad) });
+    expect(r.code).not.toBe(0);
+    expect(r.stdout + r.stderr).toContain("'pervaz': Yol noktası 2: köşe yarıçapı 50 mm ('bend') sığmıyor");
+  }, 60_000);
+
   it('check --file --profile game: üçgen bütçesi; geçersiz profil hata', () => {
     const r = p3dRun(['check', '--file', 'model.p3d.json', '--profile', 'game', '--max-tris', '10'], dir);
     expect(r.code).toBe(0); // yalnızca uyarı

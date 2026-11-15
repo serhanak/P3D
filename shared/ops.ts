@@ -1,11 +1,11 @@
 // Sahne üzerinde yapılabilecek işlemler. Yerel ayrıştırıcı, Claude ve arayüz
 // düzenlemeleri aynı işlem listesini üretir; tümü src/engine.ts'de uygulanır.
 
-export const SHAPES = ['box', 'cylinder', 'tube', 'cone', 'sphere', 'torus', 'prism', 'extrude', 'revolve', 'loft', 'hull', 'mesh'] as const;
+export const SHAPES = ['box', 'cylinder', 'tube', 'cone', 'sphere', 'torus', 'prism', 'extrude', 'revolve', 'loft', 'hull', 'sweep', 'mesh'] as const;
 export type ShapeType = (typeof SHAPES)[number];
 
 /** Geometrisi `params` yerine `geom` alanındaki nokta dizilerinden üretilen şekiller. */
-export const GEOM_SHAPES = ['extrude', 'revolve', 'loft', 'hull', 'mesh'] as const;
+export const GEOM_SHAPES = ['extrude', 'revolve', 'loft', 'hull', 'sweep', 'mesh'] as const;
 export type GeomShape = (typeof GEOM_SHAPES)[number];
 export const isGeomShape = (s: string): s is GeomShape => (GEOM_SHAPES as readonly string[]).includes(s);
 
@@ -88,6 +88,40 @@ export interface HullGeom {
   maxTris?: number;
 }
 /**
+ * Süpürme yolunun noktası [x, y, z] (yerel mm, |değer| ≤ 1 000 000); 4. değer (isteğe bağlı) > 0 ise o köşenin yay yarıçapıdır ve
+ * `bend`'i ezer; 0 ya da yok = `bend` (0 "yarıçap yok" demektir, gönye değil — tek köşede gönye için `bend` 0 kalır, yaylı
+ * köşelere r verilir).
+ */
+export type SweepPoint = [number, number, number] | [number, number, number, number];
+/**
+ * Süpürme (yol boyunca kesit): kapalı bir kesit 3B çoklu çizgi boyunca süpürülür; köşeler yay (`bend` / noktadaki r) ya da
+ * gönyedir. Kesit ya `profile` ([u, v] çokgen, isteğe bağlı `holes`) ya `diameter` (çözünürlük kadar kenarlı çokgen,
+ * isteğe bağlı `innerDiameter` = içi boş boru). Kesit düzleminde v, `up`'ın teğete dik bileşenidir (`frame: 'up'`) ya da
+ * yol boyunca dönmeyen çerçevedir (`frame: 'rmf'`); u = teğet × v gidiş yönünün sağıdır. Açık yolun uçları yola dik düz
+ * kapaktır. Geometri yeniden merkezlenmez (konum yol koordinatlarının orijinidir).
+ */
+export interface SweepGeom {
+  kind: 'sweep';
+  /** ≥ 2 nokta (kapalı yolda ≥ 3). */
+  path: SweepPoint[];
+  /** true: son → ilk nokta da bağlanır, ilk noktada da köşe işlenir, kapak yok (halka). */
+  closed?: boolean;
+  /** Köşe yay yarıçapı (mm); yok = 0 = keskin gönye (noktadaki r > 0 o köşede ezer). */
+  bend?: number;
+  /** Kesit çokgeni [u, v]: u gidiş yönünün sağı, v "yukarı"; (0, 0) yolun üstünde. `diameter` ile birlikte verilmez. */
+  profile?: Pt2[];
+  /** Kesitteki iç boşluklar (yalnızca `profile` ile). */
+  holes?: Pt2[][];
+  /** Yuvarlak kesit (köşeden köşeye çap; kenar sayısı = etkin çözünürlük, bir düz kenar −v'ye bakar). */
+  diameter?: number;
+  /** İçi boş boru (yalnızca `diameter` ile; < diameter). */
+  innerDiameter?: number;
+  /** Kesitin v ekseninin yönü; yok = [0, 0, 1]. */
+  up?: [number, number, number];
+  /** Çerçeve kuralı; yok = yuvarlak kesitte 'rmf', profilde 'up'. */
+  frame?: 'up' | 'rmf';
+}
+/**
  * İçe aktarılmış üçgen ağ; veri projenin `assets` deposundadır. `src` verilirse ağ dosyası yolla anılır: Node'da
  * kaydederken (`saveProjectFile`) dosya varsa ağ gömülmez, yol proje dosyasına göreli yazılır; açarken gömülü ağ yoksa
  * dosya okunup `maxTris` ile yeniden sadeleştirilir (aynı kimlikle). Dosyada gömülü gelen ağ gömülü kalır; kaynak
@@ -106,7 +140,7 @@ export interface MeshGeom {
   /** Kaynak dosyanın kısa içerik özeti (SHA-256'nın ilk 16 onaltılık hanesi). */
   srcHash?: string;
 }
-export type PartGeom = ExtrudeGeom | RevolveGeom | LoftGeom | HullGeom | MeshGeom;
+export type PartGeom = ExtrudeGeom | RevolveGeom | LoftGeom | HullGeom | SweepGeom | MeshGeom;
 
 /** solid: katı (varsayılan) · hole: kesiştiği katılardan çıkarılır · reference: yalnızca görsel referans, dışa aktarılmaz. */
 export const ROLES = ['solid', 'hole', 'reference'] as const;
@@ -342,6 +376,19 @@ const nullableGeom = {
       stations: { type: 'array', items: obj({ x: num, keel: num, sheer: num, breadth: { type: 'array', items: num } }) },
       maxTris: num,
     }),
+    // Süpürme: boş alanlar null (profil ya da çap; ikisi birden değil).
+    obj({
+      kind: { type: 'string', const: 'sweep' },
+      path: { type: 'array', items: { type: 'array', items: num } },
+      closed: { anyOf: [{ type: 'boolean' }, { type: 'null' }] },
+      bend: nullableNum,
+      profile: { anyOf: [loop, { type: 'null' }] },
+      holes: { anyOf: [{ type: 'array', items: loop }, { type: 'null' }] },
+      diameter: nullableNum,
+      innerDiameter: nullableNum,
+      up: { anyOf: [{ type: 'array', items: num }, { type: 'null' }] },
+      frame: { anyOf: [{ type: 'string', enum: ['up', 'rmf'] }, { type: 'null' }] },
+    }),
   ],
 };
 const roleEnum = { type: 'string', enum: ['', ...ROLES] };
@@ -462,7 +509,7 @@ export interface SceneSummaryPart {
   /** Parça başına yuvarlak yüzey çözünürlüğü (yalnızca ayarlıysa; yoksa proje ayarı). */
   resolution?: number;
   /**
-   * extrude/revolve/loft için tam geometri; mesh için yalnızca özet: kaynak dosyanın yalnızca adı (`src`, klasör yolu
+   * extrude/revolve/loft/hull/sweep için tam geometri; mesh için yalnızca özet: kaynak dosyanın yalnızca adı (`src`, klasör yolu
    * yok — özet Claude'a ve köprüye gider), `maxTris` / `srcSize` / `srcHash` yok.
    */
   geom?: PartGeom | { kind: 'mesh'; asset: string; triangles: number; src?: string };

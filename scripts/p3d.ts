@@ -77,6 +77,7 @@ import {
   type SceneSummarySketch,
   type SnapshotOptions,
   type SnapshotView,
+  type SweepGeom,
 } from '../shared/ops.ts';
 import type { CheckOptions } from '../src/check.ts';
 import type { Project } from '../src/types.ts';
@@ -395,6 +396,30 @@ async function status(): Promise<void> {
 const n = (v: number) => String(Math.round(v * 100) / 100);
 const vec = (v: { x: number; y: number; z: number }) => `${n(v.x)},${n(v.y)},${n(v.z)}`;
 
+/**
+ * Süpürme özeti: yol nokta sayısı, orta çizgi uzunluğu (yaylar dahil; CLI three.js yüklemesin diye burada hesaplanır),
+ * kapalı/açık, kesit (profil noktaları ya da çap), köşe yarıçapı.
+ */
+function sweepLine(g: SweepGeom): string {
+  const pts = g.path;
+  const m = pts.length;
+  const seg = (a: number[], b: number[]) => [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  const norm = (v: number[]) => Math.hypot(v[0], v[1], v[2]);
+  const edges = Array.from({ length: g.closed ? m : m - 1 }, (_, i) => seg(pts[i], pts[(i + 1) % m]));
+  let len = edges.reduce((s, e) => s + norm(e), 0);
+  edges.forEach((e, i) => {
+    const next = edges[(i + 1) % edges.length];
+    if (!g.closed && i === edges.length - 1) return;
+    const own = (pts[(i + 1) % m] as number[])[3] ?? 0; // yalnızca > 0 bend'i ezer
+    const r = own > 0 ? own : (g.bend ?? 0);
+    const cos = (e[0] * next[0] + e[1] * next[1] + e[2] * next[2]) / (norm(e) * norm(next));
+    const th = Math.acos(Math.max(-1, Math.min(1, cos)));
+    if (r > 0 && th > 1e-6) len -= 2 * r * Math.tan(th / 2) - r * th;
+  });
+  const sec = g.profile ? `profil${g.profile.length}${g.holes?.length ? `+${g.holes.length}boşluk` : ''}` : `Ø${n(g.diameter ?? 0)}${g.innerDiameter ? `/iç${n(g.innerDiameter)}` : ''}`;
+  return `${g.path.length}nokta/${n(len)}mm/${g.closed ? 'kapalı' : 'açık'}/${sec}${g.bend ? `/bend${n(g.bend)}` : ''}${g.frame ? `/${g.frame}` : ''}`;
+}
+
 function partLine(p: SceneSummaryPart, selected: string | null): string {
   const params = Object.entries(p.params)
     .filter(([k, v]) => !(k === 'scale' && v === 1))
@@ -410,7 +435,9 @@ function partLine(p: SceneSummaryPart, selected: string | null): string {
         ? ` loft:${p.geom.sections.length}kesit/${p.geom.axis}${p.geom.smooth ? '/yumuşak' : ''}`
         : p.geom.kind === 'hull'
           ? ` tekne:${p.geom.stations.length}istasyon×${p.geom.stations[0].breadth.length}`
-          : ` ${p.geom.kind}:${p.geom.profile.length}nokta/${p.geom.axis}`;
+          : p.geom.kind === 'sweep'
+            ? ` süpürme:${sweepLine(p.geom)}`
+            : ` ${p.geom.kind}:${p.geom.profile.length}nokta/${p.geom.axis}`;
   const group = p.group ? ` grup=${p.group}` : '';
   // Yalnızca ayarlıyken: saydamlık (opaklık < 1) ve parça başına çözünürlük (yoksa proje ayarı).
   const look = `${p.opacity !== undefined ? ` opaklık=${n(p.opacity)}` : ''}${p.resolution !== undefined ? ` çözünürlük=${p.resolution}` : ''}`;

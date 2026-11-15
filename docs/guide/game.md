@@ -9,10 +9,17 @@ biçimler. Bunlar gerekiyorsa GLB'yi Blender'da sürdürün.
   (`settings.bedX/bedY`; 2 m üstünde ızgara 100/500 mm); yalnızca görseldir, `check` oyun profilinde tabla kurallarına bakmaz.
 - **Düşük poligon:** proje çözünürlüğü (yuvarlak yüzey segmenti) 6–16 arası seçilebilir (arayüz → Ayarlar). Parça başına
   `resolution` (6–192) proje ayarını o parçada geçersiz kılar: ör. proje 8, teker `resolution: 16`; ya da eklem/eldiven
-  küreleri `resolution: 6` (küre 6 segmentte 36, 8'de 48 üçgen). Silindir, boru, koni, küre, torus, döndürme ve yumuşak
-  loft'ta geçerlidir; diğer şekillerde uyarıyla yok sayılır (`p3d guide modeling` → "Parça çözünürlüğü"). `hull` çözünürlükle sadeleşmez; gövdeye `geom.maxTris`
+  küreleri `resolution: 6` (küre 6 segmentte 36, 8'de 48 üçgen). Silindir, boru, koni, küre, torus, döndürme, yumuşak
+  loft ve yaylı ya da yuvarlak kesitli süpürmede geçerlidir; diğer şekillerde uyarıyla yok sayılır (`p3d guide modeling` →
+  "Parça çözünürlüğü"). `hull` çözünürlükle sadeleşmez; gövdeye `geom.maxTris`
   ile üçgen bütçesi verin (ör. `{"kind": "hull", "stations": […], "maxTris": 1500}`): ağ bütçeyi aşmaz, keskin
   küpeşte/ayna kalır, bozuk üçgen bırakmaz.
+- **Borular ve bükülen profiller** (tampon, korkuluk, kafes): parça parça prizma yerine tek `sweep` (`p3d guide modeling` →
+  "Süpürme"): tek kapalı ağ, iç kapak ve bindirme yok, z-fighting yok. **Süpürme üçgen sayısı:** kesitte N nokta (yuvarlak
+  kesitte N = s, içi boşsa 2s; H boşluk), s etkin çözünürlük. Halka sayısı m = 2 (uçlar) + gönye köşesi başına 1 + yay başına
+  (k + 1), k = ⌈s · dönüş / 360°⌉ (arada düz parça kalmayan iki yay ya da yolun ucuna dayanan yay bir halkayı paylaşır:
+  her biri için 1 eksik). Üçgen: açık yolda `2·N·(m − 1) + 2·(N − 2 + 2H)`,
+  kapalı yolda `2·N·m`. Örnek: Ø28 U tampon, iki 90° köşe, s = 10 → k = 3, m = 10 → 196 üçgen; s = 16 → 380.
 - **Saydam parçalar** (cam, vizör, far camı): `opacity` = opaklık (0–1; saydamlık = 1 − opaklık; ör. füme cam koyu renk + 0,4).
   GLB'ye malzeme alfası olarak gider; parça yine katı ağdır.
 - **Simetri:** bir tarafı kurun, `mirror` ile kopyalayın (`p3d guide ops`).

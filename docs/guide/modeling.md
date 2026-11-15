@@ -66,7 +66,47 @@ noktalar çevre boyunca sıralıdır. Nokta sayısını makul tutun (çokgen ba�
   ayrıntı gövde boyunun ~%0,4'ü). Üretilemeyen geometri işlem hatası olarak döner, `check` de bildirir. Varsayılan ağ
   ayrıntılıdır (~30–60 bin üçgen, çözünürlükten bağımsız); düşük poligon için `maxTris` (100–1 000 000) üçgen bütçesi verin:
   ağ en fazla o kadar üçgen olur, üretim de hızlanır (2 m'lik gövde 1000 üçgende ~0,4 sn, hacim farkı < %0,5).
+- **`sweep`** `{kind, path, closed, bend, profile, holes, diameter, innerDiameter, up, frame}`: sabit bir kesit 3B çoklu çizgi
+  boyunca süpürülür. Boru, kulp, korkuluk, tampon, pervaz, kablo kanalı gibi kesiti değişmeyen ama yolu dönen parçalar için
+  (extrude yalnızca düz gider; kesit değişiyorsa loft). Ayrıntı aşağıda.
 - Hepsinde `scale` parametresi tüm geometriyi büyütür.
+
+### Süpürme (`sweep`)
+- **Yol:** `path` noktaları `[x, y, z]` (yerel mm; geometri yeniden merkezlenmez, `position` {0,0,0} ile dünya koordinatı) ya da
+  `[x, y, z, r]`: **r > 0** ise o köşenin yay yarıçapıdır ve `bend`'i ezer; **0 ya da yok = `bend`** (0 "yarıçap yok" demektir,
+  gönye değil). Tek köşede gönye isteniyorsa `bend` verilmez, yaylı köşelere r verilir. En az 2 nokta, en fazla 1024; ardışık
+  noktalar farklı; değerler (yol, kesit, `bend`, çap, `up`) en fazla ±1 000 000 mm. Aynı doğru üzerindeki ara noktalar sorun
+  değildir: yay payı ve katlanma köşeden köşeye toplam uzunlukla denetlenir. `closed: true` son → ilk noktayı da bağlar (halka;
+  en az 3 nokta, ilk noktada da köşe işlenir, kapak yok; ilk noktayı sonda tekrarlamayın — tekrarlanırsa atılır).
+- **Kesit:** ya `profile` (çokgen `[u, v]`, isteğe bağlı `holes`) ya `diameter` (yuvarlak; kenar sayısı = etkin çözünürlük, köşeden
+  köşeye çap, bir düz kenar −v'ye bakar; `innerDiameter` içi boş boru). İkisi birden ya da hiçbiri hatadır. **u gidiş yönünün
+  sağı, v "yukarı"**, (0, 0) yolun üstündedir: yatay yolda v = +Z; saat yönünün tersine dönen kapalı yolda u > 0 dış yüzdür.
+  Boşluklar profilin içinde olmalı; profilin kenarına ve birbirine değmemeli, birbirini kapsamamalı (yoksa hata).
+  Bütçe: yol noktası × kesit noktası (yuvarlak kesitte en az 6, içi boşsa 12) 1 milyonu aşamaz; çözünürlükle artan halka ×
+  kenar sayısı da üretimde aynı sınıra bağlıdır.
+- **Çerçeve:** `up` (yok = [0, 0, 1]) kesitin v yönüdür: her noktada up'ın teğete dik bileşeni. Düzlemdeki yolda `up` = o düzlemin
+  normali (yatay yol: varsayılan; XZ düzlemindeki kemer: `[0, 1, 0]`) — çerçeve tam düzlemsel, burulma yok. `frame` yok =
+  yuvarlak kesitte `"rmf"`, profilde `"up"`. `"up"`: kesit yokuşta da up'a göre dik kalır (korkuluk, rampa bordürü); yolun bir
+  yeri up'a ~10°'den yakınsa hata ("dikey bölüm var"). Kesit ardışık halkalar arasında 45°'den fazla burulursa da hata ("up bu
+  yolda hızla dönüyor"): eğik bir `up` ya da tırmanırken dönen keskin gönye (ör. %50 eğimli merdivende 90° köşe ~48°) — köşeye
+  `bend` verin (burulma yaya yayılır) ya da `"rmf"` kullanın. `"rmf"`: kesit yol boyunca kendi çevresinde dönmez (her yolda
+  tanımlı; borular); ilk çerçeve up'tan alınır, uçlar up'a hizalanır: kapalı yolda kapanış farkı, açık yolda son uçtaki fark yay
+  boyuna göre yaylara dağıtılır (düz kenarlar burulmaz; yay yoksa tüm uzunluğa). Yuvarlak kesitte fark çokgenin kendi simetrisine
+  (360°/kenar) indirilir. Yol baştan sona up yönündeyse (düşey dikme) profil kesitte `up`'ı yola dik verin (yoksa hata); yuvarlak
+  kesitte gerekmez.
+- **Köşeler:** `bend` (ya da noktadaki r) > 0 ise köşe o yarıçapta yaya çevrilir (tam daire başına çözünürlük kadar kiriş);
+  yoksa gönye: kesit açıortay düzleminde, dönüş yönünde 1/cos(θ/2) uzar (en fazla 150° dönüş). Yayın teğet boyu r·tan(θ/2)
+  komşu kenarlara sığmalı (komşu köşe de yaysa kenarın en az yarısı, komşunun payı yarıdan azsa kalanı); sığmazsa hata o köşeye
+  sığan en büyük yarıçapı söyler. Yarıçap, kesitin dönüşün iç yanındaki uzanımından büyük olmalı (yuvarlak kesitte çap/2); gönyede
+  kenar, iki ucundaki gönye paylarının (nokta nokta, yöne bağlı) toplamından uzun olmalı. Yoksa iç yan katlanır: hata.
+- **Uçlar:** açık yolun iki ucu yola dik düz kapaktır. Aynı kesitle süpürülen, uç noktası ve teğeti aynı iki parça dikişsiz
+  birleşir (uç halkaları çakışır; parçaları ayrı renklendirmek için böyle bölün).
+- **Ayna** yolu ve up'ı yansıtır, profilde u işaret değiştirir: kopya birebir aynadır.
+- **Kapsam dışı:** yol boyunca değişen kesit (ölçek, burulma → loft), Bezier yol (noktaları örnekleyin), eskizden süpürme. Yolun
+  kendine çok yaklaşması/kesişmesi denetlenmez (sarmal, kendini kesen halka: ağ kapalı kalır ama kendini keser).
+- Örnek (tampon halkası, pahlı kesit):
+  `{"kind":"sweep","path":[[-100,-60,0],[100,-60,0],[100,60,0],[-100,60,0]],"closed":true,"bend":30,"profile":[[-4,0],[4,0],[6,2],[6,10],[4,12],[-4,12],[-6,10],[-6,2]]}`;
+  3B boru: `{"kind":"sweep","path":[[0,0,0],[40,0,0],[40,30,20],[0,30,40]],"bend":8,"diameter":6}`.
 
 ## Roller ve delikler
 - `role` yok = katı. `hole`: kutusu kesişen görünür katılardan çıkarılır (ekranda, hacimde, dışa aktarımda aynı); kendisi
@@ -101,14 +141,17 @@ noktalar çevre boyunca sıralıdır. Nokta sayısını makul tutun (çokgen ba�
 - Proje çözünürlüğü (`settings.resolution`, Ayarlar) tüm yuvarlak yüzeylerin segment sayısıdır. Bir parçaya kendi değerini
   vermek için `create` / `update` alanı `resolution` (6–192 tamsayı; kesir yuvarlanır): `0` / null proje ayarıdır (`update`'te
   `0` alanı kaldırır). Yuvarlak şekilde sınır dışı değer işlem hatasıdır. Panelde **Çözünürlük** alanı (boş = proje ayarı).
-- Geçerli şekiller: `cylinder`, `tube`, `cone`, `sphere`, `torus`, `revolve`, `loft` (yalnızca `smooth: true` iken). Kutu,
-  prizma, ekstrüzyon, yumuşak olmayan loft segment kullanmaz; `hull` (üçgen bütçesi `geom.maxTris`) ve `mesh` etkilenmez. Bunlara
-  verilen `resolution` **yok sayılır** ve işlem mesajına uyarı yazılır (işlem hata vermez; toplu "düşük poligon" isteği parça
-  kaybettirmez). Yumuşak loft'un geometrisi yumuşak olmayana dönerse alan kalkar. Grupta `resolution` > 0 hatadır (0/null yok).
+- Geçerli şekiller: `cylinder`, `tube`, `cone`, `sphere`, `torus`, `revolve`, `loft` (yalnızca `smooth: true` iken), `sweep`
+  (yalnızca yaylı köşe ya da yuvarlak kesit varken: yay kirişleri ve kesit kenar sayısı). Kutu, prizma, ekstrüzyon, yumuşak
+  olmayan loft ve yaysız köşeli kesitli süpürme segment kullanmaz; `hull` (üçgen bütçesi `geom.maxTris`) ve `mesh`
+  etkilenmez. Bunlara verilen `resolution` **yok sayılır** ve işlem mesajına uyarı yazılır (işlem hata vermez; toplu "düşük
+  poligon" isteği parça kaybettirmez). Yumuşak loft'un geometrisi yumuşak olmayana (süpürmeninki yaysız köşeli kesitliye)
+  dönerse alan kalkar. Grupta `resolution` > 0 hatadır (0/null yok).
 - Etkin değer ekranda, kutuda (`bbox`), hacimde, deliklerde (delik parçası kendi çözünürlüğüyle keser), `check`'te ve tüm dışa
   aktarımlarda kullanılır. Değişince parçanın merkezi yerinde kalır.
 - Kürede enlem sayısı segmentten türer (`max(4, segment/2)`), torusta kesit segmenti de (`max(4, min(12, segment − 4),
-  segment/3)`). Üçgen sayıları: küre `2·s·(enlem − 1)` (8 → 48, 16 → 224), silindir `4·s`, torus `2·s·kesit` (16 → 384).
+  segment/3)`). Üçgen sayıları: küre `2·s·(enlem − 1)` (8 → 48, 16 → 224), silindir `4·s`, torus `2·s·kesit` (16 → 384);
+  süpürme: `p3d guide game` → "Süpürme üçgen sayısı".
 - Oyun için tipik kullanım: proje ayarı düşük (ör. 8), göze batan büyük yuvarlaklar (teker) `resolution: 16`; ya da proje
   ayarı yüksek, küçük küreler/eklemler `resolution: 6–8`.
 

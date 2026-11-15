@@ -17,6 +17,7 @@ import {
   type SketchPath,
   type SketchPlane,
   type SketchPoint,
+  type SweepGeom,
   type Vec3,
 } from '../shared/ops';
 import { decodedAsset, getAsset, makeAsset, newAssetId, registerAsset } from './assets';
@@ -442,6 +443,8 @@ function mirrorAxes(part: Part): Axis[] {
       return g?.kind === 'extrude' ? [g.axis, U_AXIS(g.axis), V_AXIS(g.axis)] : [];
     case 'loft': // kesitler u'da aynalanır (alttan başlama düzeni v'ye bağlı olduğundan v değil)
       return g?.kind === 'loft' ? [U_AXIS(g.axis)] : [];
+    case 'sweep': // yol her eksende yansıtılabilir
+      return g?.kind === 'sweep' ? ['x', 'y', 'z'] : [];
   }
 }
 
@@ -477,6 +480,20 @@ function mirrorGeom(part: Part, axis: Axis): void {
       if (!(e instanceof GeomError)) throw e;
       const hint = src === g ? '' : ' (farklı nokta sayılı kesitler ortak sayıya örneklenirken bozuldu; kesitleri aynı nokta sayısıyla verin)';
       throw new OpError(`'${part.name}' loft'u aynalanamadı${hint}: ${e.message}`);
+    }
+  } else if (g?.kind === 'sweep') {
+    // Yol ve up yansır; çerçevenin el kuralı değiştiğinden (u = teğet × v) kesitte u işaret değiştirir, sıra ters döner.
+    // Çerçeve hesabı yansımaya göre eşdeğişkendir: ağ özgünün birebir aynasıdır (işaret gerekmez).
+    const k = { x: 0, y: 1, z: 2 }[axis];
+    const flip = <T extends number[]>(p: T): T => p.map((v, i) => (i === k ? neg(v) : v)) as T;
+    const out: SweepGeom = { ...g, path: g.path.map(flip), up: flip([...(g.up ?? [0, 0, 1])] as [number, number, number]) };
+    if (g.profile) out.profile = mirrorLoop(g.profile, 0);
+    if (g.holes) out.holes = g.holes.map((h) => mirrorLoop(h, 0));
+    try {
+      part.geom = sanitizeGeom('sweep', out);
+    } catch (e) {
+      if (!(e instanceof GeomError)) throw e;
+      throw new OpError(`'${part.name}' süpürmesi aynalanamadı: ${e.message}`);
     }
   } else if (g?.kind === 'mesh') {
     part.geom = { kind: 'mesh', asset: mirroredAsset(g.asset, axis) };
@@ -612,7 +629,14 @@ function setOpacity(part: Part, o: number): void {
 
 const opacityNote = (o: number) => (o >= 1 ? 'opak' : `opaklık ${fmt(o)}`);
 
-const RESOLUTION_LABELS = RESOLUTION_SHAPES.map((s) => (s === 'loft' ? 'yumuşak loft' : SHAPE_DEFS[s].label.toLocaleLowerCase('tr'))).join(', ');
+/** Koşullu çözünürlük kullanan şekillerin etiketi (bkz. usesResolution). */
+const RESOLUTION_LABEL: Partial<Record<string, string>> = { loft: 'yumuşak loft', sweep: 'yaylı ya da yuvarlak kesitli süpürme' };
+const RESOLUTION_LABELS = RESOLUTION_SHAPES.map((s) => RESOLUTION_LABEL[s] ?? SHAPE_DEFS[s].label.toLocaleLowerCase('tr')).join(', ');
+/** Segment kullanmayan geometri: neden (uyarı ve alan kaldırma notu için). */
+const NO_RESOLUTION: Partial<Record<string, string>> = {
+  loft: 'yumuşak olmayan loft',
+  sweep: 'yaysız, köşeli kesitli süpürme',
+};
 
 /** Çözünürlük girdisi: sonlu sayı olmalı (yoksa OpError); 0 → null (alan kalkar, proje ayarı); değilse yuvarlanmış tamsayı. */
 function resolutionInput(v: unknown): number | null {
@@ -630,7 +654,14 @@ function resolutionInput(v: unknown): number | null {
  */
 function resolutionFor(part: Part, r: number, geom: Part['geom']): { value?: number; warning?: string } {
   if (!usesResolution({ shape: part.shape, geom })) {
-    const hint = part.shape === 'hull' ? ' Teknenin üçgen sayısı için geom.maxTris verin.' : part.shape === 'loft' ? ' Loft ancak smooth: true iken segment kullanır.' : '';
+    const hint =
+      part.shape === 'hull'
+        ? ' Teknenin üçgen sayısı için geom.maxTris verin.'
+        : part.shape === 'loft'
+          ? ' Loft ancak smooth: true iken segment kullanır.'
+          : part.shape === 'sweep'
+            ? ' Süpürme ancak köşe yarıçapı (bend) ya da yuvarlak kesit (diameter) varken segment kullanır.'
+            : '';
     return {
       warning: `'${part.name}': çözünürlük (resolution) yalnızca yuvarlak şekillerde geçerli (${RESOLUTION_LABELS}); ${SHAPE_DEFS[part.shape].label.toLocaleLowerCase('tr')} için yok sayıldı.${hint}`,
     };
@@ -942,9 +973,9 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
             notes.push(`çözünürlük ${resolution.value}`);
           }
           if (part.resolution !== undefined && !usesResolution(part)) {
-            // Geometri yumuşak olmayan loft'a döndü: alan etkisiz kalmasın (dosyada da tutulmaz).
+            // Geometri yumuşak olmayan loft'a ya da yaysız köşeli süpürmeye döndü: alan etkisiz kalmasın (dosyada da tutulmaz).
             delete part.resolution;
-            notes.push('çözünürlük kaldırıldı (yumuşak olmayan loft segment kullanmaz)');
+            notes.push(`çözünürlük kaldırıldı (${NO_RESOLUTION[part.shape] ?? SHAPE_DEFS[part.shape].label.toLocaleLowerCase('tr')} segment kullanmaz)`);
           }
           if (params || rot) {
             const mutate = () => {

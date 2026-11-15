@@ -24,10 +24,10 @@ const SKETCH_ICON = { marker: '◆', arrow: '→', line: '∿', polygon: '▱' }
 /** Sağ panelde gösterilen en fazla nokta satırı (fazlası kalemle düzenlenir). */
 const MAX_POINT_ROWS = 200;
 
-/** Geometri JSON'u: her nokta tek satırda, okunur ve düzenlenebilir. */
+/** Geometri JSON'u: her nokta tek satırda ([u, v], süpürme yolunda [x, y, z] / [x, y, z, r]), okunur ve düzenlenebilir. */
 function geomJson(g: Part['geom']): string {
   return JSON.stringify(g, null, 1)
-    .replace(/\[\s*(-?[\d.e+-]+),\s*(-?[\d.e+-]+)\s*\]/g, '[$1, $2]')
+    .replace(/\[\s*(-?[\d.e+-]+(?:,\s*-?[\d.e+-]+){1,3})\s*\]/g, (_, inner: string) => `[${inner.replace(/,\s*/g, ', ')}]`)
     .replace(/\n\s*/g, '\n  ');
 }
 

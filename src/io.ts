@@ -189,7 +189,8 @@ function readResolution(v: unknown, part: Pick<Part, 'shape' | 'geom'>, warn: (w
     return undefined;
   }
   if (!usesResolution(part)) {
-    warn(`'${part.shape}'${part.shape === 'loft' ? ' (yumuşak olmayan)' : ''} şeklinde kullanılmaz; kaldırıldı.`);
+    const why = part.shape === 'loft' ? ' (yumuşak olmayan)' : part.shape === 'sweep' ? ' (yaysız, köşeli kesitli)' : '';
+    warn(`'${part.shape}'${why} şeklinde kullanılmaz; kaldırıldı.`);
     return undefined;
   }
   const r = Math.min(MAX_RESOLUTION, Math.max(MIN_RESOLUTION, Math.round(v)));
