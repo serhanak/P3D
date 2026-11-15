@@ -274,6 +274,8 @@ const revolveShape = geomShape('revolve', 'Döndürme', [scaleParam], {});
 const loftShape = geomShape('loft', 'Loft', [scaleParam], {});
 const hullShape = geomShape('hull', 'Tekne', [scaleParam], {});
 const sweepShape = geomShape('sweep', 'Süpürme', [scaleParam], {});
+/** Düz kaplama: kalınlıksız açık ağ (katı değil); hacmi 0. */
+const decalShape: ShapeDef = { ...geomShape('decal', 'Kaplama', [scaleParam], {}), volume: () => 0 };
 const meshShape = geomShape('mesh', 'Mesh', [scaleParam], {});
 
 export const SHAPE_DEFS: Record<ShapeType, ShapeDef> = {
@@ -289,6 +291,7 @@ export const SHAPE_DEFS: Record<ShapeType, ShapeDef> = {
   loft: loftShape,
   hull: hullShape,
   sweep: sweepShape,
+  decal: decalShape,
   mesh: meshShape,
 };
 
@@ -369,15 +372,16 @@ export function geometryError(shape: ShapeType, p: Params, seg: number, geom?: P
   }
 }
 
-/** Sınırlayıcı kutudan genişlik / derinlik / yükseklik ölçü çizgileri (geom şekilleri için). */
+/** Sınırlayıcı kutudan genişlik / derinlik / yükseklik ölçü çizgileri (geom şekilleri için; sıfır boylu olan — kaplamanın kalınlığı — çizilmez). */
 export function bboxDims(b: THREE.Box3): DimLine[] {
   const { min, max } = b;
   const g = gap(max.x - min.x, max.y - min.y, max.z - min.z);
-  return [
+  const lines: DimLine[] = [
     { a: [min.x, min.y - g, min.z], b: [max.x, min.y - g, min.z], text: fmt(max.x - min.x) },
     { a: [max.x + g, min.y, min.z], b: [max.x + g, max.y, min.z], text: fmt(max.y - min.y) },
     { a: [max.x + g, min.y - g, min.z], b: [max.x + g, min.y - g, max.z], text: fmt(max.z - min.z) },
   ];
+  return lines.filter((d) => Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1], d.b[2] - d.a[2]) > 1e-9);
 }
 
 export const PALETTE = ['#4f8ef7', '#f2994a', '#27ae60', '#eb5757', '#9b51e0', '#f2c94c', '#2d9cdb', '#e0609a', '#6fcf97', '#bb6bd9'];

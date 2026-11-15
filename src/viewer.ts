@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
-import type { SnapshotOptions, SnapshotView, Vec3 } from '../shared/ops';
+import { SNAPSHOT_EYE_HEIGHT, SNAPSHOT_FOV_DEFAULT, type SnapshotCamera, type SnapshotOptions, type SnapshotView, type Vec3 } from '../shared/ops';
 import { partBox, partsBox } from './engine';
 import { isScanLike } from './geom';
 import { displayOpacity, roleOf, solidGeometry, solidKey } from './model';
@@ -162,6 +162,12 @@ export class Viewer {
       }
       mat.opacity = opacity;
       mat.color.set(role === 'hole' ? HOLE_COLOR : part.color);
+      // İki yüzlü kaplama arkadan da çizilir (geom düzenlenince değişebilir).
+      const side = part.geom?.kind === 'decal' && part.geom.double ? THREE.DoubleSide : THREE.FrontSide;
+      if (mat.side !== side) {
+        mat.side = side;
+        mat.needsUpdate = true;
+      }
       // Kenar çizgileri de soluklaşır (opak katıda 0,35).
       (e.edges.material as THREE.LineBasicMaterial).opacity = part.opacity !== undefined ? 0.35 * opacity : ghost ? 0.15 : 0.35;
       const selected = part.id === selectedId;
@@ -274,13 +280,16 @@ export class Viewer {
 
   private createEntry(part: Part): Entry {
     const group = new THREE.Group();
+    // Katılar kenar çizgilerinin arkasına itilir (+1); kaplama ise öne çekilir (−1): taşıyıcı yüzeyden lift kadar ayrık olsa da
+    // uzaktan derinlik çözünürlüğü yetmez, titremesin. Parçanın şekli değişmez (update şekil değiştirmez).
+    const decal = part.shape === 'decal';
     const material = new THREE.MeshStandardMaterial({
       color: part.color,
       roughness: 0.55,
       metalness: 0.05,
       polygonOffset: true,
-      polygonOffsetFactor: 1,
-      polygonOffsetUnits: 1,
+      polygonOffsetFactor: decal ? -1 : 1,
+      polygonOffsetUnits: decal ? -2 : 1,
     });
     const mesh = new THREE.Mesh(new THREE.BufferGeometry(), material);
     mesh.userData.partId = part.id;
@@ -514,7 +523,7 @@ export class Viewer {
     this.sketch.setSnapshotMode(true);
     try {
       for (const view of opts.views) {
-        this.renderer.render(this.scene, this.snapshotCamera(view, box, opts.width / opts.height));
+        this.renderer.render(this.scene, this.snapshotCamera(view, box, opts.width / opts.height, opts.camera));
         out.push({ view, png: this.renderer.domElement.toDataURL('image/png') });
       }
     } finally {
@@ -527,10 +536,51 @@ export class Viewer {
     return out;
   }
 
-  private snapshotCamera(view: SnapshotView, box: THREE.Box3, aspect: number): THREE.Camera {
+  /**
+   * Perspektif görüntü kamerası. `camera`: verilen göz konumundan hedefe (yoksa kutu merkezine). `eye`: göz hizası —
+   * görünür kutunun tabanından `eyeHeight` (varsayılan 1 m) yukarıda, izometrikle aynı yandan (ön sağ), kutunun tamamı
+   * görüş açısına sığacak uzaklıkta; hedef kutu merkezi. Yakın/uzak düzlem uzaklıkla orantılı (derinlik çözünürlüğü).
+   */
+  private perspectiveCamera(view: 'eye' | 'camera', box: THREE.Box3, aspect: number, opt: SnapshotCamera): THREE.PerspectiveCamera {
+    const v3 = (p: Vec3) => new THREE.Vector3(p.x, p.y, p.z);
+    const fov = opt.fov ?? SNAPSHOT_FOV_DEFAULT;
+    const target = opt.target ? v3(opt.target) : box.getCenter(new THREE.Vector3());
+    const radius = Math.max(box.getBoundingSphere(new THREE.Sphere()).radius, 5);
+    let eye: THREE.Vector3;
+    if (view === 'camera' && opt.eye) eye = v3(opt.eye);
+    else {
+      // Kutunun tamamı dar görüş açısına sığsın (yatay açı en-boy oranından).
+      const vHalf = (fov / 2) * DEG;
+      const half = Math.min(vHalf, Math.atan(Math.tan(vHalf) * aspect));
+      const dist = (radius / Math.sin(half)) * 1.05;
+      // Varsayılan göz yüksekliği küçük sahnede sahne boyuyla sınırlanır (20 mm'lik parçaya 1 m'den tepeden bakılmasın).
+      const z = box.min.z + (opt.eyeHeight ?? Math.min(SNAPSHOT_EYE_HEIGHT, 2 * radius));
+      const flat = Math.sqrt(Math.max(dist * dist - (z - target.z) ** 2, (dist * 0.3) ** 2));
+      const dir = new THREE.Vector3(1, -1.2, 0).normalize();
+      eye = new THREE.Vector3(target.x + dir.x * flat, target.y + dir.y * flat, z);
+    }
+    const dist = Math.max(eye.distanceTo(target), 1e-3);
+    const far = dist + radius * 4 + this.bedSize * 1.5;
+    // Yakın düzlem: göz sahnenin dışındaysa en yakın kutu noktasına göre, içindeyse (kart gözü, pist içi) sahne ölçeğinin
+    // küçük bir payı; göz–hedef uzaklığından türetmek, 150 m'lik pistte gözün önündeki nesneleri kesiyordu.
+    const toBox = box.isEmpty() ? dist : box.distanceToPoint(eye);
+    const near = Math.max(0.1, radius * 1e-4, Math.min(toBox * 0.5, dist * 0.005));
+    const cam = new THREE.PerspectiveCamera(fov, aspect, near, far);
+    // Dik bakışta Z yukarı tanımsız: Y yukarı.
+    const look = target.clone().sub(eye).normalize();
+    cam.up.set(0, 0, 1);
+    if (Math.abs(look.z) > 0.999) cam.up.set(0, 1, 0);
+    cam.position.copy(eye);
+    cam.lookAt(target);
+    cam.updateMatrixWorld();
+    return cam;
+  }
+
+  private snapshotCamera(view: SnapshotView, box: THREE.Box3, aspect: number, opt: SnapshotCamera = {}): THREE.Camera {
     const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+    if (view === 'eye' || view === 'camera') return this.perspectiveCamera(view, box, aspect, opt);
     // [merkezden kameraya yön, kameranın yukarısı]
-    const dirs: Record<SnapshotView, [THREE.Vector3, THREE.Vector3]> = {
+    const dirs: Record<Exclude<SnapshotView, 'eye' | 'camera'>, [THREE.Vector3, THREE.Vector3]> = {
       iso: [V(1, -1.2, 0.95), V(0, 0, 1)],
       front: [V(0, -1, 0), V(0, 0, 1)],
       back: [V(0, 1, 0), V(0, 0, 1)],

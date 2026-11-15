@@ -28,6 +28,7 @@ global `p3d` komutuyla kullanılır. **Bu dosya yalnızca giriş kapısıdır; a
 - **Kör çizmeyin:** anlamlı her adımdan sonra `p3d snapshot --out <scratchpad>` ve görüntüye Read ile bakın; bitince
   `p3d check` temiz olsun (oyun için `--profile game`).
 - Eğri/eğik yüzey: `extrude` / `revolve` / `loft` / `hull`; yol boyunca sabit kesit (boru, kulp, tampon, pervaz): `sweep`;
+  yüzeydeki düz ayrıntı (plaka, far, harf, dama; oyun için, baskıya girmez): `decal` + `place_on_surface`;
   delik: `role: "hole"` + `cuts`. Ham mesh üretmeyin.
 - **Eskiz** (`p3d guide sketch`): kullanıcı ekranda kalemle çizdiyse `p3d scene` sonunda `eskiz (N):` satırları ve `p3d snapshot`
   görüntüsünde yollar görünür. Ayrıntı `p3d sketch` (`--json`). Yollar niyettir, geometri değil: koordinatları konum/yön/profil olarak

@@ -14,6 +14,8 @@
 //   GET  /workspaces           BridgeWorkspace[]
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
+  SNAPSHOT_FOV_MAX,
+  SNAPSHOT_FOV_MIN,
   SNAPSHOT_VIEWS,
   fitSnapshotSize,
   normalizeWs,
@@ -27,8 +29,10 @@ import {
   type MeshAsset,
   type Op,
   type SceneSummary,
+  type SnapshotCamera,
   type SnapshotOptions,
   type SnapshotView,
+  type Vec3,
 } from '../shared/ops.ts';
 
 interface Client {
@@ -133,11 +137,33 @@ function sceneAssets(project: unknown): Record<string, MeshAsset> {
 
 function snapshotOptions(raw: unknown): SnapshotOptions {
   const o = (raw ?? {}) as Partial<SnapshotOptions>;
-  const views = Array.isArray(o.views) ? o.views.filter((v): v is SnapshotView => (SNAPSHOT_VIEWS as readonly string[]).includes(v)) : [];
+  const camera = snapshotCamera(o.camera);
+  // `camera` görünümü göz konumu ister; yoksa düşer (CLI bunu önceden hata olarak bildirir).
+  const views = Array.isArray(o.views)
+    ? o.views.filter((v): v is SnapshotView => (SNAPSHOT_VIEWS as readonly string[]).includes(v) && (v !== 'camera' || !!camera?.eye))
+    : [];
   const num = (v: unknown, d: number) => (Number(v) > 0 && Number.isFinite(Number(v)) ? Number(v) : d);
   // Sınır aşılırsa en-boy oranı korunarak küçültülür (eskiden her kenar ayrı ayrı 2400'e kırpılıyordu).
   const { width, height } = fitSnapshotSize(num(o.width, 1000), num(o.height, 750));
-  return { views: views.length ? views : ['iso', 'front', 'right', 'top'], width, height, dims: o.dims === true };
+  return { views: views.length ? views : ['iso', 'front', 'right', 'top'], width, height, dims: o.dims === true, ...(camera ? { camera } : {}) };
+}
+
+/** Perspektif kamera seçenekleri: geçersiz alanlar atılır, görüş açısı sınırlara çekilir (CLI aralık dışını hata sayar). */
+function snapshotCamera(raw: unknown): SnapshotCamera | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const c = raw as Record<string, unknown>;
+  const vec = (v: unknown): Vec3 | undefined => {
+    const o = v as Partial<Vec3> | null;
+    return o && [o.x, o.y, o.z].every((n) => typeof n === 'number' && Number.isFinite(n)) ? { x: o.x!, y: o.y!, z: o.z! } : undefined;
+  };
+  const out: SnapshotCamera = {};
+  const eye = vec(c.eye);
+  const target = vec(c.target);
+  if (eye) out.eye = eye;
+  if (target) out.target = target;
+  if (typeof c.fov === 'number' && Number.isFinite(c.fov)) out.fov = Math.min(SNAPSHOT_FOV_MAX, Math.max(SNAPSHOT_FOV_MIN, c.fov));
+  if (typeof c.eyeHeight === 'number' && Number.isFinite(c.eyeHeight)) out.eyeHeight = c.eyeHeight;
+  return Object.keys(out).length ? out : undefined;
 }
 
 export class BridgeError extends Error {

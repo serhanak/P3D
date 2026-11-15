@@ -11,6 +11,12 @@ import type { Part, Project } from './types';
 export const roleOf = (p: Part) => p.role ?? 'solid';
 
 /**
+ * Düz kaplama (`decal`): rolü katı olsa da kalınlıksız açık ağdır — delik kesmez ve kesilmez, hacmi 0, `check`'in kapalılık /
+ * boolean denetimine ve gizli yüz ayıklamasına girmez, baskıya (STL/3MF/birleştir) girmez; GLB ve OBJ'ye girer.
+ */
+export const isDecal = (p: Pick<Part, 'shape'>) => p.shape === 'decal';
+
+/**
  * Ekranda görünen saydamlık: parçanın `opacity`'si; yoksa katı opak, referans 0,35, delik 0,3 (opacity rolün varsayılan
  * yarı saydamlığının yerine geçer). Yalnızca görünüm; dışa aktarım malzemesi `Part.opacity`'yi kullanır.
  */
@@ -23,14 +29,17 @@ export function geometryKey(part: Part, seg: number): string {
   return `${part.shape}|${JSON.stringify(part.params)}|${part.geom ? JSON.stringify(part.geom) : ''}|${partSeg(part, seg)}`;
 }
 
-/** Katıyı kesen görünür delik parçaları (sınırlayıcı kutular kesişenler). `view.showHoles` yalnızca görüntüyü etkiler. */
+/**
+ * Katıyı kesen görünür delik parçaları (sınırlayıcı kutular kesişenler). `view.showHoles` yalnızca görüntüyü etkiler. Kaplama
+ * (`decal`) kesilmez ve delik olamaz (motor reddeder; betikle kurulmuşsa da kesmez).
+ */
 export function holesFor(project: Project, part: Part, boxes?: Map<string, THREE.Box3>): Part[] {
-  if (roleOf(part) !== 'solid') return [];
+  if (roleOf(part) !== 'solid' || isDecal(part)) return [];
   const seg = project.settings.resolution;
   const box = (p: Part) => boxes?.get(p.id) ?? partBox(p, seg);
   const b = box(part);
   return project.parts.filter(
-    (h) => h.visible && roleOf(h) === 'hole' && h.id !== part.id && (!h.cuts || h.cuts.includes(part.id)) && box(h).intersectsBox(b),
+    (h) => h.visible && roleOf(h) === 'hole' && !isDecal(h) && h.id !== part.id && (!h.cuts || h.cuts.includes(part.id)) && box(h).intersectsBox(b),
   );
 }
 
@@ -179,7 +188,12 @@ export function solidPartsBox(project: Project, parts: Part[]): THREE.Box3 {
   return box;
 }
 
-/** Dışa aktarılacak parçalar: görünür katılar. */
+/** Dışa aktarılacak parçalar: görünür katılar (kaplamalar dahil; baskı biçimleri onları `printableParts` ile ayırır). */
 export function exportableParts(parts: Part[]): Part[] {
   return parts.filter((p) => p.visible && roleOf(p) === 'solid');
+}
+
+/** Baskıya (STL/3MF/birleştir) giren parçalar: görünür katılar, kaplamalar hariç (kapalı ağ değiller). */
+export function printableParts(parts: Part[]): Part[] {
+  return exportableParts(parts).filter((p) => !isDecal(p));
 }

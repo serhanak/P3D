@@ -26,13 +26,18 @@ console.log(new THREE.Vector3(width, 60, 30).length(), issues);
 - Editörde tip desteği isterseniz proje klasörünüzde `npm link p3d` (isteğe bağlı).
 - **Kararlı yüzey** (`src/api.ts`): `newProject`, `applyOps`, `parseProject`, `projectToJson`, `checkProject`, `initCsg`,
   `subtract`, `manifoldVolume`, `partBox`, `partMatrix`, `partsBox`, `mergedMesh`, `worldMesh`, `sliceMany`, `exportGeometry`,
-  `exportableParts`, `baseIndexed`, `roleOf`, `solidVolume`, `solidBox`, `solidPartsBox`, `parseMeshFile`, `meshAssetFromSoup`, `registerAsset`,
-  `decodedAsset`, `getAsset`, `usedAssets`, `buildStl`, `build3mf`, `buildGlb`, `sceneSummary`, `SHAPES`, `THREE`;
+  `exportableParts`, `printableParts`, `isDecal`, `baseIndexed`, `roleOf`, `solidVolume`, `solidBox`, `solidPartsBox`, `parseMeshFile`,
+  `meshAssetFromSoup`, `registerAsset`, `decodedAsset`, `getAsset`, `usedAssets`, `buildStl`, `build3mf`, `buildGlb`, `sceneSummary`,
+  `SHAPES`, `THREE`;
   Node yardımcıları `loadProjectFile`, `saveProjectFile`, `exportFile`, `readMeshFile`; tipler `Project`, `Part`, `Op` …
   P3D'nin iç modüllerini (`…/P3D/src/*.ts`) doğrudan içe aktarmayın — iç yapı değişebilir, bu yüzey değişmez.
 - Kutular: `partBox(part, seg)` / `partsBox(parts, seg)` şeklin **kesimsiz** kutusudur (hızlı, delik uygulanmaz; sahne özetindeki
   `bbox` ile aynı). Delikler çıkarılmış, dışa aktarılan ağın kutusu: `solidBox(project, part)` / `solidPartsBox(project, parts)`
   (ör. `solidPartsBox(p, exportableParts(p.parts))`; kesen delik yoksa `partBox` ile aynı, boolean yapılmaz; `initCsg()` gerekir).
+- **Kaplamalar (`decal`):** `exportableParts` artık kaplamaları da içerir (GLB/OBJ'ye girerler; kalınlıksız **açık** ağdır). Baskı
+  ve STL/3MF için `printableParts` kullanın (kaplamalar hariç; `exportFile` ve `mergedMesh` bunu kendileri yapar: `mergedMesh`
+  kaplamaları atlar, katı kalmazsa boş ağ döner). Kaplama içermeyen projelerde iki fonksiyonun sonucu aynıdır, eski betikler
+  değişmeden çalışır. Tek tek ayırmak için `isDecal(part)`.
 - `seg` alan yardımcılar (`partBox`, `partsBox`, `baseIndexed`) ona proje çözünürlüğünü (`p.settings.resolution`) verin; kendi
   `resolution`'ı olan parçada o kullanılır (`p3d guide modeling` → "Parça çözünürlüğü").
 - `initCsg()` delik/boolean ve sadeleştirmeden önce beklenmelidir (`loadProjectFile`/`exportFile` kendileri bekler).

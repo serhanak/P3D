@@ -294,6 +294,26 @@ describe('köprü: çalışma alanları', () => {
     expect(await snap({ views: ['yok'], width: 'abc', height: -5 })).toMatchObject({ views: ['iso', 'front', 'right', 'top'], width: 1000, height: 750 });
   });
 
+  it('snapshot kamerası: eye/camera görünümleri, geçersiz alanlar atılır, görüş açısı sınırlanır (BoltRush isteği #20)', async () => {
+    const t = await openTab('snap-kamera');
+    await t.put(['a']);
+    t.auto(['a']);
+    const snap = async (snapshot: Record<string, unknown>) => {
+      await api('POST', '/api/bridge/ops', { ws: 'snap-kamera', action: 'snapshot', snapshot });
+      return t.commands.at(-1)!.snapshot!;
+    };
+    const eye = { x: -3000, y: -6000, z: 800 };
+    expect(await snap({ views: ['camera'], camera: { eye, target: { x: 0, y: 1000, z: 700 }, fov: 60 } })).toMatchObject({
+      views: ['camera'],
+      camera: { eye, target: { x: 0, y: 1000, z: 700 }, fov: 60 },
+    });
+    // Göz konumu olmadan camera görünümü düşer; bozuk vektör ve tip atılır, görüş açısı sınıra çekilir.
+    const bad = await snap({ views: ['camera', 'eye'], camera: { eye: { x: 1, y: 'a', z: 2 }, fov: 500, eyeHeight: 600, extra: 1 } });
+    expect(bad.views).toEqual(['eye']);
+    expect(bad.camera).toEqual({ fov: 120, eyeHeight: 600 });
+    expect((await snap({ views: ['iso'] })).camera).toBeUndefined();
+  });
+
   it('/workspaces bağlı sekmeleri ve son sahneyi listeler', async () => {
     const a = await openTab('liste-a');
     await openTab('liste-a');

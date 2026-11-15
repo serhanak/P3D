@@ -111,6 +111,18 @@ describe('p3d run', () => {
     const views = p3dRun(['snapshot', '--views', 'iso,iso-back'], dir, { env });
     expect(views.code).toBe(1);
     expect(views.stderr).toContain('Bilinmeyen görünüm: iso-back');
+    // Perspektif kamera bayrakları (BoltRush isteği #20)
+    const err = (...a: string[]) => {
+      const r = p3dRun(['snapshot', ...a], dir, { env });
+      expect(r.code).toBe(1);
+      return r.stderr;
+    };
+    expect(err('--views', 'camera')).toContain('camera görünümü --eye x,y,z ister');
+    expect(err('--eye', '1,2')).toContain("--eye x,y,z (mm) olmalı ('1,2')");
+    expect(err('--eye', '0,-5000,900', '--fov', '200')).toContain('--fov 10–120 derece olmalı');
+    expect(err('--eye', '1,1,1', '--target', '1,1,1')).toContain('--eye ile --target aynı nokta olamaz');
+    expect(err('--views', 'front', '--fov', '40')).toContain('yalnızca perspektif görünümlerde');
+    expect(err('--eye-height', 'yüksek')).toContain('--eye-height mm cinsinden');
   }, 60_000);
 
   it('betik yoksa açıklayıcı hata; betiğin hatası yığın iziyle, çıkış kodu 1', () => {

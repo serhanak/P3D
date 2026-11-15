@@ -15,9 +15,10 @@ import type { MeshAsset, MeshGeom } from '../shared/ops';
 import { samePath } from '../scripts/config';
 import { getAsset, registerAsset } from './assets';
 import { initCsg } from './csg';
-import { buildGlb, selectParts } from './gltf';
+import { glbBuild, selectParts } from './gltf';
 import { buildObj, mergedMesh, parseProject, worldMesh } from './io';
 import { build3mf, buildStl, meshAssetFromSoup, parseMeshFile } from './meshio';
+import { isDecal } from './model';
 import type { Part, Project } from './types';
 
 const listed = (items: string[]) => items.map((s) => `\n  - ${s}`).join('');
@@ -390,6 +391,8 @@ export interface ExportOptions {
   units?: 'm' | 'mm';
   /** GLB: 'flat' (varsayılan) ya da 'smooth'. */
   normals?: 'flat' | 'smooth';
+  /** GLB: hiç görünmeyen üçgenleri at (başka katının içinde / ona değen yüzler; bkz. GlbOptions). Diğer biçimlerde hata. */
+  cullHidden?: boolean;
 }
 
 export interface ExportResult {
@@ -399,11 +402,17 @@ export interface ExportResult {
   /** Dosyaya giren parça sayısı (birleştirmede birleştirilen parça sayısı). */
   parts: number;
   bytes: number;
+  /** GLB `cullHidden`: atılan üçgen sayısı ve dosyadaki üçgen sayısı. */
+  culled?: number;
+  triangles?: number;
+  /** Ör. STL/3MF'te atlanan kaplamalar (decal: kalınlıksız, baskıya girmez). */
+  warnings?: string[];
 }
 
 /**
  * Görünür katıları (delikler uygulanmış) dosyaya yazar; biçim uzantıdan: .stl, .3mf, .obj, .glb. Birim mm, Z yukarı
- * (GLB: Y yukarı, varsayılan metre). Yazma atomiktir. Boolean çekirdeğini kendisi hazırlar.
+ * (GLB: Y yukarı, varsayılan metre). Kaplamalar (decal) GLB ve OBJ'ye girer, STL/3MF'te atlanır (uyarıyla). Yazma atomiktir.
+ * Boolean çekirdeğini kendisi hazırlar.
  */
 export async function exportFile(project: Project, outPath: string, opts: ExportOptions = {}): Promise<ExportResult> {
   const abs = path.resolve(outPath);
@@ -412,6 +421,9 @@ export async function exportFile(project: Project, outPath: string, opts: Export
     throw new Error(`Dışa aktarım biçimi uzantıdan anlaşılamadı ('${path.basename(abs)}'): .stl, .3mf, .obj ya da .glb kullanın.`);
   }
   const format = ext as ExportFormat;
+  if (opts.cullHidden && format !== 'glb') {
+    throw new Error(format === 'obj' ? 'cull-hidden yalnızca GLB için.' : `${format.toUpperCase()}: baskı için kapalı ağ gerekir; cull-hidden yalnızca GLB için.`);
+  }
   if (format !== 'glb') {
     const glbOnly = (['skeleton', 'units', 'normals'] as const).filter((k) => opts[k] !== undefined && opts[k] !== false);
     if (glbOnly.length) throw new Error(`${glbOnly.join(', ')} yalnızca GLB için; ${format.toUpperCase()} her zaman mm, Z yukarı.`);
@@ -428,7 +440,18 @@ export async function exportFile(project: Project, outPath: string, opts: Export
     throw new Error(`${abs} '${clash.name}' parçasının kaynak ağ dosyası (src); üzerine yazılmadı. Başka bir çıktı dosyası adı verin.`);
   }
   await initCsg();
-  const parts = selectParts(project, opts.parts);
+  let parts = selectParts(project, opts.parts);
+  const warnings: string[] = [];
+  if (format === 'stl' || format === '3mf') {
+    // Kaplama kalınlıksız açık ağdır: baskı dosyasına girmez (dilimleyici kapalı ağ ister).
+    const decals = parts.filter(isDecal);
+    if (decals.length) {
+      parts = parts.filter((p) => !isDecal(p));
+      const names = decals.slice(0, 5).map((p) => `'${p.name}'`).join(', ') + (decals.length > 5 ? ', …' : '');
+      if (!parts.length) throw new Error(`Dışa aktarılacak katı parça yok: kaplamalar (${names}) kalınlıksızdır, ${format.toUpperCase()}'e girmez; GLB ya da OBJ kullanın.`);
+      warnings.push(`${decals.length} kaplama atlandı (${names}): kalınlıksızdır, baskıya (${format.toUpperCase()}) girmez; GLB ve OBJ'ye girer.`);
+    }
+  }
   if (!parts.length) throw new Error('Dışa aktarılacak görünür katı parça yok.');
   // Ağ verisi yüklü olmayan mesh parçası dosyaya yer tutucu küp olarak girerdi.
   const noMesh = parts.filter((p) => p.geom?.kind === 'mesh' && !getAsset(p.geom.asset)).map((p) => `'${p.name}'`);
@@ -437,6 +460,7 @@ export async function exportFile(project: Project, outPath: string, opts: Export
   }
   const meshes = () => (opts.merge ? [mergedMesh(project, parts)] : parts.map((p) => worldMesh(project, p)));
   let data: Uint8Array;
+  let stats: { culled: number; triangles: number } | undefined;
   switch (format) {
     case 'stl':
       data = new Uint8Array(buildStl(meshes()));
@@ -447,10 +471,13 @@ export async function exportFile(project: Project, outPath: string, opts: Export
     case 'obj':
       data = new TextEncoder().encode(buildObj(parts, project, null).obj);
       break;
-    case 'glb':
-      data = buildGlb(project, { parts: opts.parts, skeleton: opts.skeleton, units: opts.units, normals: opts.normals });
+    case 'glb': {
+      const r = glbBuild(project, { parts: opts.parts, skeleton: opts.skeleton, units: opts.units, normals: opts.normals, cullHidden: opts.cullHidden });
+      data = r.data;
+      if (opts.cullHidden) stats = { culled: r.culled, triangles: r.triangles };
       break;
+    }
   }
   writeFileAtomic(abs, data);
-  return { file: abs, format, parts: parts.length, bytes: data.length };
+  return { file: abs, format, parts: parts.length, bytes: data.length, ...stats, ...(warnings.length ? { warnings } : {}) };
 }

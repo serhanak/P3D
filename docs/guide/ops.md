@@ -7,8 +7,8 @@ Ortak alanlar: `part` parça adı (ya da kimliği; birçok işlemde **grup adı*
 `{x, y, z}` mm, `params` dizisi `[{name, value, mode?: 'set'|'add'|'mul'}]`. Koordinat kuralları: `p3d guide modeling`.
 `opacity` (saydamlık, yalnızca görünüm/malzeme) ve `resolution` (parça başına yuvarlak yüzey segmenti): `p3d guide modeling` →
 "Saydamlık" (saydamlık = 1 − opaklık) ve "Parça çözünürlüğü"; aralık dışı değer işlem hatasıdır. `geom` serbest biçimlerde
-(`extrude`, `revolve`, `loft`, `hull`, `sweep`) zorunludur (yoksa örnek geometri); biçimleri `p3d guide modeling` → "Serbest
-biçimler" ve "Süpürme".
+(`extrude`, `revolve`, `loft`, `hull`, `sweep`, `decal`) zorunludur (yoksa örnek geometri); biçimleri `p3d guide modeling` →
+"Serbest biçimler", "Süpürme" ve "Kaplama". Kaplamaya (`decal`) `role: "hole"` verilemez (işlem hatası).
 
 | İşlem | Alanlar | Not |
 |---|---|---|
@@ -18,10 +18,10 @@ biçimler" ve "Süpürme".
 | `set_position` | `part`, `x?`, `y?`, `z?` | **z tabandır**; yalnızca yerel/köprü |
 | `rotate` | `part`, `axis` (`x`/`y`/`z`), `degrees` | Göreli; taban korunur. Grupta üyeler pivot etrafında döner |
 | `scale` | `part`, `factor` | Tüm uzunluk parametreleri |
-| `place_on` | `part`, `target` | Hedefin üstüne, ortalı |
+| `place_on` | `part`, `target` | Hedefin üstüne, ortalı (kaplama: tabanı üstte, ağı `lift` kadar yukarıda; aşağı bakan kaplamada hata) |
 | `place_beside` | `part`, `target`, `side` (`+x`/`-x`/`+y`/`-y`), `gap` | Aynı taban yüksekliği |
 | `drop_to_bed` | `part` | Tablaya indir |
-| `place_on_surface` | `part`, `target`, `near`, `offset?` | Yerel +Z yüzey normaline döner |
+| `place_on_surface` | `part`, `target`, `near`, `offset?` | Yerel +Z yüzey normaline döner (kaplamayı yüzeye oturtmanın yolu) |
 | `duplicate` | `part`, `new_name?`, `offset?`, `count?` | `count > 1`: offset birikerek (1×…count×), offset zorunlu. Grupta yeni grup |
 | `delete` | `part` | Grup adıyla grup ve tüm üyeleri |
 | `group` | `name`, `parts?` (üyeleri değiştirir; boş = değişmez), `pivot?` (null: yeni grupta üyelerin kutu merkezi) | Ad parça adlarından farklı olmalı; bir parça tek grupta |

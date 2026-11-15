@@ -5,7 +5,7 @@
 - `position` şeklin **geometrik merkezidir** (dünya). Yüksekliği h olan ve s yüksekliğindeki bir yüzeye oturan parçanın
   z'si `s + h/2` olur.
 - `rotation` merkez etrafında XYZ Euler, **derece**.
-- İstisna: `extrude` / `revolve` / `loft` / `hull` (ve içe aktarılan `mesh`) geometrisi **yeniden merkezlenmez**. `position`
+- İstisna: `extrude` / `revolve` / `loft` / `hull` / `sweep` / `decal` (ve içe aktarılan `mesh`) geometrisi **yeniden merkezlenmez**. `position`
   profil koordinatlarının orijinini taşır; döndürme o orijin etrafındadır. `position` {0,0,0} ile yazdığınız sayılar
   dünya koordinatıdır (önerilen).
 - Ölçü ya da döndürme değişince parça **tabanını (min z) ve XY merkezini korur** (konum açıkça verilmedikçe). Parçalar
@@ -69,7 +69,9 @@ noktalar çevre boyunca sıralıdır. Nokta sayısını makul tutun (çokgen ba�
 - **`sweep`** `{kind, path, closed, bend, profile, holes, diameter, innerDiameter, up, frame}`: sabit bir kesit 3B çoklu çizgi
   boyunca süpürülür. Boru, kulp, korkuluk, tampon, pervaz, kablo kanalı gibi kesiti değişmeyen ama yolu dönen parçalar için
   (extrude yalnızca düz gider; kesit değişiyorsa loft). Ayrıntı aşağıda.
-- Hepsinde `scale` parametresi tüm geometriyi büyütür.
+- **`decal`** `{kind, profile, holes, double, lift}`: kalınlıksız düz **kaplama** (plaka, far, harf, şerit, dama karesi);
+  katı değildir. Ayrıntı aşağıda ("Kaplama").
+- Hepsinde `scale` parametresi tüm geometriyi büyütür (kaplamada yalnızca profili; `lift` değişmez).
 
 ### Süpürme (`sweep`)
 - **Yol:** `path` noktaları `[x, y, z]` (yerel mm; geometri yeniden merkezlenmez, `position` {0,0,0} ile dünya koordinatı) ya da
@@ -107,6 +109,32 @@ noktalar çevre boyunca sıralıdır. Nokta sayısını makul tutun (çokgen ba�
 - Örnek (tampon halkası, pahlı kesit):
   `{"kind":"sweep","path":[[-100,-60,0],[100,-60,0],[100,60,0],[-100,60,0]],"closed":true,"bend":30,"profile":[[-4,0],[4,0],[6,2],[6,10],[4,12],[-4,12],[-6,10],[-6,2]]}`;
   3B boru: `{"kind":"sweep","path":[[0,0,0],[40,0,0],[40,30,20],[0,30,40]],"bend":8,"diameter":6}`.
+
+### Kaplama (`decal`)
+- **Ne zaman:** bir yüzeyin üstündeki düz renk bölgesi (plaka, far, harf, şerit, logo, dama karesi). Kutuyla çizmek 12 üçgen
+  tutar (görünen 2); kaplama profilin üçgenleri kadardır (dikdörtgen 2). Oyun varlıkları için; baskıda karşılığı yoktur.
+- **Biçim:** `profile` yerel XY düzleminde kapalı çokgen [x, y] (extrude gibi; ilk nokta tekrarlanmaz), `holes` içteki boşluklar
+  (profilin içinde, kenarına değmeyen). Yüz yerel **+Z**'ye bakar; ağ `z = lift`'tedir (varsayılan 0,5 mm, 0,01–100; `lift`
+  yok / null / 0 = 0,5): taşıyıcı yüzeyle çakışıp titremesin. `double: true` iki yüzlü (ekranda ve GLB malzemesinde
+  `doubleSided`; üçgen çoğaltılmaz) — ince levha, tabela, kalınlıksız bayrak için.
+- **Yerleştirme:** `place_on_surface` (yerel +Z'yi yüzey normaline çevirir; kaplama yüzeyden `lift` kadar dışarıda kalır) ya da
+  `position` + `rotation` (yerel +Z = bakış yönü: `rotation` {x: 90} −Y'ye (ön yüz), {x: −90} +Y'ye, {y: 90} +X'e bakar; {x: 90}'da
+  profilin y'si dünya z'sidir). `place_on` tabanı hedefin üstüne koyar (yukarı bakan kaplama `lift` kadar yukarıda; aşağı bakan
+  kaplamada hata verir: `place_on_surface` kullanın ya da döndürün). Parçalar
+  birbirine bağlı değildir: taşıyıcıyla birlikte taşımak için ikisini bir **grup** yapın. Ayna yüzü yansıyan yöne çevirir (arka yüz
+  için ön yüzün kaplamalarını `mirror` edin).
+- **Katı değildir:** hacmi 0 (`measure` ve `section` varsayılan kümesine, katı toplamına ve birleşik hacme girmez), delik kesmez ve
+  delikle kesilmez, `role: "hole"` verilemez (referans olabilir). Baskıya girmez: STL / 3MF / Birleştir'de uyarıyla atlanır; GLB ve
+  OBJ'ye girer (OBJ/MTL'de iki yüzlülük yoktur; iki yüzlü kaplama için GLB kullanın). `check`'te
+  kapalılık, ince parça ve tabla kurallarına girmez; z-fighting: taşıyıcı yüzle yalnızca tam çakışırsa (`lift`'i geri alan
+  konum), başka bir kaplamayla aynı düzlemde üst üste binerse bildirilir. Gizli yüz ayıklamasına (`--cull-hidden`) girmez.
+- Örnek — plaka, kaputun ön yüzüne:
+  `{"op":"create","shape":"decal","name":"plaka","color":"#f2c94c","geom":{"kind":"decal","profile":[[-150,-55],[150,-55],[150,55],[-150,55]]}}`
+  sonra `{"op":"place_on_surface","part":"plaka","target":"kaput","near":{"x":0,"y":-400,"z":90}}` (kaputun önündeki bir nokta).
+- Örnek — damalı bayrak (4000 × 50 × 1200 kutu, iki yüzüne 16'şar 500 × 300 kare): ön yüz kareleri
+  `{"op":"create","shape":"decal","name":"kare0","color":"#111111","rotation":{"x":90,"y":0,"z":0},"position":{"x":-1750,"y":-25,"z":150},"geom":{"kind":"decal","profile":[[-250,-150],[250,-150],[250,150],[-250,150]]}}`
+  (8 × 4 ızgaranın koyu yarısı: x = −1750 + 500·sütun, z = 150 + 300·satır), `group` "ön" + `{"op":"mirror","part":"ön","plane":"y","at":0,"name":"arka"}`.
+  16 kutu × 12 = 192 üçgen yerine 12 + 32 × 2 = 76.
 
 ## Roller ve delikler
 - `role` yok = katı. `hole`: kutusu kesişen görünür katılardan çıkarılır (ekranda, hacimde, dışa aktarımda aynı); kendisi

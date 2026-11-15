@@ -21,16 +21,17 @@
 //                                      dolu bir dosyanın boş sekmeyle üzerine yazmak --force ister; P3D dosyası olmayanın
 //                                      üzerine hiç yazılmaz. Kaynağı (src) olan ağlar yolla anılır, --embed ile gömülür.
 //   p3d snapshot [--views iso,front,right,top] [--size 1000x750] [--dims] [--out klasör]
+//                [--eye x,y,z] [--target x,y,z] [--fov 50] [--eye-height 1000]   perspektif (camera / eye görünümü)
 //   p3d import <dosya.stl|obj|3mf> [--name ad] [--role solid|hole|reference] [--color #hex]
 //              [--max-tris 60000] [--keep-position]   (parçaya kaynak yolu src olarak yazılır)
 //
 // Sekme ya da dosya (--file verilmezse çalışma alanı sekmesinin sahnesi):
 //   p3d scene --file m.p3d.json [--full]   (--full: dosyadaki gibi; src göreli, gömülü ağlar gömülü)
-//   p3d check [--file m.p3d.json] [--profile print|game] [--max-tris N]   z-fighting, boolean, ince parça, tabla /
+//   p3d check [--file m.p3d.json] [--profile print|game] [--max-tris N] [--cull-hidden]   z-fighting, boolean, ince parça, tabla /
 //                                      oyun: üçgen bütçesi, bozuk üçgen; hata varsa çıkış kodu 1
 //   p3d measure [--file m.p3d.json] [--parts a,b]
 //   p3d section --axis x|y|z --at v1,v2,… [--parts a,b] [--file m.p3d.json | ağ.stl|obj|3mf] [--tol 0.1]
-//   p3d export <çıktı.stl|3mf|obj|glb> [--file m.p3d.json] [--parts a,b] [--merge] [--skeleton] [--units m|mm]
+//   p3d export <çıktı.stl|3mf|obj|glb> [--file m.p3d.json] [--parts a,b] [--merge] [--skeleton] [--cull-hidden] [--units m|mm]
 //              [--normals flat|smooth]   --merge STL/3MF için; --skeleton/--units/--normals GLB için
 //   p3d snapshot --file m.p3d.json [--views …] [--size …] [--dims] [--out klasör]   makinedeki Chrome/Edge'i
 //                                      (P3D_CHROME) görünmez açar, geçici bir ws'de görüntü alır; sunucu açık olmalı
@@ -60,6 +61,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   SKETCH_KIND_LABELS,
+  SNAPSHOT_FOV_MAX,
+  SNAPSHOT_FOV_MIN,
   SNAPSHOT_MAX_SIDE,
   SNAPSHOT_MIN_SIDE,
   SNAPSHOT_VIEWS,
@@ -75,9 +78,11 @@ import {
   type SceneSummary,
   type SceneSummaryPart,
   type SceneSummarySketch,
+  type SnapshotCamera,
   type SnapshotOptions,
   type SnapshotView,
   type SweepGeom,
+  type Vec3,
 } from '../shared/ops.ts';
 import type { CheckOptions } from '../src/check.ts';
 import type { Project } from '../src/types.ts';
@@ -138,7 +143,7 @@ const list = (name: string) => flag(name)?.split(',').map((s) => s.trim()).filte
 
 const VALUE_FLAGS = new Set([
   '--label', '--views', '--size', '--out', '--name', '--role', '--color', '--max-tris', '--parts', '--axis', '--at', '--file',
-  '--tol', '--ops', '--profile', '--units', '--normals', '--sample',
+  '--tol', '--ops', '--profile', '--units', '--normals', '--sample', '--eye', '--target', '--fov', '--eye-height',
 ]);
 /** Bayrak olmayan argümanlar (dosya yolları). */
 function positionals(): string[] {
@@ -437,7 +442,9 @@ function partLine(p: SceneSummaryPart, selected: string | null): string {
           ? ` tekne:${p.geom.stations.length}istasyon×${p.geom.stations[0].breadth.length}`
           : p.geom.kind === 'sweep'
             ? ` süpürme:${sweepLine(p.geom)}`
-            : ` ${p.geom.kind}:${p.geom.profile.length}nokta/${p.geom.axis}`;
+            : p.geom.kind === 'decal'
+              ? ` kaplama:${p.geom.profile.length}nokta${p.geom.holes?.length ? `+${p.geom.holes.length}boşluk` : ''}${p.geom.double ? '/iki-yüz' : ''}/lift${n(p.geom.lift ?? 0.5)}`
+              : ` ${p.geom.kind}:${p.geom.profile.length}nokta/${p.geom.axis}`;
   const group = p.group ? ` grup=${p.group}` : '';
   // Yalnızca ayarlıyken: saydamlık (opaklık < 1) ve parça başına çözünürlük (yoksa proje ayarı).
   const look = `${p.opacity !== undefined ? ` opaklık=${n(p.opacity)}` : ''}${p.resolution !== undefined ? ` çözünürlük=${p.resolution}` : ''}`;
@@ -619,12 +626,16 @@ async function readOps(): Promise<Op[]> {
 function checkOptions(): CheckOptions {
   const profile = flag('--profile') ?? 'print';
   if (profile !== 'print' && profile !== 'game') throw new Error(`--profile print ya da game olmalı ('${profile}').`);
+  // Bütçe gizli üçgenler atıldıktan sonraki sayıyla (export --cull-hidden çıktısı).
+  const cull = has('--cull-hidden');
+  if (cull && profile !== 'game') throw new Error('--cull-hidden yalnızca --profile game ile kullanılır (bütçe ayıklanmış üçgenlerle sayılır).');
+  const extra = cull ? { cullHidden: true } : {};
   const raw = flag('--max-tris');
-  if (raw === undefined) return { profile };
+  if (raw === undefined) return { profile, ...extra };
   const maxTris = Number(raw);
   if (!Number.isInteger(maxTris) || maxTris < 1) throw new Error(`--max-tris pozitif bir tam sayı olmalı ('${raw}').`);
   if (profile !== 'game') throw new Error('--max-tris yalnızca --profile game ile kullanılır (üçgen bütçesi).');
-  return { profile, maxTris };
+  return { profile, maxTris, ...extra };
 }
 
 /**
@@ -660,9 +671,18 @@ function writeSnapshots(r: BridgeResult, req: SnapshotOptions): void {
  * piksel aralığına oturtulur (uzun kenar sınırı aşarsa orantılı küçültme) ve değiştiyse uyarılır — sessiz kırpma yok.
  */
 function snapshotRequest(): { action: 'snapshot'; snapshot: SnapshotOptions } {
-  const views = list('--views') ?? ['iso', 'front', 'right', 'top'];
+  const camera = snapshotCameraFlags();
+  // --eye `camera`, --eye-height `eye` görünümünü ekler; --views verilmediyse yalnızca onlar çekilir.
+  const views = list('--views') ?? [];
+  if (camera.eye && !views.includes('camera')) views.push('camera');
+  if (camera.eyeHeight !== undefined && !views.includes('eye')) views.push('eye');
+  if (!views.length) views.push('iso', 'front', 'right', 'top');
   const unknown = views.filter((v) => !(SNAPSHOT_VIEWS as readonly string[]).includes(v));
   if (unknown.length) throw new Error(`Bilinmeyen görünüm: ${unknown.join(', ')} (olanlar: ${SNAPSHOT_VIEWS.join(', ')}).`);
+  if (views.includes('camera') && !camera.eye) throw new Error('camera görünümü --eye x,y,z ister (kamera konumu, mm).');
+  if ((camera.target || camera.fov !== undefined) && !views.some((v) => v === 'eye' || v === 'camera')) {
+    throw new Error('--target ve --fov yalnızca perspektif görünümlerde (eye, camera) geçerli.');
+  }
   const raw = flag('--size') ?? '1000x750';
   const m = /^\s*(\d+)\s*[xX×]\s*(\d+)\s*$/.exec(raw);
   if (!m || Number(m[1]) < 1 || Number(m[2]) < 1) throw new Error(`--size GENİŞLİKxYÜKSEKLİK (piksel) olmalı, ör. 1000x750 ('${raw}').`);
@@ -675,7 +695,40 @@ function snapshotRequest(): { action: 'snapshot'; snapshot: SnapshotOptions } {
         `çekiliyor (${kept ? 'en-boy oranı korundu' : 'en-boy oranı değişti'})`,
     );
   }
-  return { action: 'snapshot', snapshot: { views: views as SnapshotView[], ...fit, dims: has('--dims') } };
+  const hasCamera = Object.keys(camera).length > 0;
+  return { action: 'snapshot', snapshot: { views: views as SnapshotView[], ...fit, dims: has('--dims'), ...(hasCamera ? { camera } : {}) } };
+}
+
+/** --eye / --target x,y,z (mm), --fov derece (10–120), --eye-height mm; geçersiz değer hata. */
+function snapshotCameraFlags(): SnapshotCamera {
+  const vec = (name: string): Vec3 | undefined => {
+    const raw = flag(name);
+    if (raw === undefined) return undefined;
+    const v = raw.split(',').map((t) => (t.trim() === '' ? NaN : Number(t)));
+    if (v.length !== 3 || !v.every(Number.isFinite)) throw new Error(`${name} x,y,z (mm) olmalı ('${raw}').`);
+    return { x: v[0], y: v[1], z: v[2] };
+  };
+  const out: SnapshotCamera = {};
+  const eye = vec('--eye');
+  const target = vec('--target');
+  if (eye) out.eye = eye;
+  if (target) out.target = target;
+  if (eye && target && eye.x === target.x && eye.y === target.y && eye.z === target.z) throw new Error('--eye ile --target aynı nokta olamaz.');
+  const fov = flag('--fov');
+  if (fov !== undefined) {
+    const f = Number(fov);
+    if (fov.trim() === '' || !Number.isFinite(f) || f < SNAPSHOT_FOV_MIN || f > SNAPSHOT_FOV_MAX) {
+      throw new Error(`--fov ${SNAPSHOT_FOV_MIN}–${SNAPSHOT_FOV_MAX} derece olmalı ('${fov}').`);
+    }
+    out.fov = f;
+  }
+  const eh = flag('--eye-height');
+  if (eh !== undefined) {
+    const h = Number(eh);
+    if (eh.trim() === '' || !Number.isFinite(h)) throw new Error(`--eye-height mm cinsinden bir sayı olmalı ('${eh}').`);
+    out.eyeHeight = h;
+  }
+  return out;
 }
 
 const SNAP_CONNECT_MS = 30_000;
@@ -810,29 +863,33 @@ async function measureOrSection(command: 'measure' | 'section'): Promise<void> {
   printLoadNotes(loaded);
   const { project } = loaded;
   const { worldMesh, mergedMesh } = await import('../src/io.ts');
-  const { roleOf, solidBox, solidVolume } = await import('../src/model.ts');
+  const { isDecal, roleOf, solidBox, solidVolume } = await import('../src/model.ts');
   const names = list('--parts');
-  const parts = project.parts.filter((p) => (names ? names.includes(p.name) : p.visible && roleOf(p) !== 'hole'));
+  // Varsayılan küme: görünür, delik olmayan parçalar; kaplamalar (kalınlıksız, hacimsiz, kesitsiz) sessizce atlanır.
+  const parts = project.parts.filter((p) => (names ? names.includes(p.name) : p.visible && roleOf(p) !== 'hole' && !isDecal(p)));
   if (names) for (const nm of names) if (!parts.some((p) => p.name === nm)) console.log(`(uyarı: '${nm}' bulunamadı)`);
   if (command === 'measure') {
     let total = 0;
     const all = new THREE.Box3();
+    // Kaplama (decal) kalınlıksızdır: katı toplamına ve birleşik hacme girmez.
+    const isBody = (p: (typeof parts)[number]) => roleOf(p) === 'solid' && !isDecal(p);
     for (const p of parts) {
       // Katıda delikler çıkarılmış kutu (hacimle aynı geometri); delik/referansta şeklin kutusu.
       const b = solidBox(project, p);
       const v = solidVolume(project, p);
-      if (roleOf(p) === 'solid') {
+      if (isBody(p)) {
         total += v;
         all.union(b);
       }
       const s = b.getSize(new THREE.Vector3());
       const boxText = b.isEmpty() ? 'kutu yok (delikler tümünü kesiyor)' : `kutu ${vec(b.min)} → ${vec(b.max)} (${vec(s)})`;
-      console.log(`${p.name} [${roleOf(p)}]: ${boxText}, hacim ${n(v / 1000)} cm³`);
+      const decal = isDecal(p) && roleOf(p) === 'solid';
+      console.log(`${p.name} [${decal ? 'kaplama' : roleOf(p)}]: ${boxText}, hacim ${n(v / 1000)} cm³${decal ? ' (kalınlıksız)' : ''}`);
     }
     if (!all.isEmpty()) {
       const s = all.getSize(new THREE.Vector3());
       // Örtüşen parçalar toplamda iki kez sayılır; birleşim (union) hacmi baskıdaki gerçek hacimdir.
-      const solids = parts.filter((p) => roleOf(p) === 'solid');
+      const solids = parts.filter(isBody);
       const m = mergedMesh(project, solids);
       let u = 0;
       for (let i = 0; i < m.tris.length; i += 3) {
@@ -846,6 +903,10 @@ async function measureOrSection(command: 'measure' | 'section'): Promise<void> {
     return;
   }
   for (const p of parts) {
+    if (isDecal(p)) {
+      console.log(`${p.name}: kaplama: kalınlıksız, kesit yok`);
+      continue;
+    }
     const m = worldMesh(project, p);
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(m.pos, 3));
@@ -873,15 +934,16 @@ const USAGE = [
   '  status · view · scene [--full] [--stale] · undo · redo · fit',
   '  ops [--ops ops.json] [--label "metin"]   (ya da stdin: … < ops.json)',
   '  open [dosya.p3d.json] [--force] · save [dosya.p3d.json] [--force] [--embed]   (dosya verilmezse p3d.json → "file")',
-  '  snapshot [--views iso,front,back,left,right,top,bottom] [--size 1000x750] [--dims] [--out klasör]',
+  '  snapshot [--views iso,front,back,left,right,top,bottom,eye,camera] [--size 1000x750] [--dims] [--out klasör]',
+  '           [--eye x,y,z] [--target x,y,z] [--fov 50] [--eye-height 1000]   perspektif: camera (göz konumu) / eye (göz hizası)',
   '  import <dosya.stl|obj|3mf> [--name ad] [--role solid|hole|reference] [--color #hex] [--max-tris N] [--keep-position]',
   '',
   'Sekme ya da dosya (--file m.p3d.json ile tarayıcısız):',
   '  scene --file m.p3d.json [--full]',
-  '  check [--file m.p3d.json] [--profile print|game] [--max-tris N]',
+  '  check [--file m.p3d.json] [--profile print|game] [--max-tris N] [--cull-hidden]',
   '  measure [--file m.p3d.json] [--parts a,b]',
   '  section --axis x|y|z --at v1,v2 [--parts a,b] [--file m.p3d.json | ağ.stl|obj|3mf] [--tol 0.1]',
-  '  export <çıktı.stl|3mf|obj|glb> [--file m.p3d.json] [--parts a,b] [--merge] [--skeleton] [--units m|mm] [--normals flat|smooth]',
+  '  export <çıktı.stl|3mf|obj|glb> [--file m.p3d.json] [--parts a,b] [--merge] [--skeleton] [--cull-hidden] [--units m|mm] [--normals flat|smooth]',
   '  snapshot --file m.p3d.json [--views …] [--size …] [--dims] [--out klasör]   (görünmez Chrome/Edge; P3D_CHROME)',
   '  sketch [--file m.p3d.json] [--json] [--sample 8]   (kullanıcının çizdiği eskiz yolları)',
   '  sketch --clear [ad] [--file m.p3d.json] [--label "metin"]   (ad yoksa tüm eskiz silinir)',
@@ -1124,7 +1186,8 @@ async function main(): Promise<void> {
       const opts = checkOptions();
       const { project, source, dropped, warnings } = await sourceProject('check');
       const { checkProject } = await import('../src/check.ts');
-      console.log(`${source} · profil ${opts.profile}${opts.maxTris ? ` (bütçe ${opts.maxTris} üçgen)` : ''}`);
+      const notes = [opts.maxTris ? `bütçe ${opts.maxTris} üçgen` : '', opts.cullHidden ? 'gizli üçgenler atılmış' : ''].filter(Boolean);
+      console.log(`${source} · profil ${opts.profile}${notes.length ? ` (${notes.join(', ')})` : ''}`);
       for (const w of warnings) console.log(`⚠ ${w}`);
       // Okunamayan parça denetlenemedi: "sorun yok" denmesin.
       for (const d of dropped) console.log(`✕ Parça okunamadı, denetlenmedi: ${d}`);
@@ -1153,9 +1216,12 @@ async function main(): Promise<void> {
         skeleton: has('--skeleton') || undefined,
         units: units as 'm' | 'mm' | undefined,
         normals: normals as 'flat' | 'smooth' | undefined,
+        cullHidden: has('--cull-hidden') || undefined,
       });
       console.log(source);
-      console.log(`✓ ${r.parts} parça${has('--merge') ? ' birleştirildi (tek gövde)' : ''} → ${r.file} (${r.format.toUpperCase()}, ${kb(r.bytes)})`);
+      for (const w of r.warnings ?? []) console.log(`⚠ ${w}`);
+      const culled = r.culled !== undefined ? `; ${r.culled.toLocaleString('tr-TR')} gizli üçgen atıldı, ${r.triangles!.toLocaleString('tr-TR')} üçgen kaldı` : '';
+      console.log(`✓ ${r.parts} parça${has('--merge') ? ' birleştirildi (tek gövde)' : ''} → ${r.file} (${r.format.toUpperCase()}, ${kb(r.bytes)}${culled})`);
       return;
     }
     case 'run': {

@@ -16,19 +16,19 @@ Hata olursa çıkış kodu 1.
 | `undo` · `redo` · `fit` | Geri al, yinele, görünümü sığdır |
 | `open [dosya] [--force]` | Dosyayı sekmeye yükler (geri alınabilir). Sekmede kaydedilmemiş iş varsa `--force` ister |
 | `save [dosya] [--force] [--embed]` | Sekmeyi dosyaya yazar (atomik). Başka dosyaya bağlı sekme / boş sekme / P3D olmayan dosya için korur |
-| `snapshot [--views …] [--size 1000x750] [--dims] [--out klasör]` | PNG görüntüler; yolları basar. Kenar 200–4096 piksel: uzun kenar aşarsa iki kenar orantılı küçültülür ve uyarılır; bilinmeyen görünüm hata |
+| `snapshot [--views …] [--size 1000x750] [--dims] [--out klasör] [--eye x,y,z] [--target x,y,z] [--fov 50] [--eye-height 1000]` | PNG görüntüler; yolları basar. Kenar 200–4096 piksel: uzun kenar aşarsa iki kenar orantılı küçültülür ve uyarılır; bilinmeyen görünüm hata. Perspektif: `--eye` → `camera.png` (verilen konumdan `--target`'a, yoksa kutu merkezine), `--eye-height` ya da `--views eye` → `eye.png` (göz hizası) |
 | `import <dosya.stl\|obj\|3mf> [--name] [--role solid\|hole\|reference] [--color] [--max-tris 60000] [--keep-position]` | Ağ içe aktarır; dosya yolu parçada `src` olarak saklanır |
 
 ## Sekme ya da dosya (`--file m.p3d.json` ile tarayıcısız)
 | Komut | Ne yapar |
 |---|---|
 | `scene --file m.p3d.json [--full]` | Dosyanın sahne özeti |
-| `check [--file] [--profile print\|game] [--max-tris N]` | Z-fighting, boolean, boş delik; print: ince parça, tabla; game: üçgen bütçesi, bozuk üçgen |
-| `measure [--file] [--parts a,b]` | Delikler çıkarılmış kutu ve hacim, birleşik hacim, PLA |
-| `section --axis x\|y\|z --at v1,v2 [--parts] [--file m.p3d.json \| ağ.stl] [--tol 0.1]` | Kesit çokgenleri |
-| `export <çıktı.stl\|3mf\|obj\|glb> [--file] [--parts a,b] [--merge] [--skeleton] [--units m\|mm] [--normals flat\|smooth]` | Dışa aktarım; GLB seçenekleri `p3d guide game` |
+| `check [--file] [--profile print\|game] [--max-tris N] [--cull-hidden]` | Z-fighting, boolean, boş delik; print: ince parça, tabla; game: üçgen bütçesi, bozuk üçgen. `--cull-hidden` (yalnızca game): bütçe gizli üçgenler atılmış sayıyla (`export --cull-hidden` çıktısı); verilmezse bütçe aşımında atılabilecek gizli üçgen sayısı söylenir |
+| `measure [--file] [--parts a,b]` | Delikler çıkarılmış kutu ve hacim, birleşik hacim, PLA (kaplamalar varsayılan kümede yok; `--parts` ile hacim 0) |
+| `section --axis x\|y\|z --at v1,v2 [--parts] [--file m.p3d.json \| ağ.stl] [--tol 0.1]` | Kesit çokgenleri (kaplamalar kalınlıksız: varsayılan kümede yok, `--parts` ile "kesit yok" notu) |
+| `export <çıktı.stl\|3mf\|obj\|glb> [--file] [--parts a,b] [--merge] [--skeleton] [--units m\|mm] [--normals flat\|smooth] [--cull-hidden]` | Dışa aktarım; GLB seçenekleri (`--cull-hidden`: hiç görünmeyen iç yüzleri at) `p3d guide game`. Kaplamalar (`decal`) GLB/OBJ'ye girer, STL/3MF'te uyarıyla atlanır |
 | `sketch [--file] [--json] [--sample 8]` · `sketch --clear [ad] [--file] [--label]` | Kullanıcının ekranda çizdiği eskiz yollarını listeler (tür, nokta, düzlem, kutu, not; `--json` sahne özetindeki gibi, stdout yalnızca JSON) / adı verilen yolu ya da (ad yoksa) tüm eskizi siler; dosyada hata varsa yazmaz (`p3d guide sketch`) |
-| `snapshot --file m.p3d.json [--views] [--size] [--out]` | Görünmez Chrome/Edge ile görüntü (sunucu gerekir; tarayıcı yolu `P3D_CHROME`); ~8 sn |
+| `snapshot --file m.p3d.json [--views] [--size] [--out] [--eye …]` | Görünmez Chrome/Edge ile görüntü (sunucu gerekir; tarayıcı yolu `P3D_CHROME`); ~8 sn |
 
 ## Yalnızca dosya
 | Komut | Ne yapar |

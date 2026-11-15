@@ -1,11 +1,11 @@
 // Sahne üzerinde yapılabilecek işlemler. Yerel ayrıştırıcı, Claude ve arayüz
 // düzenlemeleri aynı işlem listesini üretir; tümü src/engine.ts'de uygulanır.
 
-export const SHAPES = ['box', 'cylinder', 'tube', 'cone', 'sphere', 'torus', 'prism', 'extrude', 'revolve', 'loft', 'hull', 'sweep', 'mesh'] as const;
+export const SHAPES = ['box', 'cylinder', 'tube', 'cone', 'sphere', 'torus', 'prism', 'extrude', 'revolve', 'loft', 'hull', 'sweep', 'decal', 'mesh'] as const;
 export type ShapeType = (typeof SHAPES)[number];
 
 /** Geometrisi `params` yerine `geom` alanındaki nokta dizilerinden üretilen şekiller. */
-export const GEOM_SHAPES = ['extrude', 'revolve', 'loft', 'hull', 'sweep', 'mesh'] as const;
+export const GEOM_SHAPES = ['extrude', 'revolve', 'loft', 'hull', 'sweep', 'decal', 'mesh'] as const;
 export type GeomShape = (typeof GEOM_SHAPES)[number];
 export const isGeomShape = (s: string): s is GeomShape => (GEOM_SHAPES as readonly string[]).includes(s);
 
@@ -122,6 +122,23 @@ export interface SweepGeom {
   frame?: 'up' | 'rmf';
 }
 /**
+ * Düz kaplama (plaka, far, harf, dama karesi): yerel XY düzleminde kalınlıksız çokgen, yüzü yerel +Z'ye bakar; ağ z = `lift`'te
+ * durur (taşıyıcı yüzeyle çakışıp titreşmesin). Katı değildir: hacmi 0, delik kesmez ve kesilmez, baskıya (STL/3MF/birleştir)
+ * girmez, GLB ve OBJ'ye girer. Yerleştirme `position` / `rotation` (yerel +Z = bakış yönü) ya da `place_on_surface`. Geometri
+ * yeniden merkezlenmez.
+ */
+export interface DecalGeom {
+  kind: 'decal';
+  /** Kapalı çokgen [x, y] (yerel mm). */
+  profile: Pt2[];
+  /** İç boşluklar (profilin içinde, kenarına değmeyen). */
+  holes?: Pt2[][];
+  /** İki yüzlü: görünümde ve GLB malzemesinde arka yüz de çizilir (üçgen çoğaltılmaz). */
+  double?: boolean;
+  /** Yüzeyden uzaklık (mm, 0,01–100); yok = 0,5. Ölçekle (`scale`) büyümez. */
+  lift?: number;
+}
+/**
  * İçe aktarılmış üçgen ağ; veri projenin `assets` deposundadır. `src` verilirse ağ dosyası yolla anılır: Node'da
  * kaydederken (`saveProjectFile`) dosya varsa ağ gömülmez, yol proje dosyasına göreli yazılır; açarken gömülü ağ yoksa
  * dosya okunup `maxTris` ile yeniden sadeleştirilir (aynı kimlikle). Dosyada gömülü gelen ağ gömülü kalır; kaynak
@@ -140,7 +157,7 @@ export interface MeshGeom {
   /** Kaynak dosyanın kısa içerik özeti (SHA-256'nın ilk 16 onaltılık hanesi). */
   srcHash?: string;
 }
-export type PartGeom = ExtrudeGeom | RevolveGeom | LoftGeom | HullGeom | SweepGeom | MeshGeom;
+export type PartGeom = ExtrudeGeom | RevolveGeom | LoftGeom | HullGeom | SweepGeom | DecalGeom | MeshGeom;
 
 /** solid: katı (varsayılan) · hole: kesiştiği katılardan çıkarılır · reference: yalnızca görsel referans, dışa aktarılmaz. */
 export const ROLES = ['solid', 'hole', 'reference'] as const;
@@ -389,6 +406,14 @@ const nullableGeom = {
       up: { anyOf: [{ type: 'array', items: num }, { type: 'null' }] },
       frame: { anyOf: [{ type: 'string', enum: ['up', 'rmf'] }, { type: 'null' }] },
     }),
+    // Düz kaplama: boş alanlar null (lift null/0 = 0,5 mm).
+    obj({
+      kind: { type: 'string', const: 'decal' },
+      profile: loop,
+      holes: { anyOf: [{ type: 'array', items: loop }, { type: 'null' }] },
+      double: { anyOf: [{ type: 'boolean' }, { type: 'null' }] },
+      lift: nullableNum,
+    }),
   ],
 };
 const roleEnum = { type: 'string', enum: ['', ...ROLES] };
@@ -509,7 +534,7 @@ export interface SceneSummaryPart {
   /** Parça başına yuvarlak yüzey çözünürlüğü (yalnızca ayarlıysa; yoksa proje ayarı). */
   resolution?: number;
   /**
-   * extrude/revolve/loft/hull/sweep için tam geometri; mesh için yalnızca özet: kaynak dosyanın yalnızca adı (`src`, klasör yolu
+   * extrude/revolve/loft/hull/sweep/decal için tam geometri; mesh için yalnızca özet: kaynak dosyanın yalnızca adı (`src`, klasör yolu
    * yok — özet Claude'a ve köprüye gider), `maxTris` / `srcSize` / `srcHash` yok.
    */
   geom?: PartGeom | { kind: 'mesh'; asset: string; triangles: number; src?: string };
@@ -629,7 +654,8 @@ export function contentDigest(text: string): string {
 
 export type BridgeAction = 'undo' | 'redo' | 'fit' | 'snapshot' | 'load' | 'mark_saved';
 
-export const SNAPSHOT_VIEWS = ['iso', 'front', 'back', 'left', 'right', 'top', 'bottom'] as const;
+/** `eye`: göz hizasından perspektif (hazır); `camera`: serbest perspektif kamera (`SnapshotOptions.camera.eye` ister). */
+export const SNAPSHOT_VIEWS = ['iso', 'front', 'back', 'left', 'right', 'top', 'bottom', 'eye', 'camera'] as const;
 export type SnapshotView = (typeof SNAPSHOT_VIEWS)[number];
 
 /** snapshot görüntü kenarının sınırları (piksel). */
@@ -647,12 +673,31 @@ export function fitSnapshotSize(width: number, height: number): { width: number;
   return { width: side(width), height: side(height) };
 }
 
+/** Perspektif görünümlerin (`eye`, `camera`) kamerası. Birim mm, dünya koordinatı. */
+export interface SnapshotCamera {
+  /** Kamera konumu; `camera` görünümü için zorunlu. */
+  eye?: Vec3;
+  /** Bakılan nokta; yoksa görünür parçaların kutu merkezi. */
+  target?: Vec3;
+  /** Dikey görüş açısı (derece, `SNAPSHOT_FOV_MIN`–`SNAPSHOT_FOV_MAX`); yoksa `SNAPSHOT_FOV_DEFAULT`. */
+  fov?: number;
+  /** `eye` görünümünde gözün görünür kutunun tabanından yüksekliği; yoksa `SNAPSHOT_EYE_HEIGHT`. */
+  eyeHeight?: number;
+}
+export const SNAPSHOT_FOV_DEFAULT = 50;
+export const SNAPSHOT_FOV_MIN = 10;
+export const SNAPSHOT_FOV_MAX = 120;
+/** `eye` görünümünün varsayılan göz yüksekliği (mm): yerden ~1 m (araç/kart sürücüsü gözü). */
+export const SNAPSHOT_EYE_HEIGHT = 1000;
+
 export interface SnapshotOptions {
   views: SnapshotView[];
   width: number;
   height: number;
   /** Ölçü çizgileri görüntüye girsin mi. */
   dims: boolean;
+  /** `eye` / `camera` görünümlerinin kamerası. */
+  camera?: SnapshotCamera;
 }
 
 /** Sunucudan tarayıcıya giden komut. */

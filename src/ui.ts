@@ -280,7 +280,12 @@ function partProps(part: Part, project: Project): string {
         <span class="muted">Grup</span> <b>${esc(group.name)}</b><br>
         <span class="muted small">pivot ${fmt(group.pivot.x)}, ${fmt(group.pivot.y)}, ${fmt(group.pivot.z)} mm</span></div>`
     : '';
-  const note = role === 'solid' ? '' : `<div class="muted small">${role === 'hole' ? 'Delik: kesiştiği katılardan çıkarılır, dışa aktarılmaz.' : 'Referans: yalnızca görsel, dışa aktarılmaz.'}</div>`;
+  const note =
+    role === 'solid'
+      ? part.shape === 'decal'
+        ? '<div class="muted small">Kaplama: kalınlıksız düz yüz (yerel +Z\'ye bakar); GLB ve OBJ\'ye girer, baskıya (STL/3MF) girmez, delik kesmez/kesilmez.</div>'
+        : ''
+      : `<div class="muted small">${role === 'hole' ? 'Delik: kesiştiği katılardan çıkarılır, dışa aktarılmaz.' : 'Referans: yalnızca görsel, dışa aktarılmaz.'}</div>`;
   const cutNames = (part.cuts ?? []).map((id) => project.parts.find((p) => p.id === id)?.name ?? id).join(', ');
   const cutsField =
     role === 'hole'

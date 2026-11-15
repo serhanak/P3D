@@ -22,7 +22,7 @@ import {
 } from '../shared/ops';
 import { decodedAsset, getAsset, makeAsset, newAssetId, registerAsset } from './assets';
 import { resolveColor } from './colors';
-import { GeomError, defaultGeom, describeGeom, geometryVolume, loftCommonSections, meshSource, sanitizeGeom } from './geom';
+import { GeomError, decalLift, defaultGeom, describeGeom, geometryVolume, loftCommonSections, meshSource, sanitizeGeom } from './geom';
 import { csgReady } from './csg';
 import {
   MAX_RESOLUTION,
@@ -445,6 +445,8 @@ function mirrorAxes(part: Part): Axis[] {
       return g?.kind === 'loft' ? [U_AXIS(g.axis)] : [];
     case 'sweep': // yol her eksende yansıtılabilir
       return g?.kind === 'sweep' ? ['x', 'y', 'z'] : [];
+    case 'decal': // profil düzlemde (x, y) aynalanır; z yansıması yüzü ters çevirirdi (ağ her zaman yerel +Z'ye bakar)
+      return g?.kind === 'decal' ? ['x', 'y'] : [];
   }
 }
 
@@ -495,6 +497,12 @@ function mirrorGeom(part: Part, axis: Axis): void {
       if (!(e instanceof GeomError)) throw e;
       throw new OpError(`'${part.name}' süpürmesi aynalanamadı: ${e.message}`);
     }
+  } else if (g?.kind === 'decal' && axis !== 'z') {
+    // Profil x'te ya da y'de yansır; ağ her zaman yerel +Z'ye bakacak sırayla üretildiğinden yüz, R' = M·R·L ile yansıyan yöne
+    // döner (L·ez = ez, R'·ez = M·R·ez).
+    const k = axis === 'x' ? 0 : 1;
+    g.profile = mirrorLoop(g.profile, k);
+    if (g.holes) g.holes = g.holes.map((h) => mirrorLoop(h, k));
   } else if (g?.kind === 'mesh') {
     part.geom = { kind: 'mesh', asset: mirroredAsset(g.asset, axis) };
   }
@@ -584,6 +592,7 @@ function describeParams(part: Part): string {
 }
 
 const ROLE_LABEL: Record<Role, string> = { solid: 'katı', hole: 'delik', reference: 'referans' };
+const DECAL_HOLE = 'Kaplama (decal) delik olamaz: kalınlığı yok, hiçbir şeyi kesemez. Oyuk için kapalı bir şekil (ör. extrude) delik yapın; kaplama katı ya da referans olabilir.';
 
 function roleValue(r: string | undefined): Role | null {
   if (!r) return null;
@@ -814,6 +823,7 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           if (!def) throw new OpError(`Bilinmeyen şekil: ${String(op.shape)}`);
           if (op.shape === 'mesh') throw new OpError('Mesh parçası dosyadan içe aktarılarak eklenir (İçe aktar… ya da npm run p3d -- import).');
           const role = roleValue(op.role);
+          if (role === 'hole' && op.shape === 'decal') throw new OpError(`${op.name?.trim() ? `'${op.name.trim()}': ` : ''}${DECAL_HOLE}`);
           const part: Part = {
             id: newId(),
             name: op.name?.trim() ? explicitPartName(project, op.name) : defaultName(project, def.label),
@@ -845,13 +855,9 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           const pos = checkVec(op.position, 'konum');
           if (pos) part.position = pos;
           else autoPlace(project, part);
-          if (op.place_on) {
-            const target = must(op.place_on);
-            project.parts.push(part);
-            placeOn(part, target, seg);
-          } else {
-            project.parts.push(part);
-          }
+          // Yerleştirme eklemeden önce: hata verirse (ör. aşağı bakan kaplama) parça projeye girmez.
+          if (op.place_on) placeOn(part, must(op.place_on), seg);
+          project.parts.push(part);
           touch(part);
           const roleNote = part.role ? `, ${ROLE_LABEL[part.role]}` : '';
           const look =
@@ -919,6 +925,7 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           const color = colorOf(op.color);
           const role = roleValue(op.role);
           const nextRole: Role = role ?? part.role ?? 'solid';
+          if (nextRole === 'hole' && part.shape === 'decal') throw new OpError(`'${part.name}': ${DECAL_HOLE}`);
           const opacity = given(op.opacity) ? opacityOf(op.opacity) : undefined;
           const cuts = op.cuts?.length ? { ids: cutsFor(part, nextRole, op.cuts, must) } : undefined;
           const pos = checkVec(op.position, 'konum');
@@ -1467,7 +1474,16 @@ function placeOn(part: Part, target: Part, seg: number): void {
   const t = partBox(target, seg);
   const bc = b.getCenter(new THREE.Vector3());
   const tc = t.getCenter(new THREE.Vector3());
-  translate(part, tc.x - bc.x, tc.y - bc.y, t.max.z - b.min.z);
+  // Kaplama: ağı tabanından (yerel z = 0) yerel +Z'de `lift` kadar yukarıdadır; tabanı hedefin üstüne gelir, ağ yüzeyle
+  // çakışmaz (yüzü yukarı bakan kaplama lift kadar yukarıda kalır; yana bakanın alt kenarı yüzeye değer). Aşağı bakan kaplama
+  // hedefin içine gömülürdü: hata (parça değişmez).
+  let lift = 0;
+  if (part.geom?.kind === 'decal') {
+    const rz = AXIS_VEC.z.clone().applyMatrix4(new THREE.Matrix4().extractRotation(partMatrix(part))).z;
+    if (rz < -1e-6) throw new OpError(`'${part.name}': aşağı bakan kaplama bir yüzeyin üstüne konamaz; place_on_surface kullanın ya da döndürün.`);
+    lift = decalLift(part.geom) * rz;
+  }
+  translate(part, tc.x - bc.x, tc.y - bc.y, t.max.z - b.min.z + lift);
 }
 
 function placeBeside(part: Part, target: Part, side: Side, gapMm: number, seg: number): void {

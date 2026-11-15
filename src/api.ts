@@ -15,7 +15,7 @@ export * as THREE from 'three';
 export { newProject } from './types';
 export type { GroupDef, MeshAsset, Part, PartGeom, Project, Role, ShapeType, Vec3 } from './types';
 export { SHAPES } from '../shared/ops';
-export type { Axis, LoftGeom, LoftSection, MeshGeom, Op, OpName, ParamChange, Pt2, SceneSummary, SceneSummaryPart, Side, SweepGeom, SweepPoint } from '../shared/ops';
+export type { Axis, DecalGeom, LoftGeom, LoftSection, MeshGeom, Op, OpName, ParamChange, Pt2, SceneSummary, SceneSummaryPart, Side, SweepGeom, SweepPoint } from '../shared/ops';
 export { applyOps, partBox, partMatrix, partsBox, sceneSummary } from './engine';
 export type { ApplyResult } from './engine';
 
@@ -30,6 +30,8 @@ export { mergedMesh, parseProject, projectToJson, worldMesh } from './io';
 export { initCsg, manifoldVolume, sliceMany, subtract } from './csg';
 export type { Cutter } from './csg';
 export { baseIndexed, exportGeometry, exportableParts, roleOf, solidBox, solidPartsBox, solidVolume } from './model';
+// Kaplama (decal): kalınlıksız açık ağ. `exportableParts` onları da içerir (GLB/OBJ); baskı (STL/3MF/birleşim) için `printableParts`.
+export { isDecal, printableParts } from './model';
 
 // Ağlar
 export { decodedAsset, getAsset, registerAsset, usedAssets } from './assets';

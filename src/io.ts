@@ -7,7 +7,7 @@ import { newId, partMatrix } from './engine';
 import { sanitizeGeom } from './geom';
 import { build3mf, buildStl, type WorldMesh } from './meshio';
 import { unionGeometries } from './csg';
-import { exportGeometry, exportableParts } from './model';
+import { exportGeometry, exportableParts, isDecal, printableParts } from './model';
 import { MAX_RESOLUTION, MIN_RESOLUTION, PALETTE, defaultParams, sanitizeParams, usesResolution } from './shapes';
 import { sanitizeSketch } from './sketch';
 import { buildGlb } from './gltf';
@@ -126,7 +126,12 @@ export function parseProject(data: unknown, dropped?: string[], warnings?: strin
     let id = typeof r.id === 'string' && r.id ? r.id : newId();
     if (ids.has(id)) id = newId();
     ids.add(id);
-    const role = r.role === 'hole' || r.role === 'reference' ? r.role : undefined;
+    let role: 'hole' | 'reference' | undefined = r.role === 'hole' || r.role === 'reference' ? r.role : undefined;
+    if (role === 'hole' && shape === 'decal') {
+      // Kaplama kalınlıksızdır, delik olamaz (motor da reddeder): parça atlanmaz, katı olur.
+      warn(`${label}: kaplama (decal) delik olamaz; rolü kaldırıldı (katı).`);
+      role = undefined;
+    }
     const opacity = readOpacity(r.opacity, role !== undefined, (why) => warn(`${label}: saydamlık (opacity) ${why}`));
     const resolution = readResolution(r.resolution, { shape, geom }, (why) => warn(`${label}: çözünürlük (resolution) ${why}`));
     base.parts.push({
@@ -140,7 +145,7 @@ export function parseProject(data: unknown, dropped?: string[], warnings?: strin
       visible: r.visible !== false,
       ...(geom ? { geom } : {}),
       ...(role ? { role } : {}),
-      ...(r.role === 'hole' && Array.isArray(r.cuts) && r.cuts.length ? { cuts: r.cuts.filter((c): c is string => typeof c === 'string') } : {}),
+      ...(role === 'hole' && Array.isArray(r.cuts) && r.cuts.length ? { cuts: r.cuts.filter((c): c is string => typeof c === 'string') } : {}),
       ...(typeof r.group === 'string' && groups.some((g) => g.name === r.group) ? { group: r.group } : {}),
       ...(opacity !== undefined ? { opacity } : {}),
       ...(resolution !== undefined ? { resolution } : {}),
@@ -296,9 +301,14 @@ export type ExportKind =
   | 'glb'
   | 'glb-skeleton';
 
-/** Görünür katıların birleşimi (union): örtüşen parçalar tek kapalı gövde olur (dilimleyiciye tek parça). */
+/**
+ * Görünür katıların birleşimi (union): örtüşen parçalar tek kapalı gövde olur (dilimleyiciye tek parça). Kaplamalar (decal,
+ * kalınlıksız açık ağ) birleşime girmez; renk kalan ilk parçanınkidir. Kalan parça yoksa boş ağ döner (renk #cccccc).
+ */
 export function mergedMesh(project: Project, parts: Part[]): WorldMesh {
-  const geoms = parts.map((p) => {
+  const bodies = parts.filter((p) => !isDecal(p));
+  if (!bodies.length) return { name: project.name, color: '#cccccc', pos: new Float32Array(0), tris: [] };
+  const geoms = bodies.map((p) => {
     const m = worldMesh(project, p);
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(m.pos, 3));
@@ -310,10 +320,13 @@ export function mergedMesh(project: Project, parts: Part[]): WorldMesh {
   const pos = u.getAttribute('position').array as Float32Array;
   const tris = Array.from(u.getIndex()!.array);
   u.dispose();
-  return { name: project.name, color: parts[0]?.color ?? '#cccccc', pos, tris };
+  return { name: project.name, color: bodies[0].color, pos, tris };
 }
 
-/** Dışa aktarır ve indirir. Yalnızca görünür katılar çıkar; delik ve referans parçalar dosyaya girmez. */
+/**
+ * Dışa aktarır ve indirir. Yalnızca görünür katılar çıkar; delik ve referans parçalar dosyaya girmez. Kaplamalar (decal) GLB ve
+ * OBJ'ye girer, baskı biçimlerinde (STL/3MF/birleştir) atlanır ve mesajda söylenir.
+ */
 export function exportModel(kind: ExportKind, project: Project, selectedId: string | null): string {
   const base = safeFileName(project.name);
   const visible = exportableParts(project.parts);
@@ -323,6 +336,7 @@ export function exportModel(kind: ExportKind, project: Project, selectedId: stri
     if ((part.role ?? 'solid') !== 'solid') throw new Error(`'${part.name}' bir ${part.role === 'hole' ? 'delik' : 'referans'} parçası; dışa aktarılmaz.`);
     const file = safeFileName(part.name);
     if (kind === 'selected-stl') {
+      if (isDecal(part)) throw new Error(`'${part.name}' bir kaplama (kalınlıksız); STL'e girmez. OBJ ya da GLB ile dışa aktarın.`);
       download(`${file}.stl`, buildStl([worldMesh(project, part)]), 'model/stl');
       return `'${part.name}' → ${file}.stl`;
     }
@@ -330,15 +344,24 @@ export function exportModel(kind: ExportKind, project: Project, selectedId: stri
     return `'${part.name}' → ${file}.obj`;
   }
   if (!visible.length) throw new Error('Dışa aktarılacak görünür katı parça yok.');
+  // Baskı biçimleri: kaplamalar atlanır.
+  const printable = printableParts(project.parts);
+  const skipped = visible.length - printable.length;
+  const skipNote = skipped ? ` (${skipped} kaplama atlandı: baskıya girmez)` : '';
+  const printCheck = () => {
+    if (!printable.length) throw new Error('Baskıya girecek katı parça yok: kaplamalar kalınlıksızdır; GLB ya da OBJ kullanın.');
+  };
   if (kind === 'all-stl') {
-    download(`${base}.stl`, buildStl(visible.map((p) => worldMesh(project, p))), 'model/stl');
-    return `${visible.length} parça → ${base}.stl`;
+    printCheck();
+    download(`${base}.stl`, buildStl(printable.map((p) => worldMesh(project, p))), 'model/stl');
+    return `${printable.length} parça → ${base}.stl${skipNote}`;
   }
   if (kind === 'merged-stl' || kind === 'merged-3mf') {
-    const m = mergedMesh(project, visible);
+    printCheck();
+    const m = mergedMesh(project, printable);
     if (kind === 'merged-stl') download(`${base}_birlesik.stl`, buildStl([m]), 'model/stl');
     else download(`${base}_birlesik.3mf`, build3mf(project.name, [m]) as BlobPart, 'model/3mf');
-    return `${visible.length} parça birleştirildi → ${base}_birlesik.${kind === 'merged-stl' ? 'stl' : '3mf'} (tek gövde)`;
+    return `${printable.length} parça birleştirildi → ${base}_birlesik.${kind === 'merged-stl' ? 'stl' : '3mf'} (tek gövde)${skipNote}`;
   }
   if (kind === 'glb' || kind === 'glb-skeleton') {
     // Oyun motoru: glTF 2.0 ikili, Y yukarı, metre, düz (flat) normaller. İskelette gruplar kemik olur.
@@ -349,8 +372,9 @@ export function exportModel(kind: ExportKind, project: Project, selectedId: stri
     return `${visible.length} parça → ${file}${skeleton ? ` (kök + ${bones} grup kemiği)` : ''}`;
   }
   if (kind === 'all-3mf') {
-    download(`${base}.3mf`, build3mf(project.name, visible.map((p) => worldMesh(project, p))) as BlobPart, 'model/3mf');
-    return `${visible.length} parça → ${base}.3mf (renkli, parça başına nesne)`;
+    printCheck();
+    download(`${base}.3mf`, build3mf(project.name, printable.map((p) => worldMesh(project, p))) as BlobPart, 'model/3mf');
+    return `${printable.length} parça → ${base}.3mf (renkli, parça başına nesne)${skipNote}`;
   }
   if (kind === 'all-obj') {
     download(`${base}.obj`, buildObj(visible, project, null).obj, 'model/obj');

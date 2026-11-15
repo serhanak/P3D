@@ -116,6 +116,7 @@ src/engine.ts        applyOps(): işlemleri projeye uygular; bbox, parça bulma,
 src/store.ts         Store: proje durumu, geri al/yinele (JSON anlık görüntü), dosya bağı ve "kaydedilmedi" durumu
 src/autosave.ts      Otomatik kayıt arka uçları: kök localStorage, çalışma alanları IndexedDB; bozuk kayıt yedeği, tek yazar kilidi
 src/gltf.ts          Bağımlılıksız GLB yazıcı (Y-yukarı/metre, düz/yumuşak normal, grup düğümleri, Unreal için katı iskelet)
+src/cull.ts          Gizli üçgen bulma (başka katının içinde kalan yüzler; GLB --cull-hidden ve check --profile game)
 src/api.ts           KARARLI kütüphane yüzeyi (`p3d` paketi, package.json exports); kıran değişiklik yapmayın
 src/files.ts         Node yardımcıları: loadProjectFile / saveProjectFile (atomik, ağ `src`) / exportFile
 src/nlp/parser.ts    Yerel Türkçe komut ayrıştırıcı (çevrimdışı)
@@ -150,7 +151,8 @@ tests/               parser.test.ts (ayrıştırıcı+motor), io.test.ts (OBJ ma
                      workspace.test.ts (ws adı, p3d.json keşfi, kök kayıt biçimi, Store), guide.test.ts (rehber kapsamı),
                      sketch.test.ts (eskiz Op'ları, özet, örnekleme, dosya, Store seçimi), sketch-edit.test.ts (kalem matematiği),
                      part-look.test.ts (parça saydamlığı ve parça çözünürlüğü: Op, dosya, GLB/3MF/MTL, önbellek, delik),
-                     sweep.test.ts (süpürme: hacimler, çerçeve, doğrulama hataları, dikiş, ayna, çözünürlük, Retro boru)
+                     sweep.test.ts (süpürme: hacimler, çerçeve, doğrulama hataları, dikiş, ayna, çözünürlük, Retro boru),
+                     cull.test.ts (gizli üçgen ayıklama), decal.test.ts (kaplama şekli: ağ, yerleşim, dışa aktarım, check)
 examples/            Örnek .p3d.json projeleri (Aç… ile yüklenir); io.test.ts hepsinin onarımsız yüklendiğini doğrular
 examples/tools/      Örnek üreteçleri (tsx ile çalışır, tsconfig dışı): build-3dbenchy.ts referans STL'den Benchy'yi kurar
 docs/STATUS.md       Güncel durum, doğrulama durumu, bilinen sorunlar, yol haritası
@@ -200,6 +202,10 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
   doğar → `rotateX(PI/2)`; ExtrudeGeometry +Z'de doğar → `translate(0,0,-h/2)`).
 - Her şekil **kapalı, manifold, normalleri dışa bakan** ağ üretmelidir. `tests/io.test.ts` bunu tüm
   `SHAPES` için otomatik doğrular (yönlü kenar kontrolü + işaretli hacim ≈ analitik hacim).
+  **Tek istisna `decal` (kaplama):** açık, tek yüzlü, yerel +Z'ye bakan düz çokgen (`z = lift`, varsayılan 0,5 mm); hacmi 0;
+  delik olamaz, delikle kesilmez (`holesFor`); baskı biçimleri (STL/3MF/Birleştir) `printableParts` kullanır ve kaplamayı
+  atlar, `exportableParts` (GLB/OBJ) içerir; gizli üçgen ayıklamasına girmez; `check`'te kaplama–katı çifti yalnızca
+  düzlemler 1e-3 mm'den yakınsa z-fighting sayılır. `double` iki yüzlülüktür (GLB `doubleSided`, üçgen çoğaltılmaz).
 - `volume()` analitik (gerçek) hacimdir; panelde ve testte kullanılır.
 - `sanitizeParams()` min/max/tamsayı sınırlarını ve `fix()` kısıtlarını (ör. boru iç çap < dış çap) uygular.
 - `geom` şekillerinde `dims`/`volume` yoktur: ölçü çizgileri ağın kutusundan, hacim ağdan hesaplanır. Hepsinde
@@ -305,6 +311,13 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
 - `CSS2DObject` DOM öğeleri, nesnenin ebeveyni sahneden çıkarılınca kendiliğinden silinmez;
   `viewer.ts` bunları `clearDims()` / `disposeEntry()` içinde elle siler. Yeni etiket eklerken aynısını yapın.
 - Geometri/malzeme `dispose()` edilmeden atılmaz.
+- Kaplama malzemesi `polygonOffset` −1/−2 (katılar +1/+1) ve `double` ise iki yüzlü çizilir.
+- `snapshot`: dik görünümler kutuya sığdırılır; perspektif görünümler `eye` (göz hizası, `SnapshotCamera.eyeHeight`) ve
+  `camera` (`eye` zorunlu) `perspectiveCamera`'dadır; yakın düzlem uzaklıkla orantılıdır.
+- GLB: malzeme anahtarı renk + saydamlık + iki yüzlülük. `cullHidden` (yalnız GLB; kural `src/cull.ts`: ε küçültülüp ε dışarı
+  itilmiş üçgenin ağırlık merkezi **aynı** başka kapalı, opak katının içindeyse ve o katının hiçbir üçgeni onu kesmiyorsa atılır;
+  saydam parça örtmez) tümü gizli parçanın düğümünü ağsız yazar. `check --profile game` gizli üçgen için **ayrı uyarı vermez**
+  (temiz model temiz kalmalı); yalnız bütçe aşımı uyarısına not ekler, `--cull-hidden` ile bütçeyi ayıklanmış sayıyla hesaplar.
 - Eskiz adları WebGL `Sprite`'tır (CSS etiketi değil; `snapshot` görüntüsüne girsin diye), piksel ölçeği `onBeforeRender`'da
   kameradan hesaplanır. Doku önbelleği `SketchView` içinde temizlenir; sprite'ların paylaşılan geometrisi dispose edilmez.
 

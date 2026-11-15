@@ -43,11 +43,17 @@ function checkSolid(verts: number[][], faces: number[][]) {
   return { bad, vol };
 }
 
+/**
+ * Kapalı manifold olması gereken şekiller. `mesh` yalnızca içe aktarmayla eklenir. `decal` (düz kaplama) bilinçli istisnadır:
+ * kalınlıksız, açık, tek yüzlü bir ağdır (hacmi 0, baskıya girmez); kendi testleri tests/decal.test.ts'te.
+ */
+const CLOSED_SHAPES = SHAPES.filter((x) => x !== 'mesh' && x !== 'decal');
+
 describe('OBJ dışa aktarımı', () => {
   it('her şekil kapalı, doğru yönlü ve hacmi analitik değere yakın', { timeout: 30_000 }, () => {
     const p = newProject();
     p.settings.resolution = 128;
-    const shapes = SHAPES.filter((x) => x !== 'mesh'); // mesh yalnızca içe aktarmayla eklenir
+    const shapes = CLOSED_SHAPES;
     applyOps(p, shapes.map((shape) => ({ op: 'create' as const, shape })), null);
     applyOps(p, [{ op: 'rotate', part: 'Silindir 1', axis: 'x', degrees: 37 }], null);
     const { obj, mtl } = buildObj(p.parts, p, 'model.mtl');
@@ -67,7 +73,7 @@ describe('OBJ dışa aktarımı', () => {
   it.each([6, 12])('düşük poligon (%i segment): her şekil kapalı, doğru yönlü ve manifold', (seg) => {
     const p = newProject();
     p.settings.resolution = seg;
-    const shapes = SHAPES.filter((x) => x !== 'mesh');
+    const shapes = CLOSED_SHAPES;
     applyOps(p, shapes.map((shape) => ({ op: 'create' as const, shape })), null);
     applyOps(p, [{ op: 'rotate', part: 'Torus 1', axis: 'y', degrees: 25 }], null);
     const { verts, objects } = parseObj(buildObj(p.parts, p, null).obj);

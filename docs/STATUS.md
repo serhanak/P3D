@@ -1,7 +1,8 @@
 # Proje durumu
 
-> Son güncelleme: **2026-11-15** — `sweep` (yol boyunca süpürme, boru; BoltRush #14 / #16, [`SWEEP.md`](SWEEP.md) Faz 1).
-> Önceki: **2026-11-14** — parça saydamlığı (`opacity`) ve parça başına çözünürlük (`resolution`), BoltRush istekleri
+> Son güncelleme: **2026-11-15** — BoltRush #18–20: GLB gizli üçgen ayıklama (`--cull-hidden`), kaplama şekli `decal`,
+> `snapshot` perspektif kamera (`eye` göz hizası, `--eye/--target/--fov`). Önceki: **2026-11-15** — `sweep` (yol boyunca süpürme,
+> boru; BoltRush #14 / #16, [`SWEEP.md`](SWEEP.md) Faz 1). Önceki: **2026-11-14** — parça saydamlığı (`opacity`) ve parça başına çözünürlük (`resolution`), BoltRush istekleri
 > #17 / #15; `sweep` tasarımı onaylandı ([`SWEEP.md`](SWEEP.md), #14 / #16). Önceki: **2026-11-13** — BoltRush istekleri #11–13: `solidBox`/`solidPartsBox` (delikler çıkarılmış kutu; `measure`
 > kutusu da kesimli), `snapshot --size` sessiz kırpma yerine 4096'ya kadar orantılı oturtma + uyarı, prizma köşe fazı rehberde.
 > Önceki: **2026-11-11** — loft: kesitte ardışık çakışık nokta (dejenere kenar) nokta eşleşmesini korur (BoltRush isteği #8:
@@ -16,7 +17,7 @@
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (331 test, ~30 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
+1. `npm install` · `npm run typecheck` · `npm test` (362 test, ~40 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
    (README → Kurulum; `p3d status` kurulu skill eskiyse uyarır).
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
@@ -91,6 +92,27 @@
   tablosu. Kurallar: `sketch_update` tüm noktalar düzlem normalinde aynı konumdaysa `plane.at`'ı da taşır; kapalı yol en az 3 nokta ister
   (azsa açık kalır); dosyadaki bozuk eskiz yolu uyarıyla atlanır (parça kaybı sayılmaz, `export`/`apply`'ı durdurmaz); ~3°'den sığ
   açıyla düzleme tıklama yok sayılır. Rehber `p3d guide sketch`, skill güncellendi. Eskiz → geometri dönüşümü bilinçli olarak yok (yol haritası 10).
+- **Oyun varlığı: gizli üçgen ayıklama, kaplama, göz hizası görüntü (2026-11-15, BoltRush istekleri #18 / #19 / #20):**
+  - `export x.glb --cull-hidden` (`GlbOptions` / `ExportOptions.cullHidden`, `src/cull.ts`): kesin test — üçgen kenarlarından ε
+    içeri küçültülüp normal boyunca ε (≥ 1e-3 mm, ölçekle büyür) dışarı itilir; ağırlık merkezi **aynı** başka kapalı, opak katının
+    içindeyse (ışın paritesi) ve o katının hiçbir üçgeni küçültülmüş üçgeni kesmiyorsa (BVH + ayırıcı eksen) atılır. Kısmen örtülen
+    üçgen kalır (bölme yok); sayısal belirsizlikte kalır. Saydam (`opacity` < 1) parça örtücü değildir (cam içindeki koltuk kalır).
+    Gruplar/düğümler/iskelet aynı; tümü gizli parça ağsız düğüm. Yalnız GLB (STL/3MF/OBJ'de hata: baskı kapalı ağ ister).
+    `check --profile game [--cull-hidden]`: ayrı uyarı yok (temiz model temiz kalır); `--cull-hidden` ile bütçe ayıklanmış sayıyla
+    hesaplanır, verilmezse bütçe aşımı uyarısına "N üçgen görünmez; export --cull-hidden ile atılır" eklenir. 4 prizma yığını
+    112 → 76 üçgen; ayıklama 800 parçalı yığında ~270 ms, Benchy'de ~590 ms (3 629 / 60 652 üçgen atılır).
+  - Yeni şekil `decal` (Kaplama): `geom {profile, holes?, double?, lift?}` kalınlıksız düz çokgen, yerel +Z'ye bakar, `lift`
+    (varsayılan 0,5 mm; 0/null = varsayılan) kadar ayrık; `double` → GLB `doubleSided` (üçgen çoğaltılmaz). `place_on_surface` ile
+    yüzeye oturur (`place_on` lift'i hesaba katar). Hacmi 0, delik olamaz/kesilmez, STL/3MF/Birleştir'e girmez (uyarıyla), GLB/OBJ'ye
+    girer, ayıklamaya girmez; `check`'te kaplama–katı z-fighting yalnız < 1e-3 mm; `section`/`measure` varsayılan kümesinde atlanır;
+    aşağı bakan kaplamada `place_on` hata verir. Boltrush bayrağı (4000 × 50 × 1200 + 2 × 16 dama): 192 → 76 üçgen. Görünümde
+    `polygonOffset`. Kararlı API'ye `printableParts`, `isDecal` (yalnız ekleme); `exportableParts` kaplamaları da içerir (GLB/OBJ,
+    açık ağ) — kaplamasız projede sonuç aynı; `mergedMesh` kaplamaları atlar. Claude şeması + talimatı, rehber (modeling/game/ops/scripts).
+  - `snapshot` perspektif: `--views eye` göz hizası (görünür kutunun tabanından `--eye-height`, varsayılan 1000 mm; ön sağdan; kutu
+    sığacak uzaklıktan merkeze), `--eye x,y,z [--target x,y,z] [--fov 50]` serbest kamera (`camera.png`); `--eye`/`--eye-height`
+    verilip `--views` verilmezse yalnız o görüntü; varsayılan göz yüksekliği küçük sahnede kutu yarıçapının iki katıyla sınırlı;
+    yakın düzlem göz sahnenin içindeyken sahne ölçeğinden (kart gözü önündeki nesneler kesilmez). Geçersiz değerler tarayıcı
+    açılmadan hata. (İstek 9'un arka çapraz görünüşü de `--eye` ile alınabilir.)
 - **`sweep` — yol boyunca süpürme (2026-11-15, BoltRush istekleri #14 / #16; tasarım [`SWEEP.md`](SWEEP.md) Faz 1):** yeni geom
   şekli (`Süpürme`). `path` [x,y,z(,r)], `closed`, `bend` (köşe yayı; 0 = gönye), kesit `profile`/`holes` ya da `diameter`/
   `innerDiameter` (boru), `up` (varsayılan +Z), `frame` `up`/`rmf`. Kararlar: varsayılan `up`, yuvarlak kesitte kendiliğinden `rmf`
@@ -189,7 +211,8 @@
 | Büyük `hull` | ✅ 3 test (`tests/geom.test.ts`: 1 m kutu tablosu tam hacim + `check` temiz, 10 kat eğri tablo = ölçekli kopya, ızgara sınırı WASM'ı bozmadan reddeder). Elle: kutu/eğri tablo 20 mm–3 m, çözünürlük 12/96/192, her biri ayrı süreçte temiz; BoltRush'ın birebir tekrarı (`p3d apply --new` → `scene` → `check`) doğru kutu; 1 m gövdenin görüntüsü tabloya uyuyor. Tarayıcı sekmesinde büyük gövde **denenmedi** |
 | `hull` `maxTris` | ✅ 2 test (`tests/geom.test.ts`: 2,2 m muz gövdesi 1000/4000/200 üçgende bütçe aşılmaz, hacim farkı < %1 / %3, kutu doğru, bozuk üçgen yok; doğrulama: aralık dışı hata, 0/null varsayılan, kesir yuvarlanır). Elle: muz/kutu/Benchy 100–5000 üçgen, çözünürlük 12/96; `p3d apply --new` + `check --profile game` temiz; görünmez Chrome görüntüsünde 2000/500 üçgenlik gövdeler tabloya uyuyor. Gerçek Claude ile ve Unreal'de **denenmedi** |
 | Eskiz katmanı | ✅ 31 test (`tests/sketch.test.ts`: Op'lar, özet, Bezier örnekleme, dosya gidiş-dönüş, Store seçimi; `tests/sketch-edit.test.ts`: ışın–düzlem, eksen kilidi, yakalama, tutamaç, kenar bölme; `cli.test.ts`: `p3d sketch`). Görünmez Chrome + CDP duman testi, gerçek fare/klavye (kare çiz/kapat, eğri nokta, Z kilidi + "15" Enter, çoklu seçim N kilidi, Ctrl+tık nokta ekle, Delete, Esc zinciri; konsol temiz; düzeltmelerden sonra tekrarlandı); `snapshot --file` izo/üst görüntüde yollar, ok, işaret ve adlar; `p3d-reviewer` incelemesi (10 bulgu, kritik yok) düzeltildi. Kullanıcının gerçek sekmesinde elle ve gerçek Claude ile eskiz yorumu **denenmedi** |
-| `sweep` | ✅ `tests/sweep.test.ts` (29 test; 9'u inceleme düzeltmelerinin kırılan testleri) + `game.test.ts` (3 sweep parçası × 2 dönüş × 3 düzlem birebir ayna) + `cli.test.ts`: düz yol = extrude hacmi; gönyeli L/Z yol = alan × orta çizgi (1e-6); kapalı daire yol Pappus (kiriş düzeltmeli); 3B rmf/up/kemer kapalı manifold; hata mesajları (sığmayan yarıçap "en fazla", katlanma, 150° gönye, biçim); dikiş indisi 6–24 segment; uç uca dikişsiz; çözünürlük 8 → 76, 32 → 700 üçgen; GLB, `check --profile game`, dosya gidiş-dönüşü, Claude şeması null/0 doldurmaları. Elle: `apply --new` + `scene` + `check` + `measure` + STL/GLB/3MF; görünmez Chrome görüntülerinde pahlı tampon halkası, içi boş 3B boru, düşey kemer, gönyeli çerçeve, Retro tamponu doğru. `p3d-reviewer` (~1500 rastgele süpürme; 1 yüksek: kapak T-kavşağı, 3 orta, 5 düşük) düzeltildi; Ø6/Ø3 boru, delikle kesilmiş yaylı boru ve iki boşluklu profil `check` (print/game) temiz. Gerçek Claude ile, kullanıcının sekmesinde panelden ve Unreal'de **denenmedi** |
+| Gizli üçgen ayıklama / kaplama / perspektif görüntü | ✅ `tests/cull.test.ts` (12: 4 prizma 112 → 76, kutu üstünde kutu, gömülü pim, ayrık/kısmi örtü kalır, saydam örtücü atmaz, plaka + delik + kapak (deliğin üstündeki üçgen kalır), grup/iskelet yapısı, seçenek yokken GLB aynı, STL hatası, check bütçe notu), `tests/decal.test.ts` (18: ağ, normal, yüzeye oturtma, doubleSided, baskı biçimlerinde atlama, hacim 0, check, çakışan kaplama, ayıklamayla etkileşim, dosya, ayna, delik rolü hatası, Claude şeması), köprü/CLI kamera testleri. Seçenek verilmeden Benchy ve karışık sahnede GLB/STL/3MF/OBJ/birleşik STL/hacim/check bayt bayt aynı. Benchy'de ayıklanan 3 629 üçgenin yalnız iç yüzler olduğu ve ayıklanmış GLB'de görünür yüz kaybı olmadığı görüntüyle denetlendi; `p3d-reviewer` incelemesi (kritik yok; 2 orta — saydam örtücü, örnekleme — ve 7 düşük bulgu düzeltildi); dama bayrağı iki yüzde titremesiz; `eye`/`camera` görüntüleri oyun ölçeğinde doğru. Unreal içe aktarımı, glTF Validator, gerçek Claude ve arayüzde elle **denenmedi** |
+| `sweep` | ✅ `tests/sweep.test.ts` (29 test; 9'u inceleme düzeltmelerinin kırılan testleri) + `game.test.ts` (3 sweep parçası × 2 dönüş × 3 düzlem birebir ayna) + `cli.test.ts`: düz yol = extrude hacmi; gönyeli L/Z yol = alan × orta çizgi (1e-6); kapalı daire yol Pappus (kiriş düzeltmeli); 3B rmf/up/kemer kapalı manifold; hata mesajları (sığmayan yarıçap "en fazla", katlanma, 150° gönye, biçim); dikiş indisi 6–24 segment; uç uca dikişsiz; çözünürlük 8 → 76, 32 → 700 üçgen; GLB, `check --profile game`, dosya gidiş-dönüşü, Claude şeması null/0 doldurmaları. Elle: `apply --new` + `scene` + `check` + `measure` + STL/GLB/3MF; görünmez Chrome görüntülerinde pahlı tampon halkası, içi boş 3B boru, düşey kemer, gönyeli çerçeve, Retro tamponu doğru. `p3d-reviewer` (~1500 rastgele süpürme; 1 yüksek: kapak T-kavşağı, 3 orta, 5 düşük) düzeltildi; Ø6/Ø3 boru, delikle kesilmiş yaylı boru ve iki boşluklu profil `check` (print/game) temiz. Gerçek Claude ile, kullanıcının sekmesinde panelden ve Unreal'de **denenmedi**. **BoltRush doğruladı (568f464):** sweep kullanan 4 pist nesnesinin GLB'leri bayt bayt aynı, 215 parça + 172 pist nesnesi yeniden üretildi (geometri aynı, `check --profile game` temiz), Retro boru tamponları tek sweep'e geçti (4 parçada 2572 → 2004 üçgen, 0,4 mm çap hilesi kalktı) |
 | Parça saydamlığı / çözünürlüğü | ✅ `tests/part-look.test.ts` + ayrıştırıcı/CLI/köprü testleri (toplam 33 yeni): Op'lar, aralık ve tip hataları, grup, `normalizeLlmOp`, rol varsayılanı ve opak referans, dosya gidiş-dönüşü ve onarım uyarıları, GLB alfa/BLEND (iskelet dahil), 3MF/MTL alfa, opacity 0'da dışa aktarım/hacim/check/delik aynı; analitik üçgen sayıları, 6 segmentte kapalılık, önbellek ayrımı, delikte etkin seg, yuvarlak olmayan şekilde uyarı, `update` atomikliği. Alan yokken STL/GLB/OBJ çıktısı HEAD ile bayt bayt aynı (9 dosya). `p3d-reviewer` incelemesi (kritik yok; 6 bulgu düzeltildi). Görünmez Chrome görüntüsünde cam yarı saydam, 8/96 segment küre, 6 segment torus doğru. Panel alanları ve saydam parçada tıklama gerçek tarayıcıda elle, yeni alanlar gerçek Claude ile ve Unreal'de **denenmedi** |
 | Kesimli kutu / snapshot boyutu / prizma fazı | ✅ 5 test (`tests/geom.test.ts`: BoltRush örneği `partsBox` 50 / `solidPartsBox` 0 = `worldMesh`, döndürülmüş + taşınmış parça (önbellek), deliksiz = `partBox`, tümüyle kesilen = boş; prizma n = 3–16 için rehberdeki üç kural ve BoltRush ölçümleri; `tests/bridge.test.ts`: `fitSnapshotSize` ve köprünün sekmeye ilettiği boyut; `tests/cli.test.ts`: geçersiz `--size` / görünüm). Elle: `p3d run` ile BoltRush yeniden üretimi, `measure --file` kesimli kutu, görünmez Chrome'da 4096x800 ve 6000x6000 → 4096x4096 PNG (başlık doğrulandı), altıgen prizma `y 90, z 30` önden düz tabanlı. Kullanıcının gerçek sekmesinde (donanım GPU) 4096 görüntü **denenmedi** |
 | Loft çakışık nokta | ✅ 4 test (`tests/geom.test.ts`: BoltRush örneği tam hacim 533,33 cm³ + `check --profile game` temiz + ayna; kapanış tekrarı / kapanışta ve başta dejenere kenar (prizmatoid tam hacmi 750) / eşleşmeyi bozan tekrar / 1024 sınırı; uç kesit, 3 kesitte kısmi çakışma düz ve yumuşak, ayna + `sharp`; yumuşak loft'ta çakışık nokta hacmi değiştirmez), düzeltme olmadan kırılıyorlar. Çakışık noktasız 8 tip loft'un ağı HEAD ile bayt bayt aynı; `p3d-reviewer` 120 rastgele loft'ta fark bulmadı, 3 bulgusu (ayna + sharp, 1024 sınırı, test kapsamı) düzeltildi. Elle: `p3d apply --new` + `measure` + `check` (düz ve yumuşak, 3 kesit), görünmez Chrome görüntüsünde çıkıntı ön kesitte kenardan doğuyor |
@@ -258,6 +281,9 @@
   ayna yuvarlak kesitte birebir olmayabilir. Yerel ayrıştırıcıda süpürme kalıbı yok (yol nokta listesi ister). Tırmanırken keskin
   gönyeyle dönen yol (ör. 90° dönen merdiven küpeştesi) `up` burulma sınırına (45°) takılır: köşeye `bend` verin. Eşit köşegenli
   düzlemsel dörtgenlerde aynanın üçgen kümesi birebir değil (geometri aynı).
+- `--cull-hidden`: iki ayrı katının birlikte örttüğü üçgen ve kısmen örtülen üçgen kalır (bölme yok); statik pozdur (iskelette hareket eden parçalar arasındaki yüz
+  hareketle görünür olabilir). Arayüzün GLB menüsünde seçenek yok (CLI/API). `check` 800 parçada ~7,5 sn (çakışık düzlem taraması).
+- Kaplama (`decal`) açık ağdır: baskı biçimlerine girmez; `lift` 0 verilemez (varsayılana döner).
 - `extrude`: boşluğun profil içinde/ayrık olduğu denetlenmez (kenara değen boşluk bozuk ağ verir); var olan dosyalar yüklenmez hâle
   gelmesin diye eklenmedi (sweep'te denetleniyor).
 - `set_position` X/Y'yi parçanın merkezine uygular; tek kenarlı prizma/koni döndürülmüşse sınırlayıcı kutu

@@ -1,11 +1,15 @@
 // Model denetimi: ekranda titreşen çakışık yüzeyler (z-fighting), baskıyı zorlaştıran durumlar, boolean hataları.
 // Yapay zekâ doğrulama döngüsünde `npm run -s p3d -- check` ile çalışır; Node ve tarayıcıda aynı kod.
-// Profil: `print` (varsayılan; tabla teması, ince parça) ya da `game` (üçgen bütçesi, bozuk üçgen; baskı kuralları yok).
+// Profil: `print` (varsayılan; tabla teması, ince parça) ya da `game` (üçgen bütçesi — isteğe bağlı gizli üçgenler atılmış —, bozuk üçgen;
+// baskı kuralları yok).
+// Kaplamalar (decal) kalınlıksız açık ağdır: ince parça / tabla / gizli yüz kurallarına girmez; z-fighting'de yalnızca gerçekten
+// çakışık (aynı düzlemde) oldukları yüzler bildirilir — taşıyıcı yüzden `lift` kadar ayrık kaplama temizdir.
 import * as THREE from 'three';
+import { hiddenTriangles } from './cull';
 import { partBox } from './engine';
 import { worldMesh } from './io';
 import type { WorldMesh } from './meshio';
-import { exportableParts, holesFor, roleOf, solidGeometry } from './model';
+import { displayOpacity, exportableParts, holesFor, isDecal, roleOf, solidGeometry } from './model';
 import { PLACEHOLDER_SIZE, geometryError, partSeg, usesResolution } from './shapes';
 import type { Part, Project } from './types';
 
@@ -19,6 +23,11 @@ export interface CheckOptions {
   profile?: 'print' | 'game';
   /** game: toplam üçgen bütçesi (varsayılan 20000). */
   maxTris?: number;
+  /**
+   * game: bütçe, gizli üçgenler atıldıktan sonraki sayıyla hesaplanır (GLB `cullHidden` / `export --cull-hidden` çıktısı).
+   * Verilmezse ve bütçe aşılırsa uyarı atılabilecek gizli üçgen sayısını söyler. print profilinde etkisiz.
+   */
+  cullHidden?: boolean;
 }
 
 /** Oyun profilinde varsayılan toplam üçgen bütçesi. */
@@ -58,10 +67,22 @@ interface PlaneTri {
   part: string;
   pts: V2[];
   area: number;
+  /** Düzlemin orijine uzaklığı (mm, yuvarlanmamış). */
+  d: number;
 }
 
-/** Aynı düzlemde, aynı yöne bakan, üst üste binen yüzeyler: farklı parçalar arasında z-fighting. */
+/**
+ * Kaplama ile katı arasında yalnızca bundan yakın (mm) düzlemler çakışık sayılır: kova 0,02 mm'lik dilimdir, ama yüzeyden
+ * `lift` (≥ 0,01 mm) kadar ayrık kaplama taşıyıcı yüzüyle titreşmez (görünümde polygonOffset de var).
+ */
+const DECAL_COPLANAR = 1e-3;
+
+/**
+ * Aynı düzlemde, aynı yöne bakan, üst üste binen yüzeyler: farklı parçalar arasında z-fighting. Kaplama–katı çiftinde yalnızca
+ * tam çakışık düzlemler (DECAL_COPLANAR); kaplama–kaplama çifti katılar gibi.
+ */
 function coplanarOverlaps(project: Project, solids: Part[], meshOf: (p: Part) => WorldMesh): CheckIssue[] {
+  const decalIds = new Set(solids.filter(isDecal).map((p) => p.id));
   const buckets = new Map<string, PlaneTri[]>();
   const a = new THREE.Vector3();
   const b = new THREE.Vector3();
@@ -87,7 +108,7 @@ function coplanarOverlaps(project: Project, solids: Part[], meshOf: (p: Part) =>
       const to2 = (v: THREE.Vector3): V2 => (drop === 0 ? [v.y, v.z] : drop === 1 ? [v.x, v.z] : [v.x, v.y]);
       let list = buckets.get(key);
       if (!list) buckets.set(key, (list = []));
-      list.push({ part: part.id, pts: [to2(a), to2(b), to2(c)], area });
+      list.push({ part: part.id, pts: [to2(a), to2(b), to2(c)], area, d });
     }
   }
   const pairs = new Map<string, { area: number; normal: string; d: string }>();
@@ -101,9 +122,11 @@ function coplanarOverlaps(project: Project, solids: Part[], meshOf: (p: Part) =>
       for (let j = i + 1; j < ids.length; j++) {
         let overlap = 0;
         let checks = 0;
+        const decalPair = decalIds.has(ids[i]) !== decalIds.has(ids[j]);
         outer: for (const ta of byPart.get(ids[i])!) {
           for (const tb of byPart.get(ids[j])!) {
             if (++checks > 200000) break outer;
+            if (decalPair && Math.abs(ta.d - tb.d) >= DECAL_COPLANAR) continue;
             if (trianglesOverlap(ta.pts, tb.pts)) overlap += Math.min(ta.area, tb.area);
           }
         }
@@ -146,12 +169,31 @@ function degenerateCount(m: WorldMesh): number {
   return n;
 }
 
-/** Oyun profili: toplam üçgen bütçesi (aşılırsa parça başına dağılım) ve bozuk üçgenler. */
-function gameChecks(solids: Part[], meshOf: (p: Part) => WorldMesh, maxTris: number, seg: number): CheckIssue[] {
+/**
+ * Parça başına gizli üçgen sayısı (GLB `cullHidden` ile aynı kural ve girdi): kaplamalar girmez, görünen saydamlığı < 1 olan
+ * parça örtmez.
+ */
+function hiddenCounts(solids: Part[], meshOf: (p: Part) => WorldMesh): Map<Part, number> {
+  const bodies = solids.filter((p) => !isDecal(p));
+  const hidden = hiddenTriangles(bodies.map((p) => ({ ...meshOf(p), occluder: displayOpacity(p) >= 1 })));
+  return new Map(bodies.map((p, k) => [p, hidden[k].reduce((s, h) => s + h, 0)]));
+}
+
+/**
+ * Oyun profili: toplam üçgen bütçesi (aşılırsa parça başına dağılım) ve bozuk üçgenler. `cullHidden`: bütçe, gizli üçgenler
+ * atıldıktan sonraki sayıyla (GLB `--cull-hidden` çıktısı) hesaplanır; verilmemişse ve bütçe aşılmışsa mesaj atılabilecek gizli
+ * üçgen sayısını söyler. Gizli üçgenler ayrıca bildirilmez (bütçe yoksa ya da aşılmıyorsa sorun değildir).
+ */
+function gameChecks(solids: Part[], meshOf: (p: Part) => WorldMesh, maxTris: number, seg: number, cullHidden: boolean): CheckIssue[] {
   const out: CheckIssue[] = [];
-  const counts = solids.map((p) => ({ part: p, tris: meshOf(p).tris.length / 3 }));
+  const hidden = cullHidden ? hiddenCounts(solids, meshOf) : undefined;
+  const counts = solids.map((p) => ({ part: p, tris: meshOf(p).tris.length / 3 - (hidden?.get(p) ?? 0) }));
   const total = counts.reduce((s, c) => s + c.tris, 0);
   if (total > maxTris) {
+    const culled = hidden ? [...hidden.values()].reduce((s, n) => s + n, 0) : 0;
+    const hiddenNow = hidden ? 0 : [...hiddenCounts(solids, meshOf).values()].reduce((s, n) => s + n, 0);
+    const cullNote = hidden ? ` (${culled.toLocaleString('tr-TR')} gizli üçgen atıldıktan sonra)` : '';
+    const cullHint = hiddenNow > 0 ? ` ${hiddenNow.toLocaleString('tr-TR')} üçgen görünmez; \`export --cull-hidden\` ile atılır (\`check --cull-hidden\` bütçeyi ona göre sayar).` : '';
     counts.sort((a, b) => b.tris - a.tris);
     const list = counts.map((c) => `${c.part.name} ${c.tris.toLocaleString('tr-TR')}`).join(', ');
     // En çok üçgenli yuvarlak parçalar (bütçenin ≥ %5'i): parça başına çözünürlükle tek tek sadeleşir.
@@ -163,9 +205,10 @@ function gameChecks(solids: Part[], meshOf: (p: Part) => WorldMesh, maxTris: num
     out.push({
       level: 'uyarı',
       message:
-        `Toplam ${total.toLocaleString('tr-TR')} üçgen; bütçe ${maxTris.toLocaleString('tr-TR')} aşıldı. Parça başına: ${list}. ` +
+        `Toplam ${total.toLocaleString('tr-TR')} üçgen${cullNote}; bütçe ${maxTris.toLocaleString('tr-TR')} aşıldı. Parça başına: ${list}. ` +
         'Yuvarlak yüzey çözünürlüğünü düşürün (proje ayarı 6–16 ya da parça başına `resolution`), `hull` parçalarına `geom.maxTris` verin ya da ayrıntıyı azaltın.' +
-        hint,
+        hint +
+        cullHint,
     });
   }
   for (const p of solids) {
@@ -198,18 +241,21 @@ export function checkProject(project: Project, opts: CheckOptions = {}): CheckIs
   for (const h of project.parts.filter((p) => p.visible && roleOf(p) === 'hole')) {
     if (!solids.some((s) => holesFor(project, s).includes(h))) out.push({ level: 'uyarı', message: `Delik '${h.name}' hiçbir katıyı kesmiyor.` });
   }
-  if (game) out.push(...gameChecks(solids, meshOf, opts.maxTris ?? DEFAULT_MAX_TRIS, seg));
+  if (game) out.push(...gameChecks(solids, meshOf, opts.maxTris ?? DEFAULT_MAX_TRIS, seg, opts.cullHidden === true));
   else {
-    for (const p of solids) {
+    // Baskı kuralları yalnızca katılarda: kaplama kalınlıksızdır ve baskıya girmez.
+    const bodies = solids.filter((p) => !isDecal(p));
+    for (const p of bodies) {
       const s = partBox(p, seg).getSize(new THREE.Vector3());
       const min = Math.min(s.x, s.y, s.z);
       if (min < MIN_WALL) out.push({ level: 'uyarı', message: `'${p.name}' ${min.toFixed(2)} mm kalınlığında; ${MIN_WALL} mm altı FDM'de basılmayabilir (başka parçaya gömülüyse sorun değil).` });
     }
     // Tabla teması son (delikler uygulanmış) geometriye göre: tabla altı bilerek kesilmiş parçalar yanlış uyarı vermesin.
     const box = new THREE.Box3();
-    for (const p of solids) box.union(new THREE.Box3().setFromArray(meshOf(p).pos));
-    if (box.min.z < -0.01) out.push({ level: 'uyarı', message: `Model tablanın ${(-box.min.z).toFixed(2)} mm altına taşıyor.` });
-    else if (box.min.z > 0.01) out.push({ level: 'uyarı', message: `Model tablaya değmiyor (en alt nokta z = ${box.min.z.toFixed(2)} mm).` });
+    for (const p of bodies) box.union(new THREE.Box3().setFromArray(meshOf(p).pos));
+    // Yalnızca kaplama varsa kutu boştur: tabla kuralı yok.
+    if (!box.isEmpty() && box.min.z < -0.01) out.push({ level: 'uyarı', message: `Model tablanın ${(-box.min.z).toFixed(2)} mm altına taşıyor.` });
+    else if (!box.isEmpty() && box.min.z > 0.01) out.push({ level: 'uyarı', message: `Model tablaya değmiyor (en alt nokta z = ${box.min.z.toFixed(2)} mm).` });
   }
 
   out.push(...coplanarOverlaps(project, solids, meshOf));

@@ -5,9 +5,10 @@
 // Eksen: P3D Z yukarı, mm, önü −Y → glTF Y yukarı, metre (varsayılan), önü +Z: (x, y, z) → (x, z, −y) × ölçek.
 // Bu öz (det +1) bir dönüşümdür; üçgen sarımı değişmez. Unreal'in içe aktarıcısı glTF'yi kendi Z yukarı / cm düzenine çevirir.
 import * as THREE from 'three';
+import { hiddenTriangles } from './cull';
 import { findGroup, findPartExact, partMatrix } from './engine';
 import { MESH_CREASE } from './geom';
-import { exportGeometry, exportableParts } from './model';
+import { displayOpacity, exportGeometry, exportableParts, isDecal } from './model';
 import { toAscii } from './text';
 import type { GroupDef, Part, Project } from './types';
 
@@ -25,6 +26,21 @@ export interface GlbOptions {
    * özgün ad düğümün `extras.name` alanındadır. İskeletsiz modda adlar olduğu gibi kalır.
    */
   skeleton?: boolean;
+  /**
+   * true: hiç görünmeyen üçgenler atılır — başka bir dışa aktarılan kapalı katının içinde ya da ona değen yüzlerdeki üçgenler
+   * (üst üste duran parçaların iç kapakları, gömülü pim; kural: cull.ts). Kısmen örtülen üçgen kalır. Düğümler, gruplar, pivot
+   * ve iskelet aynı kalır; tüm üçgenleri gizli parçanın düğümü ağsız yazılır. Kaplamalar (decal) ne atılır ne atar.
+   */
+  cullHidden?: boolean;
+}
+
+/** GLB ve dışa aktarım özeti (files.ts → exportFile). */
+export interface GlbBuild {
+  data: Uint8Array;
+  /** Dosyadaki üçgen sayısı. */
+  triangles: number;
+  /** `cullHidden` ile atılan üçgen sayısı. */
+  culled: number;
 }
 
 type V3 = [number, number, number];
@@ -51,8 +67,11 @@ function hexToLinear(hex: string): V3 {
   return [0, 2, 4].map((i) => Number(srgbToLinear(parseInt(h.slice(i, i + 2), 16) / 255).toFixed(6))) as V3;
 }
 
-/** Malzeme anahtarı: renk (küçük harf) + saydamlık; aynı anahtarlı parçalar tek malzemeyi paylaşır. */
-const materialKey = (p: Part) => `${p.color.toLowerCase()}|${p.opacity ?? 1}`;
+/** İki yüzlü kaplama: malzemesi `doubleSided` (üçgen çoğaltılmaz). */
+const doubleSided = (p: Part) => p.geom?.kind === 'decal' && p.geom.double === true;
+
+/** Malzeme anahtarı: renk (küçük harf) + saydamlık (+ iki yüzlülük); aynı anahtarlı parçalar tek malzemeyi paylaşır. */
+const materialKey = (p: Part) => `${p.color.toLowerCase()}|${p.opacity ?? 1}${doubleSided(p) ? '|2' : ''}`;
 
 const toGl = (v: { x: number; y: number; z: number }, s: number): V3 => [v.x * s + 0, v.z * s + 0, -v.y * s + 0];
 const sub = (a: V3, b: V3): V3 => [a[0] - b[0] + 0, a[1] - b[1] + 0, a[2] - b[2] + 0];
@@ -66,6 +85,8 @@ interface TriMesh {
   tris: number[];
   /** Parçanın yerel kutu merkezi, dünyada (glTF). */
   center: V3;
+  /** Köşeler P3D dünya koordinatlarında (mm, Z yukarı; `worldMesh` ile aynı): gizli yüz ayıklaması için. */
+  world: ArrayLike<number>;
 }
 
 function partTriangles(project: Project, part: Part, s: number): TriMesh {
@@ -74,7 +95,7 @@ function partTriangles(project: Project, part: Part, s: number): TriMesh {
   const m = partMatrix(part);
   const center = toGl(g.boundingBox!.getCenter(new THREE.Vector3()).applyMatrix4(m), s);
   g.applyMatrix4(m);
-  const src = g.getAttribute('position').array;
+  const src = g.getAttribute('position').array as Float32Array;
   const pos = new Float32Array(src.length);
   for (let i = 0; i < src.length; i += 3) {
     pos[i] = src[i] * s;
@@ -88,7 +109,28 @@ function partTriangles(project: Project, part: Part, s: number): TriMesh {
     if (a !== b && b !== c && a !== c) tris.push(a, b, c); // kutup/tepe noktalarındaki dejenere üçgenler
   }
   g.dispose();
-  return { pos, tris, center };
+  return { pos, tris, center, world: src };
+}
+
+/**
+ * Gizli üçgenleri atar (yerinde): katılar birbirini örter, kaplamalar dışarıda kalır. Dönen: atılan üçgen sayısı. Üçgen sırası
+ * korunur.
+ */
+function cullItems(items: { part: Part; mesh: TriMesh }[]): number {
+  const solids = items.filter((it) => !isDecal(it.part));
+  // Görünen saydamlığı < 1 olan parça örtmez (cam kabindeki koltuk görünür); kendisi opak parçalarca ayıklanabilir.
+  const hidden = hiddenTriangles(solids.map((it) => ({ pos: it.mesh.world, tris: it.mesh.tris, occluder: displayOpacity(it.part) >= 1 })));
+  let culled = 0;
+  solids.forEach((it, k) => {
+    const h = hidden[k];
+    const kept: number[] = [];
+    for (let t = 0; t < h.length; t++) {
+      if (h[t]) culled++;
+      else kept.push(it.mesh.tris[3 * t], it.mesh.tris[3 * t + 1], it.mesh.tris[3 * t + 2]);
+    }
+    it.mesh.tris = kept;
+  });
+  return culled;
 }
 
 /** Gölgelenmiş ağ: köşe başına konum + normal, üçgen indisleri. */
@@ -340,14 +382,23 @@ export function selectParts(project: Project, refs?: string[]): Part[] {
  * köşelere gömülü); grup bir düğümdür (çevirisi pivot, üyeleri çocuk düğüm). Renk → lineer `baseColorFactor`
  * (metallic 0, roughness 0,9), saydamlık (`Part.opacity`) → alfa + `alphaMode: BLEND`; aynı renk ve saydamlık tek malzeme.
  * `skeleton` için bkz. GlbOptions.
- * Delikler tarafından tamamen yenen (üçgensiz) parçalar atlanır: glTF boş erişimciye izin vermez.
+ * Delikler tarafından tamamen yenen (üçgensiz) parçalar atlanır: glTF boş erişimciye izin vermez. Kaplama (decal) da bir
+ * parça gibi yazılır; iki yüzlüsünün malzemesi `doubleSided: true` (malzeme renk + saydamlık + iki yüzlülükle ayrışır).
+ * `cullHidden` için bkz. GlbOptions.
  */
 export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
+  return glbBuild(project, opts).data;
+}
+
+/** buildGlb + özet (üçgen sayısı, ayıklanan üçgenler). */
+export function glbBuild(project: Project, opts: GlbOptions = {}): GlbBuild {
   const s = opts.units === 'mm' ? 1 : 0.001;
   const items = selectParts(project, opts.parts)
     .map((part) => ({ part, mesh: partTriangles(project, part, s) }))
     .filter((it) => it.mesh.tris.length > 0);
   if (!items.length) throw new Error('Dışa aktarılacak görünür katı parça yok.');
+  // Ayıklama, parça listesi süzüldükten sonra: tüm üçgenleri gizli parça listede (düğümü / eklemi) kalır.
+  const culled = opts.cullHidden ? cullItems(items) : 0;
   const parts = items.map((it) => it.part);
   const smooth = opts.normals === 'smooth';
   const shade = (m: TriMesh, origin: V3) => (smooth ? smoothShaded(m, origin, MESH_CREASE) : flatShaded(m, origin));
@@ -365,10 +416,12 @@ export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
       materialIndex.set(key, i);
       const color = p.color.toLowerCase();
       const alpha = p.opacity ?? 1;
+      const both = doubleSided(p);
       materials.push({
-        name: `P3D_${color.replace('#', '')}${alpha < 1 ? `_a${Math.round(alpha * 100)}` : ''}`,
+        name: `P3D_${color.replace('#', '')}${alpha < 1 ? `_a${Math.round(alpha * 100)}` : ''}${both ? '_ds' : ''}`,
         pbrMetallicRoughness: { baseColorFactor: [...hexToLinear(color), alpha], metallicFactor: 0, roughnessFactor: 0.9 },
         ...(alpha < 1 ? { alphaMode: 'BLEND' } : {}),
+        ...(both ? { doubleSided: true } : {}),
       });
     }
     return i;
@@ -419,7 +472,9 @@ export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
       const j = (p.group && jointOf.get(p.group)) || 0;
       for (let i = 0; i < sh.pos.length / 3; i++) acc.joint.push(j);
     }
-    const primitives = [...byColor.values()].map((acc) => bin.primitive(acc.sh, material(acc.part), acc.joint, jointCount));
+    // Ayıklamada tüm üçgenleri gizli kalan malzemenin primitifi yazılmaz (glTF boş erişimciye izin vermez).
+    const primitives = [...byColor.values()].filter((acc) => acc.sh.idx.length > 0).map((acc) => bin.primitive(acc.sh, material(acc.part), acc.joint, jointCount));
+    if (!primitives.length) throw new Error('Dışa aktarılacak görünür üçgen yok.');
     const meshName = nameOf(project.name, 'model');
     meshes.push({ name: meshName, primitives });
     const meshNode = nodes.length;
@@ -436,12 +491,16 @@ export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
   } else {
     const groupNode = new Map<string, number>();
     for (const { part: p, mesh: m } of items) {
-      const mesh = meshes.length;
-      meshes.push({ name: p.name, primitives: [bin.primitive(shade(m, m.center), material(p))] });
+      // Ayıklamada tüm üçgenleri gizli kalan parça: düğüm (ad, çeviri, grup) yerinde, ağsız.
+      const meshRef: { mesh?: number } = {};
+      if (m.tris.length) {
+        meshRef.mesh = meshes.length;
+        meshes.push({ name: p.name, primitives: [bin.primitive(shade(m, m.center), material(p))] });
+      }
       const g = groupOf(p);
       if (!g) {
         roots.push(nodes.length);
-        nodes.push({ name: p.name, mesh, translation: m.center });
+        nodes.push({ name: p.name, ...meshRef, translation: m.center });
         continue;
       }
       const pivot = toGl(g.pivot, s);
@@ -453,7 +512,7 @@ export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
         nodes.push({ name: g.name, translation: pivot, children: [] });
       }
       (nodes[gi].children as number[]).push(nodes.length);
-      nodes.push({ name: p.name, mesh, translation: sub(m.center, pivot) });
+      nodes.push({ name: p.name, ...meshRef, translation: sub(m.center, pivot) });
     }
   }
 
@@ -465,5 +524,6 @@ export function buildGlb(project: Project, opts: GlbOptions = {}): Uint8Array {
   json.bufferViews = bin.views;
   const data = bin.bytes();
   json.buffers = [{ byteLength: data.length }];
-  return glb(json, data);
+  const triangles = items.reduce((n, it) => n + it.mesh.tris.length / 3, 0);
+  return { data: glb(json, data), triangles, culled };
 }

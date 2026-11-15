@@ -1,9 +1,23 @@
-// extrude / revolve / loft / hull / sweep / mesh şekilleri: `geom` doğrulama ve ağ üretimi.
+// extrude / revolve / loft / hull / sweep / decal / mesh şekilleri: `geom` doğrulama ve ağ üretimi.
 // Üreticiler kanonik çerçevede (profil u-v düzleminde, eksen w) indisli ağ kurar, sonra eksen eşlemesiyle
 // yerel koordinatlara taşır (sweep yolu doğrudan yereldir). Sonuç her zaman kapalı ve dışa dönüktür (işaretli hacim > 0).
+// Tek istisna `decal` (düz kaplama): kalınlıksız, açık, yüzü yerel +Z'ye bakan ağ (bkz. decalRaw).
 import * as THREE from 'three';
 import { mergeVertices, toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { ExtrudeGeom, GeomAxis, GeomShape, HullGeom, LoftGeom, MeshGeom, PartGeom, Pt2, RevolveGeom, SweepGeom, SweepPoint } from '../shared/ops';
+import type {
+  DecalGeom,
+  ExtrudeGeom,
+  GeomAxis,
+  GeomShape,
+  HullGeom,
+  LoftGeom,
+  MeshGeom,
+  PartGeom,
+  Pt2,
+  RevolveGeom,
+  SweepGeom,
+  SweepPoint,
+} from '../shared/ops';
 import { decodedAsset } from './assets';
 import { frameRing, hullSolid } from './csg';
 
@@ -188,6 +202,8 @@ export function sanitizeGeom(shape: GeomShape, raw: unknown): PartGeom {
       return sanitizeHull(g);
     case 'sweep':
       return sanitizeSweep(g);
+    case 'decal':
+      return sanitizeDecal(g);
     case 'mesh': {
       if (typeof g.asset !== 'string' || !g.asset) throw new GeomError('Mesh parçasının ağ kimliği (asset) eksik.');
       return { kind: 'mesh', asset: g.asset, ...meshSource(g) };
@@ -248,6 +264,38 @@ function sanitizeHull(g: Record<string, unknown>): HullGeom {
   return out;
 }
 
+/** Kaplamanın yüzeyden uzaklığı (`DecalGeom.lift`, mm): varsayılan ve sınırlar. 0 yok: taşıyıcı yüzeyle çakışıp titreşir. */
+export const DECAL_LIFT = 0.5;
+export const DECAL_MIN_LIFT = 0.01;
+export const DECAL_MAX_LIFT = 100;
+/** Kaplamanın etkin uzaklığı (mm). */
+export const decalLift = (g: DecalGeom) => g.lift ?? DECAL_LIFT;
+
+/**
+ * Düz kaplama: profil ve boşluklar extrude'daki gibi temizlenir; boşluklar profilin içinde, kenarına değmeyen ve birbirinden
+ * ayrı olmalı (üçgenleme). `lift` yok, null ya da 0 = varsayılan 0,5 mm (yazılmaz; Claude şeması boş sayıyı 0 ile
+ * doldurabilir); diğer değerler 0,01–100 mm. `double` yalnızca true iken yazılır.
+ */
+function sanitizeDecal(g: Record<string, unknown>): DecalGeom {
+  const out: DecalGeom = { kind: 'decal', profile: cleanLoop(g.profile, 'Kaplama profili') };
+  if (Array.isArray(g.holes) && g.holes.length) {
+    out.holes = g.holes.map((h, i) => cleanLoop(h, `Kaplama boşluğu ${i + 1}`));
+    checkLoopHoles(out.profile, out.holes, 'Kaplama');
+  }
+  if (g.double === true) out.double = true;
+  if (g.lift !== undefined && g.lift !== null && g.lift !== 0) {
+    const l = r4(Number(g.lift));
+    if (!(l >= DECAL_MIN_LIFT && l <= DECAL_MAX_LIFT)) {
+      throw new GeomError(
+        `Kaplama 'lift' (yüzeyden uzaklık) ${mmText(DECAL_MIN_LIFT)}–${DECAL_MAX_LIFT} mm olmalı (yok ya da 0 = varsayılan ${mmText(DECAL_LIFT)} mm; ` +
+          'yüzeye yapışık kaplama taşıyıcı yüzle çakışıp titreşir).',
+      );
+    }
+    if (l !== DECAL_LIFT) out.lift = l;
+  }
+  return out;
+}
+
 /** Arayüzden eklenen yeni parçalar için örnek geometri. */
 export function defaultGeom(shape: GeomShape): PartGeom {
   switch (shape) {
@@ -277,6 +325,9 @@ export function defaultGeom(shape: GeomShape): PartGeom {
     case 'sweep':
       // U biçimli boru: tablada yatay yol, köşeleri yay.
       return { kind: 'sweep', path: [[-20, -10, 0], [-20, 10, 0], [20, 10, 0], [20, -10, 0]], bend: 8, diameter: 6 };
+    case 'decal':
+      // 40 × 20 mm plaka, yüzü +Z.
+      return { kind: 'decal', profile: [[-20, -10], [20, -10], [20, 10], [-20, 10]] };
     case 'mesh':
       throw new GeomError('Mesh parçası dosyadan içe aktarılarak eklenir.');
   }
@@ -305,6 +356,8 @@ export function describeGeom(g: PartGeom | undefined): string {
       const bend = g.bend ? `, köşe yarıçapı ${mmText(g.bend)}` : '';
       return `yol ${g.path.length} nokta, ${mmText(sweepLength(g))} mm, ${g.closed ? 'kapalı' : 'açık'}, ${sec}${bend}${g.frame ? `, çerçeve ${g.frame}` : ''}`;
     }
+    case 'decal':
+      return `profil ${g.profile.length} nokta${g.holes?.length ? `, ${g.holes.length} boşluk` : ''}${g.double ? ', iki yüzlü' : ''}, yüzeyden ${mmText(decalLift(g))} mm`;
     case 'mesh':
       return 'içe aktarılmış ağ';
   }
@@ -1371,7 +1424,7 @@ function sanitizeSweep(g: Record<string, unknown>): SweepGeom {
     if (Array.isArray(g.holes) && g.holes.length) {
       out.holes = g.holes.map((h, i) => cleanLoop(h, `Kesit boşluğu ${i + 1}`));
       if (tooBig(out.holes.flat(2))) throw new GeomError(`Kesit boşlukları: değerler en fazla ${LIMIT}.`);
-      checkSweepHoles(out.profile, out.holes);
+      checkLoopHoles(out.profile, out.holes, 'Kesit');
     }
   } else {
     const d = r4(Number(g.diameter));
@@ -1439,17 +1492,18 @@ function loopsTouch(p: Pt2[], q: Pt2[]): boolean {
 }
 
 /**
- * Süpürme kesitindeki boşluklar: profilin içinde, kenarına değmeyen, birbirini kesmeyen ve kapsamayan çokgenler olmalı (aksi
- * hâlde kapak üçgenlenemez, ağ kapanmaz). Extrude'da bu denetim yok (var olan dosyalar yüklenmeye devam etsin).
+ * Süpürme kesitindeki (`label` 'Kesit') ya da kaplamadaki ('Kaplama') boşluklar: profilin içinde, kenarına değmeyen, birbirini
+ * kesmeyen ve kapsamayan çokgenler olmalı (aksi hâlde kapak / yüz üçgenlenemez). Extrude'da bu denetim yok (var olan dosyalar
+ * yüklenmeye devam etsin).
  */
-function checkSweepHoles(profile: Pt2[], holes: Pt2[][]): void {
+function checkLoopHoles(profile: Pt2[], holes: Pt2[][], label: 'Kesit' | 'Kaplama'): void {
   holes.forEach((h, i) => {
-    const what = `Kesit boşluğu ${i + 1}`;
+    const what = `${label} boşluğu ${i + 1}`;
     if (loopsTouch(h, profile)) throw new GeomError(`${what} profilin kenarına değiyor ya da onu kesiyor; boşluk ile dış çevre arasında et bırakın.`);
     if (!pointInPoly(h[0], profile)) throw new GeomError(`${what} profilin dışında; boşluk köşeleri profilin içinde olmalı.`);
     for (let j = 0; j < i; j++) {
       if (loopsTouch(h, holes[j]) || pointInPoly(h[0], holes[j]) || pointInPoly(holes[j][0], h)) {
-        throw new GeomError(`Kesit boşlukları ${j + 1} ve ${i + 1} birbirine değiyor, kesişiyor ya da biri ötekinin içinde; her boşluk ayrı olmalı.`);
+        throw new GeomError(`${label} boşlukları ${j + 1} ve ${i + 1} birbirine değiyor, kesişiyor ya da biri ötekinin içinde; her boşluk ayrı olmalı.`);
       }
     }
   });
@@ -1543,7 +1597,35 @@ function sweepRaw(g: SweepGeom, seg: number): RawMesh {
   return out;
 }
 
-/** Yerel koordinatlarda indisli, kapalı ağ (normal yok). */
+/**
+ * Düz kaplama: profil + boşluklar earcut ile üçgenlenir, her üçgen +Z'ye bakacak sırada (profilin dönüş yönünden bağımsız),
+ * köşeler z = lift'te; `scale` yalnızca XY'yi büyütür (lift yüzeyden uzaklıktır). Sıfır alanlı üçgenler (doğrusal köşeler)
+ * atılır, earcut'un atladığı doğrusal köşeler (T-kavşağı) onarılır: açık ağda eşsiz kenar olağandır (dış çevre), onarım
+ * yalnızca başka bir eşsiz kenarın ucu üstüne düşen kenarı böler. Ağ açıktır; hacmi yoktur.
+ */
+function decalGeometry(g: DecalGeom, scale: number): THREE.BufferGeometry {
+  const flat = [g.profile, ...(g.holes ?? [])].flat();
+  const toV2 = (l: Pt2[]) => l.map(([a, b]) => new THREE.Vector2(a, b));
+  const faces = THREE.ShapeUtils.triangulateShape(toV2(g.profile), (g.holes ?? []).map(toV2));
+  const z = decalLift(g);
+  const m: RawMesh = { pos: flat.flatMap(([x, y]) => [x * scale, y * scale, z]), idx: [] };
+  for (const [a, b, c] of faces) {
+    const [pa, pb, pc] = [flat[a], flat[b], flat[c]];
+    const [ux, uy, vx, vy] = [pb[0] - pa[0], pb[1] - pa[1], pc[0] - pa[0], pc[1] - pa[1]];
+    const cross = ux * vy - uy * vx;
+    const longest = Math.max(ux * ux + uy * uy, vx * vx + vy * vy, (pc[0] - pb[0]) ** 2 + (pc[1] - pb[1]) ** 2);
+    if (Math.abs(cross) <= 1e-12 * longest) continue;
+    if (cross > 0) m.idx.push(a, b, c);
+    else m.idx.push(a, c, b);
+  }
+  fixTJunctions(m);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(m.pos, 3));
+  geo.setIndex(m.idx);
+  return geo;
+}
+
+/** Yerel koordinatlarda indisli, kapalı ağ (normal yok; `decal` kalınlıksız açık ağdır). */
 export function buildGeomIndexed(geom: PartGeom, params: Record<string, number>, seg: number): THREE.BufferGeometry {
   const scale = params.scale ?? 1;
   switch (geom.kind) {
@@ -1555,6 +1637,8 @@ export function buildGeomIndexed(geom: PartGeom, params: Record<string, number>,
       return finish(loftRaw(geom, seg), geom.axis, scale);
     case 'sweep':
       return finish(sweepRaw(geom, seg), 'z', scale);
+    case 'decal':
+      return decalGeometry(geom, scale);
     case 'hull': {
       const g = hullGeometry(geom, seg);
       if (scale !== 1) g.scale(scale, scale, scale);
