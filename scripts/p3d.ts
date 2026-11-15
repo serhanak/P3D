@@ -1220,7 +1220,9 @@ async function main(): Promise<void> {
       });
       console.log(source);
       for (const w of r.warnings ?? []) console.log(`⚠ ${w}`);
-      const culled = r.culled !== undefined ? `; ${r.culled.toLocaleString('tr-TR')} gizli üçgen atıldı, ${r.triangles!.toLocaleString('tr-TR')} üçgen kaldı` : '';
+      const tr = (v: number) => v.toLocaleString('tr-TR');
+      const repair = r.added ? `, birleşim çizgisi onarımı ${tr(r.added)} ekledi` : '';
+      const culled = r.culled !== undefined ? `; ${tr(r.culled)} gizli üçgen atıldı${repair}, ${tr(r.triangles!)} üçgen kaldı` : '';
       console.log(`✓ ${r.parts} parça${has('--merge') ? ' birleştirildi (tek gövde)' : ''} → ${r.file} (${r.format.toUpperCase()}, ${kb(r.bytes)}${culled})`);
       return;
     }

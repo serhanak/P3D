@@ -402,8 +402,9 @@ export interface ExportResult {
   /** Dosyaya giren parça sayısı (birleştirmede birleştirilen parça sayısı). */
   parts: number;
   bytes: number;
-  /** GLB `cullHidden`: atılan üçgen sayısı ve dosyadaki üçgen sayısı. */
+  /** GLB `cullHidden`: atılan üçgen sayısı, T-kavşağı onarımının eklediği üçgen sayısı ve dosyadaki üçgen sayısı. */
   culled?: number;
+  added?: number;
   triangles?: number;
   /** Ör. STL/3MF'te atlanan kaplamalar (decal: kalınlıksız, baskıya girmez). */
   warnings?: string[];
@@ -460,7 +461,7 @@ export async function exportFile(project: Project, outPath: string, opts: Export
   }
   const meshes = () => (opts.merge ? [mergedMesh(project, parts)] : parts.map((p) => worldMesh(project, p)));
   let data: Uint8Array;
-  let stats: { culled: number; triangles: number } | undefined;
+  let stats: { culled: number; added: number; triangles: number } | undefined;
   switch (format) {
     case 'stl':
       data = new Uint8Array(buildStl(meshes()));
@@ -474,7 +475,7 @@ export async function exportFile(project: Project, outPath: string, opts: Export
     case 'glb': {
       const r = glbBuild(project, { parts: opts.parts, skeleton: opts.skeleton, units: opts.units, normals: opts.normals, cullHidden: opts.cullHidden });
       data = r.data;
-      if (opts.cullHidden) stats = { culled: r.culled, triangles: r.triangles };
+      if (opts.cullHidden) stats = { culled: r.culled, added: r.added, triangles: r.triangles };
       break;
     }
   }

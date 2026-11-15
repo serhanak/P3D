@@ -316,7 +316,9 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
   `camera` (`eye` zorunlu) `perspectiveCamera`'dadır; yakın düzlem uzaklıkla orantılıdır.
 - GLB: malzeme anahtarı renk + saydamlık + iki yüzlülük. `cullHidden` (yalnız GLB; kural `src/cull.ts`: ε küçültülüp ε dışarı
   itilmiş üçgenin ağırlık merkezi **aynı** başka kapalı, opak katının içindeyse ve o katının hiçbir üçgeni onu kesmiyorsa atılır;
-  saydam parça örtmez) tümü gizli parçanın düğümünü ağsız yazar. `check --profile game` gizli üçgen için **ayrı uyarı vermez**
+  saydam parça örtmez) tümü gizli parçanın düğümünü ağsız yazar. Ayıklamadan sonra birleşim çizgisi onarımı (`cullAndRepair`):
+  atılan üçgen köşeleri T noktası adayıdır, yalnız çatlak yapan kalan kenarlar bölünür; ayıklama üçgen sayısını hiç artırmaz
+  (parçanın bölme maliyeti atılanlara eşit/fazlaysa atılanlar geri konur). Seçeneksiz çıktı bayt bayt aynı kalmalı. `check --profile game` gizli üçgen için **ayrı uyarı vermez**
   (temiz model temiz kalmalı); yalnız bütçe aşımı uyarısına not ekler, `--cull-hidden` ile bütçeyi ayıklanmış sayıyla hesaplar.
 - Eskiz adları WebGL `Sprite`'tır (CSS etiketi değil; `snapshot` görüntüsüne girsin diye), piksel ölçeği `onBeforeRender`'da
   kameradan hesaplanır. Doku önbelleği `SketchView` içinde temizlenir; sprite'ların paylaşılan geometrisi dispose edilmez.

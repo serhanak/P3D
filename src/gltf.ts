@@ -5,7 +5,7 @@
 // Eksen: P3D Z yukarı, mm, önü −Y → glTF Y yukarı, metre (varsayılan), önü +Z: (x, y, z) → (x, z, −y) × ölçek.
 // Bu öz (det +1) bir dönüşümdür; üçgen sarımı değişmez. Unreal'in içe aktarıcısı glTF'yi kendi Z yukarı / cm düzenine çevirir.
 import * as THREE from 'three';
-import { hiddenTriangles } from './cull';
+import { cullAndRepair } from './cull';
 import { findGroup, findPartExact, partMatrix } from './engine';
 import { MESH_CREASE } from './geom';
 import { displayOpacity, exportGeometry, exportableParts, isDecal } from './model';
@@ -41,6 +41,8 @@ export interface GlbBuild {
   triangles: number;
   /** `cullHidden` ile atılan üçgen sayısı. */
   culled: number;
+  /** `cullHidden`: T-kavşağı onarımının eklediği üçgen sayısı (`triangles`'a dahil). */
+  added: number;
 }
 
 type V3 = [number, number, number];
@@ -113,24 +115,33 @@ function partTriangles(project: Project, part: Part, s: number): TriMesh {
 }
 
 /**
- * Gizli üçgenleri atar (yerinde): katılar birbirini örter, kaplamalar dışarıda kalır. Dönen: atılan üçgen sayısı. Üçgen sırası
- * korunur.
+ * Gizli üçgenleri atar ve birleşim çizgilerindeki T-kavşaklarını onarır (yerinde; bkz. cull.ts → cullAndRepair): katılar birbirini
+ * örter, kaplamalar dışarıda kalır. Onarımın eklediği köşe, öbür parçanın köşesinin dünya (float32) değeridir; glTF konumu aynı
+ * formülle hesaplandığından o köşeyle bit bit aynıdır. Dönen: atılan ve eklenen üçgen sayısı. Üçgen sırası korunur.
  */
-function cullItems(items: { part: Part; mesh: TriMesh }[]): number {
+function cullItems(items: { part: Part; mesh: TriMesh }[], s: number): { culled: number; added: number } {
   const solids = items.filter((it) => !isDecal(it.part));
   // Görünen saydamlığı < 1 olan parça örtmez (cam kabindeki koltuk görünür); kendisi opak parçalarca ayıklanabilir.
-  const hidden = hiddenTriangles(solids.map((it) => ({ pos: it.mesh.world, tris: it.mesh.tris, occluder: displayOpacity(it.part) >= 1 })));
-  let culled = 0;
+  const r = cullAndRepair(solids.map((it) => ({ pos: it.mesh.world, tris: it.mesh.tris, occluder: displayOpacity(it.part) >= 1 })));
   solids.forEach((it, k) => {
-    const h = hidden[k];
-    const kept: number[] = [];
-    for (let t = 0; t < h.length; t++) {
-      if (h[t]) culled++;
-      else kept.push(it.mesh.tris[3 * t], it.mesh.tris[3 * t + 1], it.mesh.tris[3 * t + 2]);
+    it.mesh.tris = r.tris[k];
+    const extra = r.added[k];
+    if (!extra.length) return;
+    const n = it.mesh.world.length;
+    const world = new Float32Array(n + extra.length);
+    world.set(it.mesh.world as Float32Array);
+    world.set(extra, n);
+    const pos = new Float32Array(n + extra.length);
+    pos.set(it.mesh.pos);
+    for (let i = n; i < world.length; i += 3) {
+      pos[i] = world[i] * s;
+      pos[i + 1] = world[i + 2] * s;
+      pos[i + 2] = -world[i + 1] * s;
     }
-    it.mesh.tris = kept;
+    it.mesh.world = world;
+    it.mesh.pos = pos;
   });
-  return culled;
+  return { culled: r.culled.reduce((a, b) => a + b, 0), added: r.split.reduce((a, b) => a + b, 0) };
 }
 
 /** Gölgelenmiş ağ: köşe başına konum + normal, üçgen indisleri. */
@@ -398,7 +409,7 @@ export function glbBuild(project: Project, opts: GlbOptions = {}): GlbBuild {
     .filter((it) => it.mesh.tris.length > 0);
   if (!items.length) throw new Error('Dışa aktarılacak görünür katı parça yok.');
   // Ayıklama, parça listesi süzüldükten sonra: tüm üçgenleri gizli parça listede (düğümü / eklemi) kalır.
-  const culled = opts.cullHidden ? cullItems(items) : 0;
+  const { culled, added } = opts.cullHidden ? cullItems(items, s) : { culled: 0, added: 0 };
   const parts = items.map((it) => it.part);
   const smooth = opts.normals === 'smooth';
   const shade = (m: TriMesh, origin: V3) => (smooth ? smoothShaded(m, origin, MESH_CREASE) : flatShaded(m, origin));
@@ -525,5 +536,5 @@ export function glbBuild(project: Project, opts: GlbOptions = {}): GlbBuild {
   const data = bin.bytes();
   json.buffers = [{ byteLength: data.length }];
   const triangles = items.reduce((n, it) => n + it.mesh.tris.length / 3, 0);
-  return { data: glb(json, data), triangles, culled };
+  return { data: glb(json, data), triangles, culled, added };
 }

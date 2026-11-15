@@ -14,6 +14,15 @@
 // hassasiyetinin ~16 katı). İç teğet yarıçapı 2ε'dan küçük üçgen yarıçapının yarısı kadar küçültülür. Alanı sıfır üçgen kalır.
 // Örtücü: kapalı (her yönlü kenarın tam bir karşılığı var) ve `occluder` false olmayan ağ (saydam parça örtmez).
 //
+// T-kavşağı onarımı (`cullAndRepair`, Boltrush isteği #21): parçalar arasındaki birleşim çizgilerinde kenar uçları çoğu zaman
+// eşleşmez (bir parçanın köşesi öbürünün kenarının ortasına düşer). Ayıklamadan önce bu kıl payı açıklığın arkasında gizli yüz
+// vardı; o yüz atılınca çizgide tek piksellik delikler görünür. Onarım: atılan üçgenlerin köşeleri (aday T noktaları) kalan
+// üçgenlerin kenarlarında iç nokta olarak aranır (geometrik eşleşme, ε toleransı, uçlara ε'dan yakın olan sayılmaz) ve o kenarı
+// kullanan her kalan üçgen o noktada bölünür (aynı kenarda birden çok nokta sırayla). Yalnızca çatlak yapanlar bölünür: adayın
+// kalan bir kenarı bölünecek kenarla aynı doğru üzerinde olmalı (iki parçanın yüzeyleri o doğru boyunca birleşir). Kenarın içine
+// düşen ama kenarları o doğruda olmayan köşe (küçük kutunun köşesi büyük yüzün köşegeninde) çatlak yapmaz; bölmek yalnızca üçgen
+// eklerdi. Yeni köşe adayın kendi dünya koordinatıdır (öbür parçanın köşesiyle bit bit aynı float32).
+//
 // Koordinatlar dünya mm'sidir (eksen önemsiz); girdi `worldMesh` ile aynı biçimdir (köşeler + üçgen indisleri).
 
 /** Ayıklama girdisi: dünya koordinatlarında köşeler (x, y, z …) ve üçgen indisleri. */
@@ -182,6 +191,217 @@ export function hiddenTriangles(meshes: CullMesh[]): Uint8Array[] {
     }
   }
   return out;
+}
+
+/** Ayıklama + T-kavşağı onarımı sonucu (ağ başına). */
+export interface CullOutcome {
+  /**
+   * Kalan üçgenler (indisler). Sıra korunur; bölünen üçgenin yerinde parçaları durur. `pos.length / 3` ve üstü indisler
+   * `added` köşeleridir.
+   */
+  tris: number[][];
+  /** Onarımın eklediği köşeler (dünya mm, x y z …): başka bir parçanın köşesiyle aynı değerler. */
+  added: number[][];
+  /** Atılan üçgen sayısı. */
+  culled: number[];
+  /** Onarımın eklediği üçgen sayısı (her bölme bir üçgen ekler). */
+  split: number[];
+  /** Son atılma maskesi (girdi üçgeni başına 1 = atıldı; net kayıp kuralıyla geri konanlar 0). */
+  hidden: Uint8Array[];
+}
+
+/**
+ * Gizli üçgenleri atar ve atılanların arkasında kalan T-kavşaklarını onarır (bkz. dosya başı). Hiçbir üçgen atılmazsa onarım
+ * yapılmaz: kalan üçgenler girdinin aynısıdır. GLB `cullHidden` ve `check --cull-hidden` bunu kullanır (sayılar tutarlı).
+ *
+ * Net kayıp kuralı: ayıklama üçgen sayısını artırmaz. Her parçanın atılan üçgenlerinin köşelerinden doğan bölmeler (başka parçalarda
+ * da olabilir) o parçanın maliyetidir; maliyet atılanı aşan ya da ona eşit olan parçanın atılan üçgenleri geri konur (geri konan yüz
+ * çatlağı zaten kapatır) ve onarım kalan kümeyle baştan hesaplanır. Başka bir parçanın aynı noktadaki adayı bölme gerektiriyorsa o
+ * bölme kalır (su geçirmezlik bozulmaz). Geri konan yüzler başka adayların bölmelerini artırabileceğinden kural kararlı olana dek
+ * tekrarlanır; her geçiş en az bir parçayı geri koyar. Sonuçta her bölme atılan bir köşeye bağlı ve parça başına bölme < atılan
+ * olduğundan toplam üçgen sayısı, bir şey atılmışsa kesin azalır.
+ */
+export function cullAndRepair(meshes: CullMesh[]): CullOutcome {
+  const hidden = hiddenTriangles(meshes);
+  // Tolerans: ayıklamanın ε'u, sahnenin en büyük ölçeğiyle (kutu boyu ve koordinat büyüklüğü).
+  let scale = 0;
+  for (const m of meshes) {
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < m.tris.length; i++) {
+      for (let c = 0; c < 3; c++) {
+        const x = m.pos[m.tris[i] * 3 + c];
+        if (x < lo[c]) lo[c] = x;
+        if (x > hi[c]) hi[c] = x;
+      }
+    }
+    if (m.tris.length) scale = Math.max(scale, ...[0, 1, 2].map((c) => hi[c] - lo[c]), ...lo.map(Math.abs), ...hi.map(Math.abs));
+  }
+  const tol = epsOf(scale);
+  for (;;) {
+    const r = repairPass(meshes, hidden, tol);
+    const restore = r.culled.flatMap((n, k) => (n > 0 && r.cost[k] >= n ? [k] : []));
+    if (!restore.length) return { tris: r.tris, added: r.added, culled: r.culled, split: r.split, hidden };
+    for (const k of restore) hidden[k].fill(0);
+  }
+}
+
+/**
+ * Tek onarım geçişi (`hidden` = atılacak üçgenler): kalan üçgenler, eklenen köşeler, bölme sayıları ve parça başına maliyet
+ * (o parçanın atılan köşelerinden doğan bölmeler; köşe birden çok parçanın atılan üçgenindeyse her birine sayılır).
+ */
+function repairPass(meshes: CullMesh[], hidden: Uint8Array[], tol: number): Omit<CullOutcome, 'hidden'> & { cost: number[] } {
+  const kept: number[][] = [];
+  const culled = hidden.map((h, k) => {
+    const t: number[] = [];
+    let n = 0;
+    const src = meshes[k].tris;
+    for (let i = 0; i < h.length; i++) {
+      if (h[i]) n++;
+      else t.push(src[3 * i], src[3 * i + 1], src[3 * i + 2]);
+    }
+    kept.push(t);
+    return n;
+  });
+  const added = meshes.map((): number[] => []);
+  const split = meshes.map(() => 0);
+  const cost = meshes.map(() => 0);
+  if (!culled.some((n) => n > 0)) return { tris: kept, added, culled, split, cost };
+
+  // Aday T noktaları: atılan üçgenlerin köşeleri (benzersiz, dünya mm) ve sahipleri (köşesi atılan parçalar).
+  const cand: number[] = [];
+  const owners: Set<number>[] = [];
+  const candIndex = new Map<string, number>();
+  meshes.forEach((m, k) => {
+    for (let t = 0; t < hidden[k].length; t++) {
+      if (!hidden[k][t]) continue;
+      for (let j = 0; j < 3; j++) {
+        const v = m.tris[3 * t + j] * 3;
+        const key = `${m.pos[v]},${m.pos[v + 1]},${m.pos[v + 2]}`;
+        let p = candIndex.get(key);
+        if (p === undefined) {
+          p = owners.length;
+          candIndex.set(key, p);
+          owners.push(new Set());
+          cand.push(m.pos[v], m.pos[v + 1], m.pos[v + 2]);
+        }
+        owners[p].add(k);
+      }
+    }
+  });
+  const tol2 = tol * tol;
+  // Adayın kalan üçgenlerdeki komşuları (adayla aynı konumdaki köşeden çıkan kenarların öbür uçları): çatlak yalnızca adayın kalan
+  // bir kenarı bölünecek kenarla aynı doğru üzerindeyse oluşur (iki parçanın yüzeyleri o doğru boyunca birleşir). Kenarın içine düşen
+  // ama ona dik/eğik kenarları olan köşe (ör. küçük kutunun köşesi büyük yüzün köşegeninde) çatlak yapmaz: o yüz su geçirmezdir.
+  const nbrs = new Map<number, number[]>();
+  meshes.forEach((m, k) => {
+    const t = kept[k];
+    for (let i = 0; i < t.length; i++) {
+      const v = t[i] * 3;
+      const p = candIndex.get(`${m.pos[v]},${m.pos[v + 1]},${m.pos[v + 2]}`);
+      if (p === undefined) continue;
+      const list = nbrs.get(p) ?? nbrs.set(p, []).get(p)!;
+      const tri = i - (i % 3);
+      for (const j of [tri + ((i - tri + 1) % 3), tri + ((i - tri + 2) % 3)]) list.push(m.pos[t[j] * 3], m.pos[t[j] * 3 + 1], m.pos[t[j] * 3 + 2]);
+    }
+  });
+  /** Adayın kalan kenarlarından biri a–d doğrusu üzerinde mi (öbür ucu doğruya tol'den yakın). */
+  const collinear = (p: number, ax: number, ay: number, az: number, dx: number, dy: number, dz: number, L2: number) => {
+    const list = nbrs.get(p);
+    if (!list) return false;
+    for (let i = 0; i < list.length; i += 3) {
+      const [qx, qy, qz] = [list[i] - ax, list[i + 1] - ay, list[i + 2] - az];
+      const s = (qx * dx + qy * dy + qz * dz) / L2;
+      if ((qx - s * dx) ** 2 + (qy - s * dy) ** 2 + (qz - s * dz) ** 2 <= tol2) return true;
+    }
+    return false;
+  };
+  // Adaylar x'e göre sıralı (üçgen kutusundaki adaylar ikili aramayla).
+  const nc = cand.length / 3;
+  const order = Array.from({ length: nc }, (_, i) => i).sort((a, b) => cand[3 * a] - cand[3 * b]);
+  const xs = order.map((i) => cand[3 * i]);
+  const lowerBound = (x: number) => {
+    let lo = 0;
+    let hi = xs.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (xs[mid] < x) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+
+  meshes.forEach((m, k) => {
+    const nv = m.pos.length / 3;
+    const extra = added[k];
+    const coord = (v: number, c: number) => (v < nv ? m.pos[3 * v + c] : extra[3 * (v - nv) + c]);
+    /**
+     * p (aday) u–v kenarında çatlak yapan T noktası mı: kenarın iç noktası (kenara tol'den yakın, uçlara tol'den uzak, izdüşümü
+     * kenarın içinde) ve adayın kalan bir kenarı aynı doğru üzerinde.
+     */
+    const interior = (u: number, v: number, p: number) => {
+      const [ax, ay, az] = [coord(u, 0), coord(u, 1), coord(u, 2)];
+      const [dx, dy, dz] = [coord(v, 0) - ax, coord(v, 1) - ay, coord(v, 2) - az];
+      const [qx, qy, qz] = [cand[3 * p] - ax, cand[3 * p + 1] - ay, cand[3 * p + 2] - az];
+      const L2 = dx * dx + dy * dy + dz * dz;
+      const s = (qx * dx + qy * dy + qz * dz) / L2;
+      if (!(s > 0 && s < 1)) return false;
+      if (qx * qx + qy * qy + qz * qz <= tol2) return false;
+      if ((qx - dx) ** 2 + (qy - dy) ** 2 + (qz - dz) ** 2 <= tol2) return false;
+      if ((qx - s * dx) ** 2 + (qy - s * dy) ** 2 + (qz - s * dz) ** 2 > tol2) return false;
+      return collinear(p, ax, ay, az, dx, dy, dz, L2);
+    };
+    const newIndex = new Map<number, number>();
+    const vertexOf = (p: number) => {
+      let v = newIndex.get(p);
+      if (v === undefined) {
+        v = nv + extra.length / 3;
+        extra.push(cand[3 * p], cand[3 * p + 1], cand[3 * p + 2]);
+        newIndex.set(p, v);
+      }
+      return v;
+    };
+    const src = kept[k];
+    const out: number[] = [];
+    for (let t = 0; t < src.length; t += 3) {
+      const tri = [src[t], src[t + 1], src[t + 2]];
+      const lo = [0, 1, 2].map((c) => Math.min(...tri.map((v) => coord(v, c))) - tol);
+      const hi = [0, 1, 2].map((c) => Math.max(...tri.map((v) => coord(v, c))) + tol);
+      const hits: number[] = [];
+      for (let r = lowerBound(lo[0]); r < xs.length && xs[r] <= hi[0]; r++) {
+        const p = order[r];
+        if (cand[3 * p + 1] < lo[1] || cand[3 * p + 1] > hi[1] || cand[3 * p + 2] < lo[2] || cand[3 * p + 2] > hi[2]) continue;
+        if (interior(tri[0], tri[1], p) || interior(tri[1], tri[2], p) || interior(tri[2], tri[0], p)) hits.push(p);
+      }
+      if (!hits.length) {
+        out.push(tri[0], tri[1], tri[2]);
+        continue;
+      }
+      // Sırayla böl: her nokta, kenarında bulunduğu alt üçgeni (u, v, w) → (u, P, w) + (P, v, w) yapar (sarım korunur).
+      let sub: number[][] = [tri];
+      for (const p of hits) {
+        const next: number[][] = [];
+        let done = false;
+        for (const s of sub) {
+          const e = done ? -1 : [0, 1, 2].find((i) => interior(s[i], s[(i + 1) % 3], p)) ?? -1;
+          if (e < 0) {
+            next.push(s);
+            continue;
+          }
+          const [u, v, w] = [s[e], s[(e + 1) % 3], s[(e + 2) % 3]];
+          const P = vertexOf(p);
+          next.push([u, P, w], [P, v, w]);
+          done = true;
+          for (const o of owners[p]) cost[o]++;
+        }
+        sub = next;
+      }
+      split[k] += sub.length - 1;
+      for (const s of sub) out.push(s[0], s[1], s[2]);
+    }
+    kept[k] = out;
+  });
+  return { tris: kept, added, culled, split, cost };
 }
 
 // ---------------------------------------------------------------------------

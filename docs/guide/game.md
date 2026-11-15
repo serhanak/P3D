@@ -54,7 +54,18 @@ p3d export araba.glb [--file model.p3d.json] [--units m|mm] [--normals flat|smoo
   birlikte örttüğü üçgen, aynı yerde duran eş parçalar (z-fighting). **Saydam parça örtmez** (görünen opaklığı < 1: cam kabindeki
   koltuk kalır); kendisi opak parçalarca ayıklanabilir. Düğümler, gruplar, pivot ve iskelet aynı kalır; tüm üçgenleri gizli parçanın
   düğümü ağsız yazılır. Kaplamalar ne atılır ne atar. Ayıklanan ağ kapalı değildir: STL/3MF/OBJ'de seçenek hata verir. Çıktı
-  satırı atılan ve kalan üçgen sayısını söyler.
+  satırı atılan, eklenen ve kalan üçgen sayısını söyler.
+  - **Birleşim çizgileri su geçirmez kalır:** iki parçanın aynı düzlemdeki yüzleri bir çizgide birleşip kenar uçları eşleşmiyorsa
+    (bir parçanın köşesi öbürünün kenarının ortasına düşüyorsa: ör. farklı kalınlıkta üst üste iki kutunun uç yüzleri), atılan yüz
+    bu kıl payı açıklığın arkasını kapatıyordu. T-kavşağı onarımı o kenarı kullanan üçgenleri o köşede böler; birkaç üçgen eklenebilir
+    (4 prizma: 36 atılır / 0 eklenir; Benchy: 3.629 / 5). Yalnızca çatlak yapan T noktaları bölünür: köşesi bir yüzün köşegenine düşen
+    kutu gibi durumlar bölünmez (o yüz zaten su geçirmezdir). **Ayıklama üçgen sayısını hiçbir zaman artırmaz:** bir parçanın atılan
+    üçgenlerinin doğurduğu bölmeler atılanlara eşit ya da fazlaysa o parçanın atılanları geri konur (ör. farklı kalınlıkta üst üste iki
+    kutu: 2 atılırdı, 8 eklenirdi → hiçbir şey atılmaz, çıktı seçeneksizle aynı). `check --cull-hidden` aynı kuralla sayar. Bölünen
+    siluet kenarlarında piksel kapsaması yuvarlamadan ötürü tek tük bir piksel kayabilir (çatlak değil).
+  - **Tüketici köşe konumlarını nicemlememeli ya da parçaları ayrı ayrı sıkıştırmamalı:** birleşim çizgisindeki köşeler ayrı
+    düğümlerde aynı konumdadır; ayrı ayrı nicemlenince ayrışır ve çatlar. Godot'nun GLB yükleyicisi varsayılan olarak köşe
+    konumlarını 16 bit'e nicemler: `GLTFDocument.append_from_file(yol, durum, 64)` (bayrak 64 = sıkıştırmayı kapat) ile yükleyin.
 - Kaplama (`decal`) parça gibi yazılır; iki yüzlüsünün malzemesi `doubleSided: true`, adı `P3D_rrggbb[_aNN]_ds` (malzemeler renk,
   saydamlık ve iki yüzlülüğe göre ayrışır). OBJ/MTL'de iki yüzlülük yoktur: iki yüzlü kaplama için GLB kullanın.
 - **`--skeleton` (Unreal Chaos Vehicles):** tek bir skinned mesh; kökte `root` eklemi, her grup için pivotunda bir eklem

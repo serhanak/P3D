@@ -5,7 +5,7 @@
 // Kaplamalar (decal) kalınlıksız açık ağdır: ince parça / tabla / gizli yüz kurallarına girmez; z-fighting'de yalnızca gerçekten
 // çakışık (aynı düzlemde) oldukları yüzler bildirilir — taşıyıcı yüzden `lift` kadar ayrık kaplama temizdir.
 import * as THREE from 'three';
-import { hiddenTriangles } from './cull';
+import { cullAndRepair } from './cull';
 import { partBox } from './engine';
 import { worldMesh } from './io';
 import type { WorldMesh } from './meshio';
@@ -170,13 +170,13 @@ function degenerateCount(m: WorldMesh): number {
 }
 
 /**
- * Parça başına gizli üçgen sayısı (GLB `cullHidden` ile aynı kural ve girdi): kaplamalar girmez, görünen saydamlığı < 1 olan
- * parça örtmez.
+ * Parça başına ayıklama sayıları (GLB `cullHidden` ile aynı kural, girdi ve T-kavşağı onarımı): atılan, onarımın eklediği ve
+ * kalan üçgen. Kaplamalar girmez, görünen saydamlığı < 1 olan parça örtmez.
  */
-function hiddenCounts(solids: Part[], meshOf: (p: Part) => WorldMesh): Map<Part, number> {
+function cullCounts(solids: Part[], meshOf: (p: Part) => WorldMesh): Map<Part, { culled: number; added: number; tris: number }> {
   const bodies = solids.filter((p) => !isDecal(p));
-  const hidden = hiddenTriangles(bodies.map((p) => ({ ...meshOf(p), occluder: displayOpacity(p) >= 1 })));
-  return new Map(bodies.map((p, k) => [p, hidden[k].reduce((s, h) => s + h, 0)]));
+  const r = cullAndRepair(bodies.map((p) => ({ ...meshOf(p), occluder: displayOpacity(p) >= 1 })));
+  return new Map(bodies.map((p, k) => [p, { culled: r.culled[k], added: r.split[k], tris: r.tris[k].length / 3 }]));
 }
 
 /**
@@ -186,14 +186,23 @@ function hiddenCounts(solids: Part[], meshOf: (p: Part) => WorldMesh): Map<Part,
  */
 function gameChecks(solids: Part[], meshOf: (p: Part) => WorldMesh, maxTris: number, seg: number, cullHidden: boolean): CheckIssue[] {
   const out: CheckIssue[] = [];
-  const hidden = cullHidden ? hiddenCounts(solids, meshOf) : undefined;
-  const counts = solids.map((p) => ({ part: p, tris: meshOf(p).tris.length / 3 - (hidden?.get(p) ?? 0) }));
+  const cull = cullHidden ? cullCounts(solids, meshOf) : undefined;
+  const counts = solids.map((p) => ({ part: p, tris: cull?.get(p)?.tris ?? meshOf(p).tris.length / 3 }));
   const total = counts.reduce((s, c) => s + c.tris, 0);
   if (total > maxTris) {
-    const culled = hidden ? [...hidden.values()].reduce((s, n) => s + n, 0) : 0;
-    const hiddenNow = hidden ? 0 : [...hiddenCounts(solids, meshOf).values()].reduce((s, n) => s + n, 0);
-    const cullNote = hidden ? ` (${culled.toLocaleString('tr-TR')} gizli üçgen atıldıktan sonra)` : '';
-    const cullHint = hiddenNow > 0 ? ` ${hiddenNow.toLocaleString('tr-TR')} üçgen görünmez; \`export --cull-hidden\` ile atılır (\`check --cull-hidden\` bütçeyi ona göre sayar).` : '';
+    const sum = (m: Map<Part, { culled: number; added: number }>, key: 'culled' | 'added') => [...m.values()].reduce((s, c) => s + c[key], 0);
+    const now = cull ? undefined : cullCounts(solids, meshOf);
+    const tr = (n: number) => n.toLocaleString('tr-TR');
+    // Onarım (T-kavşağı) birkaç üçgen ekler: sayı GLB'deki ile aynı.
+    const cullNote = cull
+      ? ` (${tr(sum(cull, 'culled'))} gizli üçgen atıldıktan${sum(cull, 'added') ? `, T-kavşağı onarımı ${tr(sum(cull, 'added'))} üçgen ekledikten` : ''} sonra)`
+      : '';
+    const hiddenNow = now ? sum(now, 'culled') : 0;
+    const addedNow = now ? sum(now, 'added') : 0;
+    const cullHint =
+      hiddenNow > 0
+        ? ` ${tr(hiddenNow)} üçgen görünmez; \`export --cull-hidden\` ile atılır${addedNow ? ` (birleşim çizgisi onarımı ${tr(addedNow)} üçgen ekler)` : ''} (\`check --cull-hidden\` bütçeyi ona göre sayar).`
+        : '';
     counts.sort((a, b) => b.tris - a.tris);
     const list = counts.map((c) => `${c.part.name} ${c.tris.toLocaleString('tr-TR')}`).join(', ');
     // En çok üçgenli yuvarlak parçalar (bütçenin ≥ %5'i): parça başına çözünürlükle tek tek sadeleşir.

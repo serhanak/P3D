@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Op } from '../shared/ops';
 import { checkProject } from '../src/check';
 import { initCsg } from '../src/csg';
-import { hiddenTriangles } from '../src/cull';
+import { cullAndRepair, hiddenTriangles } from '../src/cull';
 import { applyOps } from '../src/engine';
 import { exportFile } from '../src/files';
 import { buildGlb, glbBuild } from '../src/gltf';
@@ -284,4 +284,233 @@ describe('gizli iç yüz ayıklama', () => {
     expect(print.status).not.toBe(0);
     expect(print.stderr).toContain('--cull-hidden yalnızca --profile game ile kullanılır');
   }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// T-kavşağı onarımı (Boltrush isteği #21): ayıklanan yüz birleşim çizgisinin arkasındaki kıl payı açıklığı kapatıyordu.
+
+/**
+ * T-kavşakları: bir köşenin (konum olarak) başka bir kenarın iç noktası olduğu (köşe, kenar) çiftleri. `all` hepsi; `cracks`
+ * yalnızca çatlak yapanlar — köşenin bir kenarı da o kenarla aynı doğru üzerinde (iki yüzey o doğru boyunca birleşiyor; köşesi
+ * bir yüzün köşegenine düşen kutu gibi durumlar çatlak yapmaz: o yüz su geçirmez) ve köşe `focus` noktalarından biri, yani arkasındaki
+ * yüz atılmış bir köşe (arkası kapalı T-kavşağı görünmez; ayıklamasız ağda da vardır). Üçgen listesi düz konumlardır (üçgen başına 9
+ * sayı); tolerans konum biriminde.
+ */
+function tJunctions(soup: number[], tol: number, focus: number[][]): { all: number; cracks: number } {
+  const key = (i: number) => `${soup[i].toFixed(6)},${soup[i + 1].toFixed(6)},${soup[i + 2].toFixed(6)}`;
+  const verts = new Map<string, { p: number[]; nbrs: number[][] }>();
+  const edges = new Map<string, [number[], number[]]>();
+  for (let t = 0; t < soup.length; t += 9) {
+    for (let k = 0; k < 3; k++) {
+      const [a, b, c] = [t + 3 * k, t + 3 * ((k + 1) % 3), t + 3 * ((k + 2) % 3)];
+      const v = verts.get(key(a)) ?? verts.set(key(a), { p: soup.slice(a, a + 3), nbrs: [] }).get(key(a))!;
+      v.nbrs.push(soup.slice(b, b + 3), soup.slice(c, c + 3));
+      const [ka, kb] = [key(a), key(b)].sort();
+      edges.set(`${ka}|${kb}`, [soup.slice(a, a + 3), soup.slice(b, b + 3)]);
+    }
+  }
+  const offLine = (x: number[], u: number[], d: number[], L2: number) => {
+    const q = [x[0] - u[0], x[1] - u[1], x[2] - u[2]];
+    const s = (q[0] * d[0] + q[1] * d[1] + q[2] * d[2]) / L2;
+    return { s, q, dist: Math.hypot(q[0] - s * d[0], q[1] - s * d[1], q[2] - s * d[2]) };
+  };
+  let all = 0;
+  let cracks = 0;
+  for (const [u, v] of edges.values()) {
+    const d = [v[0] - u[0], v[1] - u[1], v[2] - u[2]];
+    const L2 = d[0] ** 2 + d[1] ** 2 + d[2] ** 2;
+    for (const { p, nbrs } of verts.values()) {
+      const { s, q, dist } = offLine(p, u, d, L2);
+      if (!(s > 0 && s < 1)) continue;
+      if (Math.hypot(...q) <= tol || Math.hypot(q[0] - d[0], q[1] - d[1], q[2] - d[2]) <= tol) continue;
+      if (dist > tol) continue;
+      all++;
+      if (focus.some((f) => Math.hypot(f[0] - p[0], f[1] - p[1], f[2] - p[2]) <= tol) && nbrs.some((x) => offLine(x, u, d, L2).dist <= tol)) cracks++;
+    }
+  }
+  return { all, cracks };
+}
+
+/**
+ * Kalan üçgenler dünya koordinatında (mm) — ayıklama + onarım (check ile aynı girdi; net kayıp kuralı dahil) ya da yalnız
+ * ayıklama — ve odak: atılan üçgenlerin köşeleri (mm; GLB için `glFocus`).
+ */
+function keptSoup(p: Project, repair: boolean): { soup: number[]; focus: number[][] } {
+  const parts = p.parts.filter((x) => x.visible && !x.role);
+  const meshes = parts.map((x) => ({ ...worldMesh(p, x), occluder: displayOpacity(x) >= 1 }));
+  const soup: number[] = [];
+  const focus: number[][] = [];
+  const r = repair ? cullAndRepair(meshes) : undefined;
+  const hidden = r ? r.hidden : hiddenTriangles(meshes);
+  meshes.forEach((m, k) => {
+    const at = (v: number, c: number) => (v < m.pos.length / 3 ? m.pos[3 * v + c] : r!.added[k][3 * (v - m.pos.length / 3) + c]);
+    for (let t = 0; t < m.tris.length / 3; t++) {
+      for (let j = 0; j < 3; j++) {
+        const v = m.tris[3 * t + j];
+        if (hidden[k][t]) focus.push([m.pos[3 * v], m.pos[3 * v + 1], m.pos[3 * v + 2]]);
+        else if (!r) soup.push(m.pos[3 * v], m.pos[3 * v + 1], m.pos[3 * v + 2]);
+      }
+    }
+    if (r) for (const v of r.tris[k]) soup.push(at(v, 0), at(v, 1), at(v, 2));
+  });
+  return { soup, focus };
+}
+
+/** Odak noktaları glTF koordinatında (metre, Y yukarı): GLB üçgenleriyle karşılaştırmak için. */
+const glFocus = (focus: number[][]) => focus.map(([x, y, z]) => [x * 0.001, z * 0.001, -y * 0.001]);
+
+/** GLB'deki üçgenler sahne koordinatında (düğüm çevirileri uygulanmış; P3D yalnızca çeviri yazar). */
+function glbSoup(bytes: Uint8Array): number[] {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const jsonLen = dv.getUint32(12, true);
+  const json = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + jsonLen)));
+  const bin = bytes.slice(28 + jsonLen).buffer;
+  const read = (i: number) => {
+    const a = json.accessors[i];
+    const v = json.bufferViews[a.bufferView];
+    const n = a.count * (a.type === 'VEC3' ? 3 : 1);
+    const C = a.componentType === 5126 ? Float32Array : a.componentType === 5125 ? Uint32Array : Uint16Array;
+    return Array.from(new C(bin, v.byteOffset, n));
+  };
+  const out: number[] = [];
+  const walk = (ni: number, off: number[]) => {
+    const node = json.nodes[ni];
+    const t = node.translation ?? [0, 0, 0];
+    const o = [off[0] + t[0], off[1] + t[1], off[2] + t[2]];
+    if (node.mesh !== undefined) {
+      for (const prim of json.meshes[node.mesh].primitives) {
+        const pos = read(prim.attributes.POSITION);
+        for (const i of read(prim.indices)) out.push(pos[3 * i] + o[0], pos[3 * i + 1] + o[1], pos[3 * i + 2] + o[2]);
+      }
+    }
+    for (const c of node.children ?? []) walk(c, o);
+  };
+  for (const r of json.scenes[0].nodes) walk(r, [0, 0, 0]);
+  return out;
+}
+
+describe('ayıklama sonrası T-kavşağı onarımı', () => {
+  const P = (name: string, value: number) => ({ name, value }) as never;
+  /** 16 kenarlı prizma, iki düz yanı (±Y) kutunun ön ve arka yüzüyle aynı düzlemde: alt kapak (14 üçgen) atılır, yanların alt
+   * kenarları kutunun üst ön/arka kenarına T-kavşağıyla oturur (4 nokta × 2 üçgen = 8 bölme < 14: onarım kalır). */
+  const flush: Op[] = [
+    box('kutu', 100, Number((60 * Math.cos(Math.PI / 16)).toFixed(4)), 20, at(0, 0, 10)),
+    { op: 'create', shape: 'prism', name: 'prizma', params: [P('sides', 16), P('diameter', 60), P('height', 30)], position: at(0, 0, 35) },
+  ];
+  /**
+   * [ad, işlemler, atılan, eklenen, onarımsız ayıklamada çatlak var mı]. Net kayıp kuralı: iki kutu / ters / yan yana sahnelerinde
+   * onarım (8 / 8 / 4) atılanı (2) aşar; atılanlar geri konur, çıktı seçeneksizle aynı.
+   */
+  const scenes: [string, Op[], number, number, boolean][] = [
+    // Boltrush yeniden üretimi: uç yüzler aynı düzlemde, kalınlığı farklı üst üste iki kutu (üst dar)
+    ['iki kutu', [box('alt', 2000, 430, 360, at(0, 0, 180)), box('ust', 2000, 396, 320, at(0, 0, 520))], 0, 0, true],
+    // Ters: üst geniş, altın üst yüzü atılırdı
+    ['ters', [box('alt', 2000, 396, 360, at(0, 0, 180)), box('ust', 2000, 430, 320, at(0, 0, 520))], 0, 0, true],
+    // Yan yana, farklı kesit (alt yüzler aynı düzlemde)
+    ['yan yana', [box('a', 100, 100, 100, at(-50, 0, 50)), box('b', 100, 60, 60, at(50, 0, 30))], 0, 0, true],
+    ['prizma kutuda (yanlar aynı düzlemde)', flush, 14, 8, true],
+    // Çerçeve + içine oturan ince levha: levhanın yanları atılır; köşeleri çerçevenin dikey iç köşe kenarına düşer ama levhanın o
+    // doğruda kenarı kalmaz (çatlak yok, bölme yok)
+    [
+      'çerçeve + levha',
+      [
+        { op: 'create', shape: 'extrude', name: 'çerçeve', position: at(0, 0, 0), params: [P('height', 10)], geom: { kind: 'extrude', axis: 'z', profile: [[-50, -50], [50, -50], [50, 50], [-50, 50]], frame: 10 } },
+        box('levha', 100, 100, 4, at(0, 0, 0)),
+      ],
+      8,
+      0,
+      false,
+    ],
+    // Plakada kutu: kutunun alt köşeleri plakanın üst yüz köşegenine düşer (çatlak değil, bölme yok)
+    ['köşegen', [box('plaka', 100, 100, 10, at(0, 0, 5)), box('kutu', 20, 20, 20, at(10, 10, 20))], 2, 0, false],
+  ];
+
+  it.each(scenes)('%s: kalan yüzeyde çatlak yapan T-kavşağı yok (dünya, GLB düz/yumuşak, iskelet); sayılar', (_name, ops, culled, added, cracked) => {
+    const p = project(ops);
+    const raw = keptSoup(p, false);
+    const before = tJunctions(raw.soup, 1e-4, raw.focus);
+    expect(before.cracks > 0, 'onarımsız ayıklamada çatlak').toBe(cracked);
+    const fixed = keptSoup(p, true);
+    const after = tJunctions(fixed.soup, 1e-4, fixed.focus);
+    expect(after.cracks, 'onarımlı (dünya)').toBe(0);
+    // Yalnızca çatlak yapan T noktaları bölünür: atılan varsa kalan (çatlaksız) T-kavşakları dokunulmadan kalır.
+    if (culled) expect(after.all).toBe(before.all - before.cracks);
+    const plain = glbBuild(p);
+    const focus = glFocus(fixed.focus);
+    for (const normals of ['flat', 'smooth'] as const) {
+      const r = glbBuild(p, { cullHidden: true, normals });
+      expect([r.culled, r.added, r.triangles]).toEqual([culled, added, plain.triangles - culled + added]);
+      // Net kayıp kuralı: ayıklama üçgen sayısını hiçbir sahnede artırmaz; hiç atılmazsa çıktı seçeneksizle bayt bayt aynı.
+      expect(r.triangles).toBeLessThanOrEqual(plain.triangles);
+      if (!culled) expect(r.data).toEqual(glbBuild(p, { normals }).data);
+      expect(tJunctions(glbSoup(r.data), 1e-7, focus).cracks, `GLB ${normals}`).toBe(0);
+    }
+    // İskelet modunda da (köşeler dünya koordinatında, malzemeye göre birleşmiş)
+    expect(tJunctions(glbSoup(buildGlb(p, { cullHidden: true, skeleton: true })), 1e-7, focus).cracks).toBe(0);
+    // check --cull-hidden bütçesi GLB ile aynı sayıyı kullanır
+    const msg = checkProject(p, { profile: 'game', cullHidden: true, maxTris: 1 })[0].message;
+    const note = added ? `${culled} gizli üçgen atıldıktan, T-kavşağı onarımı ${added} üçgen ekledikten sonra` : `${culled} gizli üçgen atıldıktan sonra`;
+    expect(msg).toContain(`Toplam ${plain.triangles - culled + added} üçgen (${note})`);
+  });
+
+  it('net kayıp kuralı: onarımı atılanı aşan parçanın atılanları geri konur; geri konan yüz çatlağı kapatır', () => {
+    // İki kutu: üst kutunun atılan alt yüzü (2) 8 bölme doğururdu → geri konur, hiçbir şey atılmaz.
+    const p = project(scenes[0][1]);
+    const meshes = p.parts.map((x) => worldMesh(p, x));
+    expect(hiddenTriangles(meshes).map((h) => h.reduce((s, v) => s + v, 0))).toEqual([0, 2]);
+    const r0 = cullAndRepair(meshes);
+    expect({ ...r0, hidden: r0.hidden.map((h) => h.reduce((s, v) => s + v, 0)) }).toEqual({ tris: meshes.map((m) => m.tris), added: [[], []], culled: [0, 0], split: [0, 0], hidden: [0, 0] });
+    // Karışık sahne: kârlı parça ayıklanır, kârsız olan geri konur; toplam azalır, çatlak yok.
+    const q = project([
+      ...flush,
+      box('alt2', 2000, 430, 360, at(5000, 0, 180)),
+      box('ust2', 2000, 396, 320, at(5000, 0, 520)),
+    ]);
+    const plain = glbBuild(q);
+    const r = glbBuild(q, { cullHidden: true });
+    expect([r.culled, r.added, r.triangles]).toEqual([14, 8, plain.triangles - 6]);
+    const fq = keptSoup(q, true);
+    expect(tJunctions(fq.soup, 1e-4, fq.focus).cracks).toBe(0);
+  });
+
+  it('eklenen köşe öbür parçanın köşesiyle bit bit aynı; bölünen üçgenler yüzlerinin normalini korur; GLB yapısı aynı', () => {
+    const p = project(flush);
+    const [alt, ust] = p.parts.map((x) => worldMesh(p, x));
+    const r = cullAndRepair([alt, ust]);
+    expect([r.culled, r.split]).toEqual([[0, 14], [8, 0]]);
+    // Kutuya eklenen 4 köşe, prizmanın alt köşelerinin float32 değerleri
+    const ustVerts = new Set<string>();
+    for (let i = 0; i < ust.pos.length; i += 3) ustVerts.add(`${ust.pos[i]},${ust.pos[i + 1]},${ust.pos[i + 2]}`);
+    const extra = r.added[0];
+    expect(extra).toHaveLength(12);
+    for (let i = 0; i < extra.length; i += 3) expect(ustVerts.has(`${extra[i]},${extra[i + 1]},${extra[i + 2]}`)).toBe(true);
+    // Kutunun her üçgeni (bölünenler dahil) eksen yönlü, dışa bakan bir normal taşır
+    const at3 = (v: number) => (v < alt.pos.length / 3 ? [...alt.pos.slice(3 * v, 3 * v + 3)] : extra.slice(3 * (v - alt.pos.length / 3), 3 * (v - alt.pos.length / 3) + 3));
+    const t = r.tris[0];
+    expect(t).toHaveLength(3 * (12 + 8));
+    for (let i = 0; i < t.length; i += 3) {
+      const [a, b, c] = [at3(t[i]), at3(t[i + 1]), at3(t[i + 2])];
+      const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+      const e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+      const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+      const l = Math.hypot(...n);
+      expect(l).toBeGreaterThan(0);
+      expect(Math.max(...n.map((x) => Math.abs(x) / l))).toBeCloseTo(1, 9);
+      const g = [(a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3 - 10];
+      expect(n[0] * g[0] + n[1] * g[1] + n[2] * g[2]).toBeGreaterThan(0);
+    }
+    // GLB: düğümler ve malzemeler aynı; yalnızca üçgenler değişir
+    const plain = glbJson(buildGlb(p)).json;
+    const culled = glbJson(buildGlb(p, { cullHidden: true })).json;
+    expect(culled.nodes).toEqual(plain.nodes);
+    expect(culled.materials).toEqual(plain.materials);
+  });
+
+  it('4 prizma: onarım üçgen eklemez (eş kesit: köşeler eşleşir)', () => {
+    const p = project(stack());
+    const r = glbBuild(p, { cullHidden: true });
+    expect([r.culled, r.added, r.triangles]).toEqual([36, 0, 76]);
+    const fp = keptSoup(p, true);
+    expect(tJunctions(fp.soup, 1e-4, fp.focus).cracks).toBe(0);
+  });
 });
