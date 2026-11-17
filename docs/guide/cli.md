@@ -2,7 +2,7 @@
 
 Her klasörden global `p3d` komutu (P3D deposunda bir kez `npm link`); depo içinde `npm run -s p3d -- <komut>` de olur.
 Göreli dosya yolları komutun yazıldığı klasöre göre çözülür. Sunucu adresi `P3D_URL` (varsayılan http://localhost:5173).
-Hata olursa çıkış kodu 1.
+Hata olursa çıkış kodu 1. Komut yardımı: `p3d <komut> --help` (ya da `-h`, `p3d help <komut>`); sunucu ve sekme gerektirmez.
 
 Çalışma alanı: `--ws <ad>` > `P3D_WS` > üst klasörlerdeki ilk `p3d.json` > kök (`p3d guide workspaces`).
 

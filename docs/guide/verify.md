@@ -10,7 +10,8 @@ Kör çizmeyin: anlamlı her adımdan sonra görün ve ölçün. Bir model bitti
 | `p3d section --axis x\|y\|z --at a,b [--parts …] [--file ref.stl] [--tol 0.1]` | Kesit çokgenleri ([y,z] / [x,z] / [x,y]); alan negatifse iç boşluk | Referanstan ölçerken, iç yapıyı kontrol ederken |
 
 - Dik görünümler (front = −Y'den bakış, right = +X'ten) görünür parçaların kutusuna sığdırılır; isim/ölçü yazıları görüntüye
-  girmez. `--out` için kendi geçici klasörünüzü (scratchpad) verin.
+  girmez. Yan görünüm `left` (−X'ten) ya da `right`'tır; `side` adında görünüm yoktur. `--out` için kendi geçici klasörünüzü
+  (scratchpad) verin.
 - **Perspektif (oran ve okunaklılık):** `--views eye` göz hizasıdır: görünür kutunun tabanından `--eye-height` (varsayılan 1000 mm;
   küçük sahnede kutu yarıçapının iki katıyla sınırlı) yukarıda, izometrikle aynı yandan (ön sağ), kutunun tamamı sığacak uzaklıktan kutu merkezine bakar. `--eye x,y,z` serbest
   kameradır (`camera.png`): `--target` (yoksa kutu merkezi) ve `--fov` (dikey derece, 10–120, varsayılan 50). Oyun nesnelerini

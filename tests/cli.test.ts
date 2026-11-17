@@ -125,6 +125,40 @@ describe('p3d run', () => {
     expect(err('--eye-height', 'yüksek')).toContain('--eye-height mm cinsinden');
   }, 60_000);
 
+  it('--help sunucu ve sekme denetiminden önce yanıtlanır (BoltRush isteği #22)', () => {
+    // Sunucu yok, alanda sekme yok: yardım yine basılır, çıkış 0.
+    const env = { P3D_URL: 'http://127.0.0.1:9', P3D_WS: 'boltrush' };
+    for (const args of [['snapshot', '--help'], ['snapshot', '-h'], ['help', 'snapshot'], ['snapshot', '--views', 'eye', '--help']]) {
+      const r = p3dRun(args, dir, { env });
+      expect(r.code, args.join(' ')).toBe(0);
+      expect(r.stdout).toContain('p3d snapshot — kullanım:');
+      expect(r.stdout).toContain('  snapshot --file m.p3d.json');
+      expect(r.stdout).toContain('[--eye x,y,z]'); // devam satırı
+      expect(r.stdout).toContain('side yok');
+      expect(r.stdout).toContain('p3d guide verify');
+      expect(r.stdout).not.toContain('import <dosya');
+    }
+    // Genel yardım çıkış 0; bilinmeyen komutun yardımı çıkış 1.
+    for (const args of [['--help'], ['help'], ['help', '-h']]) {
+      const r = p3dRun(args, dir, { env });
+      expect(r.code, args.join(' ')).toBe(0);
+      expect(r.stdout).toContain('Kullanım: p3d');
+    }
+    const unknown = p3dRun(['yok', '--help'], dir, { env });
+    expect(unknown.code).toBe(1);
+    expect(unknown.stdout).toContain('Bilinmeyen komut: yok');
+    // Sunucu sorgusu yapan dev ve betiğe argüman geçen run da.
+    expect(p3dRun(['dev', '--help'], dir, { env }).stdout).toContain('--llm auto|api|claude-cli|off');
+    expect(p3dRun(['run', '--help'], dir, { env }).stdout).toContain('p3d guide scripts');
+    // Bayrak değeri olan --help yardım değildir; `run`'da betikten sonraki --help betiğindir.
+    expect(p3dRun(['snapshot', '--views', '--help'], dir, { env }).stderr).toContain('Bilinmeyen görünüm: --help');
+    const script = path.join(dir, 'yardim.mjs');
+    writeFileSync(script, 'console.log(JSON.stringify(process.argv.slice(2)));\n');
+    expect(p3dRun(['run', 'yardim.mjs', '--help'], dir, { env }).stdout.trim()).toBe('["--help"]');
+    // side → left / right ipucu
+    expect(p3dRun(['snapshot', '--views', 'side'], dir, { env }).stderr).toContain('yan görünüm: left ya da right');
+  }, 60_000);
+
   it('betik yoksa açıklayıcı hata; betiğin hatası yığın iziyle, çıkış kodu 1', () => {
     const missing = p3dRun(['run', 'yok.mts'], dir);
     expect(missing.code).toBe(1);

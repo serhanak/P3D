@@ -678,7 +678,10 @@ function snapshotRequest(): { action: 'snapshot'; snapshot: SnapshotOptions } {
   if (camera.eyeHeight !== undefined && !views.includes('eye')) views.push('eye');
   if (!views.length) views.push('iso', 'front', 'right', 'top');
   const unknown = views.filter((v) => !(SNAPSHOT_VIEWS as readonly string[]).includes(v));
-  if (unknown.length) throw new Error(`Bilinmeyen görünüm: ${unknown.join(', ')} (olanlar: ${SNAPSHOT_VIEWS.join(', ')}).`);
+  if (unknown.length) {
+    const side = unknown.includes('side') ? '; yan görünüm: left ya da right' : '';
+    throw new Error(`Bilinmeyen görünüm: ${unknown.join(', ')} (olanlar: ${SNAPSHOT_VIEWS.join(', ')}${side}).`);
+  }
   if (views.includes('camera') && !camera.eye) throw new Error('camera görünümü --eye x,y,z ister (kamera konumu, mm).');
   if ((camera.target || camera.fov !== undefined) && !views.some((v) => v === 'eye' || v === 'camera')) {
     throw new Error('--target ve --fov yalnızca perspektif görünümlerde (eye, camera) geçerli.');
@@ -927,7 +930,7 @@ function saveNote(s: { embedded: number; referenced: number }): string {
 }
 
 const USAGE = [
-  'Kullanım: p3d [--ws <ad>] <komut>   (depo içinde: npm run -s p3d -- <komut>)',
+  'Kullanım: p3d [--ws <ad>] <komut>   (depo içinde: npm run -s p3d -- <komut>; komut yardımı: p3d <komut> --help)',
   '  Çalışma alanı: --ws <ad> (kök: --ws "" ya da --ws /) > P3D_WS > üst klasörlerdeki ilk p3d.json ("workspace") > kök',
   '',
   'Sekme (sunucu: p3d dev; ws sekmesi açık):',
@@ -957,7 +960,72 @@ const USAGE = [
   '  guide [konu] · skill install   (status, kurulu skill eskiyse uyarır)',
 ].join('\n');
 
+const HELP_FLAGS = new Set(['--help', '-h']);
+/** Komut yardımı için rehber konusu (yoksa cli). */
+const HELP_TOPIC: Record<string, string> = {
+  snapshot: 'verify', check: 'verify', measure: 'verify', section: 'verify', export: 'game', ops: 'ops', apply: 'ops',
+  run: 'scripts', sketch: 'sketch', status: 'workspaces', view: 'workspaces', open: 'workspaces', save: 'workspaces',
+};
+const HELP_NOTES: Record<string, string[]> = {
+  snapshot: [`Görünümler: ${SNAPSHOT_VIEWS.join(', ')} (yan görünüm left / right; side yok).`],
+  dev: ['Bayraklar: --llm auto|api|claude-cli|off · --bridge / --no-bridge · --port N · --host adres · --model id · --effort düzey · --claude-bin yol'],
+};
+
+/**
+ * `p3d --help`, `p3d help [komut]`, `p3d <komut> --help|-h`: sunucu, sekme ve çalışma alanı denetiminden önce yanıtlanır
+ * (BoltRush isteği #22). Bayrak değeri olarak yazılan `--help` sayılmaz; `run`'da yalnızca betikten önce (sonrası betiğindir).
+ * Yardım istenmediyse undefined, istendiyse yardımın konusu ('' = genel).
+ */
+function helpTarget(): string | undefined {
+  if (!cmd || HELP_FLAGS.has(cmd)) return '';
+  if (cmd === 'help') return rest[0] === undefined || HELP_FLAGS.has(rest[0]) ? '' : rest[0];
+  if (cmd === 'run') return HELP_FLAGS.has(rest[0] ?? '') ? cmd : undefined;
+  for (let i = 0; i < rest.length; i++) {
+    if (VALUE_FLAGS.has(rest[i])) i++;
+    else if (HELP_FLAGS.has(rest[i])) return cmd;
+  }
+  return undefined;
+}
+
+/** USAGE'daki komut satırları (bölüm başlığı ve devam satırlarıyla); komut yoksa boş. */
+function usageFor(name: string): string[] {
+  const lines = USAGE.split('\n');
+  const out: string[] = [];
+  let header = '';
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\S.*:$/.test(line)) {
+      header = line;
+      continue;
+    }
+    if (!/^ {2}\S/.test(line)) continue;
+    const names = line.trim().split(' · ').map((s) => s.split(/\s/)[0]);
+    if (!names.includes(name)) continue;
+    if (header && !out.includes(header)) out.push(header);
+    out.push(line);
+    while (/^ {3,}\S/.test(lines[i + 1] ?? '')) out.push(lines[++i]);
+  }
+  return out;
+}
+
+function printHelp(name: string): void {
+  const lines = name ? usageFor(name) : [];
+  if (!lines.length) {
+    if (name) console.log(`Bilinmeyen komut: ${name}\n`);
+    console.log(USAGE);
+    process.exitCode = name ? 1 : 0;
+    return;
+  }
+  console.log(`p3d ${name} — kullanım:`);
+  for (const l of lines) console.log(l);
+  for (const n of HELP_NOTES[name] ?? []) console.log(n);
+  const topic = HELP_TOPIC[name];
+  console.log(`Ayrıntı: p3d guide ${topic ? `${topic} · tüm komutlar: p3d guide cli` : 'cli'}`);
+}
+
 async function main(): Promise<void> {
+  const help = helpTarget();
+  if (help !== undefined) return printHelp(help);
   // `sketch` yalnızca --clear ile ve sekmeye giderken sahneyi değiştirir.
   if (TAB_MUTATING.has(cmd) || (cmd === 'sketch' && has('--clear') && flag('--file') === undefined)) guardRoot();
   switch (cmd) {
