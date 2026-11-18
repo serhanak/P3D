@@ -690,6 +690,21 @@ export const SNAPSHOT_FOV_MAX = 120;
 /** `eye` görünümünün varsayılan göz yüksekliği (mm): yerden ~1 m (araç/kart sürücüsü gözü). */
 export const SNAPSHOT_EYE_HEIGHT = 1000;
 
+/**
+ * Görünüm biçimi: `shaded` gölgeli (dolgu + kırılım çizgileri), `wire` tel kafes (dolgu aynı, her üçgen kenarı; arkadakiler
+ * derinlikle gizli), `xray` X-ışını (dolgu çok soluk, arkadakiler dahil tüm üçgen kenarları parça renginde). Arayüzde yalnızca
+ * bellekte tutulur (projeye girmez).
+ */
+export const VIEW_STYLES = ['shaded', 'wire', 'xray'] as const;
+export type ViewStyle = (typeof VIEW_STYLES)[number];
+
+/**
+ * Görüntü izdüşümü: `perspective` (varsayılan; `iso` perspektif 30°, dik görünümler orto) ya da `ortho` (`iso` ve `camera` da
+ * dik izdüşüm, kutuyu çerçeveler; `eye` göz hizası her zaman perspektif).
+ */
+export const SNAPSHOT_PROJECTIONS = ['perspective', 'ortho'] as const;
+export type SnapshotProjection = (typeof SNAPSHOT_PROJECTIONS)[number];
+
 export interface SnapshotOptions {
   views: SnapshotView[];
   width: number;
@@ -698,6 +713,10 @@ export interface SnapshotOptions {
   dims: boolean;
   /** `eye` / `camera` görünümlerinin kamerası. */
   camera?: SnapshotCamera;
+  /** Görüntünün biçimi; yoksa `shaded`. Arayüzdeki biçimden bağımsızdır (görüntüden sonra arayüzünki geri gelir). */
+  style?: ViewStyle;
+  /** İzdüşüm; yoksa `perspective`. Arayüzdeki kamera tipinden bağımsızdır. */
+  projection?: SnapshotProjection;
 }
 
 /** Sunucudan tarayıcıya giden komut. */

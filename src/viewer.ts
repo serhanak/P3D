@@ -1,13 +1,37 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
-import { SNAPSHOT_EYE_HEIGHT, SNAPSHOT_FOV_DEFAULT, type SnapshotCamera, type SnapshotOptions, type SnapshotView, type Vec3 } from '../shared/ops';
+import {
+  SNAPSHOT_EYE_HEIGHT,
+  SNAPSHOT_FOV_DEFAULT,
+  type Role,
+  type SnapshotCamera,
+  type SnapshotOptions,
+  type SnapshotProjection,
+  type SnapshotView,
+  type Vec3,
+  type ViewStyle,
+} from '../shared/ops';
+import { orthoDepth, orthoFrameCamera, perspDistanceFor, toOrthoHeight, toPerspDistance, viewLimits, type OrthoDepth } from './camera-math';
 import { partBox, partsBox } from './engine';
 import { isScanLike } from './geom';
 import { displayOpacity, roleOf, solidGeometry, solidKey } from './model';
 import { SHAPE_DEFS, bboxDims } from './shapes';
 import { EMPTY_SKETCH_STATE, SketchView, sketchBox, type SketchViewState } from './sketch-view';
 import type { Part, Project } from './types';
+
+/** Parçanın görünüşü (son `sync`'ten): görünüm biçimi değişince malzemeler projeye dokunmadan yeniden ayarlanır. */
+interface Look {
+  role: Role;
+  color: string;
+  /** Görünen saydamlık (`displayOpacity`). */
+  opacity: number;
+  /** Parçada `opacity` alanı var (kenar çizgisi kuralı). */
+  explicit: boolean;
+  /** İki yüzlü kaplama. */
+  double: boolean;
+  selected: boolean;
+}
 
 interface Entry {
   group: THREE.Group;
@@ -16,9 +40,34 @@ interface Entry {
   dims: THREE.Group;
   label: CSS2DObject;
   geomKey: string;
+  /** Kaplama (decal): dolgusu öne çekilir; tel kafeste çizim sırası farklıdır (applyLook). Parçanın şekli değişmez. */
+  decal: boolean;
+  /**
+   * Tel kafes (her üçgen kenarı): tembel — yalnızca tel kafes / X-ışını biçiminde üretilir; `wireKey` üretildiği geometrinin
+   * anahtarı (`geomKey`). Geometri değişince ve girdi silinince atılır.
+   */
+  wire: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null;
+  wireKey: string;
+  look: Look;
 }
 
 const HOLE_COLOR = 0xff4d4d;
+/** Tel kafeste (gizli çizgi) üçgen kenarlarının rengi ve opak katıdaki opaklığı. */
+const WIRE_COLOR = 0x05070a;
+const WIRE_OPACITY = 0.6;
+/** X-ışınında dolgu görünen saydamlığın bu oranıyla çizilir (çok soluk; tıklama yine dolguya isabet eder). */
+const XRAY_FILL = 0.07;
+/** X-ışınında çizgi opaklığı (seçili parçada 1). */
+const XRAY_OPACITY = 0.8;
+/** Tel kafes / X-ışını açılırken görünür üçgen sayısı bunu aşarsa bir kez "yavaş olabilir" uyarısı (engellemez). */
+const WIRE_WARN_TRIS = 500_000;
+
+/** X-ışını çizgi rengi: parça rengi, koyu tabla/arka planda okunsun diye açıklığı en az 0,6 (seçiliyse 0,78). */
+function xrayColor(color: string | number, selected: boolean): THREE.Color {
+  const c = new THREE.Color(color);
+  const hsl = c.getHSL({ h: 0, s: 0, l: 0 }, THREE.SRGBColorSpace);
+  return c.setHSL(hsl.h, hsl.s, Math.max(hsl.l, selected ? 0.78 : 0.6), THREE.SRGBColorSpace);
+}
 
 export type ViewPreset = 'iso' | 'top' | 'front' | 'right';
 
@@ -34,7 +83,22 @@ export class Viewer {
   private renderer: THREE.WebGLRenderer;
   private labelRenderer: CSS2DRenderer;
   private scene = new THREE.Scene();
-  private camera: THREE.PerspectiveCamera;
+  /**
+   * Etkin kamera: perspektif ya da ortografik (yalnızca bellekte; projeye girmez). `this.camera` kullanan her kod iki tipi de
+   * desteklemeli (ışın, ekran izdüşümü, piksel ölçeği, sığdırma, kırpma düzlemleri).
+   */
+  private camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
+  private persp: THREE.PerspectiveCamera;
+  private ortho: THREE.OrthographicCamera;
+  /** Tabla + görünür parçalar + eskiz kutusu: ortoda kamera bunun tamamı yakın düzlemin önünde kalacak kadar geride durur. */
+  private sceneBox = new THREE.Box3(new THREE.Vector3(-110, -110, 0), new THREE.Vector3(110, 110, 0));
+  /** Kalem aracının yardımcıları (taslak, imleç, kilit kılavuzu, düzlem ızgarası): ortoda derinlik hesabına katılır. */
+  private sketchHelperBox: THREE.Box3 | null = null;
+  // Ortoda her karede kullanılan geçici nesneler (yeniden kullanılır).
+  private readonly depthBox = new THREE.Box3();
+  private readonly depthSphere = new THREE.Sphere();
+  private readonly depthDir = new THREE.Vector3();
+  private readonly depthOut: OrthoDepth = { position: new THREE.Vector3(), near: 1, far: 2 };
   private controls: OrbitControls;
   private partsRoot = new THREE.Group();
   private labelsRoot = new THREE.Group();
@@ -52,6 +116,10 @@ export class Viewer {
   private lastProject: Project | null = null;
   /** Kalem aracı açıkken sol tık parça seçmez (eskize aittir). */
   penMode = false;
+  /** Görünüm biçimi: yalnızca bellekte (projeye ve otomatik kayda girmez; eskiz görünürlüğü gibi). */
+  private viewStyle: ViewStyle = 'shaded';
+  /** Büyük sahne uyarısı verildi mi (oturum başına bir kez). */
+  private wireWarned = false;
 
   constructor(private container: HTMLElement) {
     THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
@@ -64,9 +132,12 @@ export class Viewer {
     this.labelRenderer.domElement.className = 'label-layer';
     container.appendChild(this.labelRenderer.domElement);
 
-    this.camera = new THREE.PerspectiveCamera(40, 1, 0.5, 20000);
-    this.camera.up.set(0, 0, 1);
-    this.camera.position.set(220, -260, 200);
+    this.persp = new THREE.PerspectiveCamera(40, 1, 0.5, 20000);
+    this.persp.up.set(0, 0, 1);
+    this.persp.position.set(220, -260, 200);
+    this.ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
+    this.ortho.up.set(0, 0, 1);
+    this.camera = this.persp;
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
@@ -114,8 +185,77 @@ export class Viewer {
     const h = Math.max(1, this.container.clientHeight);
     this.renderer.setSize(w, h);
     this.labelRenderer.setSize(w, h);
-    this.camera.aspect = w / h;
-    this.camera.updateProjectionMatrix();
+    this.persp.aspect = w / h;
+    this.persp.updateProjectionMatrix();
+    // Orto: yükseklik (ve zoom) korunur, genişlik en-boy oranından.
+    this.setOrthoFrustum(this.ortho.top - this.ortho.bottom);
+  }
+
+  /** Orto frustum'u: zoom 1'deki görünür yükseklik `h` (mm), genişlik en-boy oranından. */
+  private setOrthoFrustum(h: number): void {
+    const w = h * this.persp.aspect;
+    Object.assign(this.ortho, { top: h / 2, bottom: -h / 2, left: -w / 2, right: w / 2 });
+    this.ortho.updateProjectionMatrix();
+  }
+
+  /** Tabla + görünür parçalar + eskiz küresinin yarıçapı (yakınlaştırma sınırlarının ölçeği). */
+  private sceneRadius(): number {
+    return this.sceneBox.getBoundingSphere(this.depthSphere).radius;
+  }
+
+  /**
+   * Yakınlaştırma sınırları (sahne ölçeğinden): perspektifte OrbitControls uzaklığı, ortoda zoom. Ortoda uzaklık sınırı yoktur
+   * (kamera derinliği fitOrthoDepth'te; OrbitControls uzaklığı kırpmasın).
+   */
+  private applyLimits(): void {
+    const lim = viewLimits(this.sceneRadius());
+    const c = this.controls;
+    if (this.camera === this.ortho) {
+      const h0 = this.ortho.top - this.ortho.bottom;
+      c.minZoom = h0 / lim.maxHeight;
+      c.maxZoom = h0 / lim.minHeight;
+      c.minDistance = 0;
+      c.maxDistance = Infinity;
+    } else {
+      c.minDistance = perspDistanceFor(lim.minHeight, this.persp.fov);
+      c.maxDistance = perspDistanceFor(lim.maxHeight, this.persp.fov);
+      c.minZoom = 0;
+      c.maxZoom = Infinity;
+    }
+  }
+
+  /** Kamera tipi (yalnızca bellekte). */
+  get projection(): 'perspective' | 'ortho' {
+    return this.camera === this.ortho ? 'ortho' : 'perspective';
+  }
+
+  /**
+   * Perspektif ↔ ortografik. Hedef ve bakış yönü korunur; hedefteki görünür ölçek de: orto yüksekliği = 2 · d · tan(fov/2)
+   * (d = kamera–hedef uzaklığı), geri dönüşte uzaklık orto yüksekliğinden (zoom dahil) hesaplanır. İkisi de sahne ölçeğinden
+   * sınırlara kırpılır (camera-math.ts → viewLimits): aşırı yakınlaştırma/uzaklaştırma sonrası geçişte sahne kaybolmasın.
+   */
+  setProjection(projection: 'perspective' | 'ortho'): void {
+    if (projection === this.projection) return;
+    const target = this.controls.target;
+    const fov = this.persp.fov;
+    const lim = viewLimits(this.sceneRadius());
+    if (projection === 'ortho') {
+      this.ortho.zoom = 1;
+      this.setOrthoFrustum(toOrthoHeight(this.persp.position.distanceTo(target), fov, lim));
+      this.ortho.position.copy(this.persp.position);
+      this.ortho.quaternion.copy(this.persp.quaternion);
+      this.camera = this.ortho;
+    } else {
+      const d = toPerspDistance((this.ortho.top - this.ortho.bottom) / this.ortho.zoom, fov, lim);
+      const dir = this.ortho.position.clone().sub(target).normalize();
+      this.persp.position.copy(target).addScaledVector(dir, d);
+      this.persp.quaternion.copy(this.ortho.quaternion);
+      this.camera = this.persp;
+    }
+    this.controls.object = this.camera;
+    this.applyLimits();
+    this.fitClipPlanes();
+    this.controls.update();
   }
 
   private pick(e: PointerEvent): void {
@@ -149,30 +289,18 @@ export class Viewer {
       e.group.rotation.set(part.rotation.x * DEG, part.rotation.y * DEG, part.rotation.z * DEG, 'XYZ');
       const role = roleOf(part);
       e.group.visible = part.visible && (role !== 'hole' || project.view.showHoles);
-      const mat = e.mesh.material;
-      // Görünen saydamlık (displayOpacity): parçanın `opacity`'si rolün varsayılan yarı saydamlığının yerine geçer
-      // (referans ağı daha belirgin ya da daha silik yapılabilir).
-      const ghost = role !== 'solid';
-      const opacity = displayOpacity(part);
-      const see = opacity < 1;
-      if (mat.transparent !== see) {
-        mat.transparent = see;
-        mat.depthWrite = !see;
-        mat.needsUpdate = true;
-      }
-      mat.opacity = opacity;
-      mat.color.set(role === 'hole' ? HOLE_COLOR : part.color);
-      // İki yüzlü kaplama arkadan da çizilir (geom düzenlenince değişebilir).
-      const side = part.geom?.kind === 'decal' && part.geom.double ? THREE.DoubleSide : THREE.FrontSide;
-      if (mat.side !== side) {
-        mat.side = side;
-        mat.needsUpdate = true;
-      }
-      // Kenar çizgileri de soluklaşır (opak katıda 0,35).
-      (e.edges.material as THREE.LineBasicMaterial).opacity = part.opacity !== undefined ? 0.35 * opacity : ghost ? 0.15 : 0.35;
       const selected = part.id === selectedId;
-      mat.emissive.set(selected ? mat.color : 0x000000);
-      mat.emissiveIntensity = selected ? 0.18 : 0;
+      // Görünen saydamlık (displayOpacity): parçanın `opacity`'si rolün varsayılan yarı saydamlığının yerine geçer
+      // (referans ağı daha belirgin ya da daha silik yapılabilir). İki yüzlü kaplama arkadan da çizilir.
+      e.look = {
+        role,
+        color: part.color,
+        opacity: displayOpacity(part),
+        explicit: part.opacity !== undefined,
+        double: part.geom?.kind === 'decal' && part.geom.double === true,
+        selected,
+      };
+      this.applyLook(e, this.viewStyle);
       e.dims.visible = project.view.showDimensions;
 
       const box = boxes.get(part.id)!;
@@ -194,15 +322,148 @@ export class Viewer {
       }
     }
     if (!selectedId || !project.parts.some((p) => p.id === selectedId)) this.selBox.visible = false;
+    // Ortoda kameranın ne kadar geride duracağı: tabla + görünür parçalar + eskiz.
+    const { bedX, bedY } = project.settings;
+    const sceneBox = new THREE.Box3(new THREE.Vector3(-bedX / 2, -bedY / 2, 0), new THREE.Vector3(bedX / 2, bedY / 2, 0));
+    for (const part of project.parts) if (this.entries.get(part.id)?.group.visible) sceneBox.union(boxes.get(part.id)!);
+    const sk = sketchBox(project.sketch);
+    if (sk) sceneBox.union(sk);
+    this.sceneBox.copy(sceneBox);
+    this.applyLimits();
     this.labelsRoot.visible = project.view.showNames;
     this.lastProject = project;
     this.sketch.sync(project, this.sketchState);
+    this.sketchHelperBox = this.sketch.helperBox();
+  }
+
+  /** Görünüm biçimi (gölgeli / tel kafes / X-ışını). */
+  get style(): ViewStyle {
+    return this.viewStyle;
+  }
+
+  /**
+   * Görünüm biçimini değiştirir; projeye dokunmaz (geri-al geçmişine ve otomatik kayda girmez). Gölgeliye dönüşte tel
+   * geometriler atılır. Büyük sahnede (görünür üçgen ≥ WIRE_WARN_TRIS) tel kafes / X-ışını açılırken bir kez uyarır.
+   */
+  setStyle(style: ViewStyle): void {
+    if (style === this.viewStyle) return;
+    this.viewStyle = style;
+    if (style !== 'shaded' && !this.wireWarned) {
+      const tris = this.visibleTriangles();
+      if (tris >= WIRE_WARN_TRIS) {
+        this.wireWarned = true;
+        this.onWarning(`Sahnede ${tris.toLocaleString('tr-TR')} görünür üçgen var: tel kafes / X-ışını çizimi yavaş olabilir (Gölgeli'ye dönmek için W).`);
+      }
+    }
+    for (const e of this.entries.values()) this.applyLook(e, style);
+  }
+
+  /** Görünür parçaların üçgen sayısı (ekrandaki geometri). */
+  private visibleTriangles(): number {
+    let n = 0;
+    for (const e of this.entries.values()) {
+      if (!e.group.visible) continue;
+      const g = e.mesh.geometry;
+      n += (g.index ? g.index.count : (g.getAttribute('position')?.count ?? 0)) / 3;
+    }
+    return Math.round(n);
+  }
+
+  /**
+   * Girdinin malzemelerini görünüşüne (`look`) ve biçime göre ayarlar. Gölgeli: dolgu + kırılım çizgileri. Tel kafes: dolgu
+   * ve ışık aynı, kırılım çizgileri yerine her üçgen kenarı koyu çizgiyle (katı dolgusu polygonOffset +1 ile arkaya itildiğinden
+   * arkadaki kenarlar derinlikle gizlenir). X-ışını: dolgu çok soluk ve derinlik yazmaz, tüm kenarlar (arkadakiler dahil)
+   * parça renginde, derinlik testi olmadan. Çizgi opaklığı kenar çizgisi kuralıyla soluklaşır (referans, delik, saydam parça).
+   * Gölgelide tel geometri atılır; `keepWire` (snapshot'ın geçici gölgelisi: arayüz tel kafeste kalacak) atmaz, yalnızca gizler.
+   */
+  private applyLook(e: Entry, style: ViewStyle, keepWire = false): void {
+    const L = e.look;
+    const mat = e.mesh.material;
+    const xray = style === 'xray';
+    const fill = xray ? L.opacity * XRAY_FILL : L.opacity;
+    // Tel kafeste kaplama dolgusu derinlik yazmaz ve saydam sırada (uzaktan yakına) katılardan ve diğer çizgilerden sonra
+    // çizilir, kendi tel çizgileri de ondan sonra: dolgu polygonOffset −1/−2 ile öne çekilir, polygonOffset çizgilere
+    // uygulanmaz; derinlik yazsaydı kendi çizgilerini örterdi. Taşıyıcının çizgilerini yine örter, üst üste kaplamalar sıralı kalır.
+    const decalWire = e.decal && style === 'wire';
+    const see = fill < 1 || decalWire;
+    if (mat.transparent !== see) {
+      mat.transparent = see;
+      mat.needsUpdate = true;
+    }
+    mat.depthWrite = !see;
+    mat.opacity = fill;
+    e.mesh.renderOrder = decalWire ? 1 : 0;
+    mat.color.set(L.role === 'hole' ? HOLE_COLOR : L.color);
+    const side = L.double ? THREE.DoubleSide : THREE.FrontSide;
+    if (mat.side !== side) {
+      mat.side = side;
+      mat.needsUpdate = true;
+    }
+    mat.emissive.set(L.selected ? mat.color : 0x000000);
+    mat.emissiveIntensity = L.selected ? 0.18 : 0;
+    const ghost = L.role !== 'solid';
+    // Kenar çizgileri de soluklaşır (opak katıda 0,35).
+    (e.edges.material as THREE.LineBasicMaterial).opacity = L.explicit ? 0.35 * L.opacity : ghost ? 0.15 : 0.35;
+    e.edges.visible = style === 'shaded';
+    if (style === 'shaded' && !keepWire) {
+      this.dropWire(e);
+      return;
+    }
+    // Gizli parçanın tel kafesi üretilmez (görünür olunca sync yeniden çağırır).
+    if (style === 'shaded' || !e.group.visible) {
+      if (e.wire) e.wire.visible = false;
+      return;
+    }
+    const wire = this.ensureWire(e);
+    wire.visible = true;
+    const wm = wire.material;
+    const fade = L.explicit ? L.opacity : ghost ? 0.45 : 1;
+    if (xray) {
+      wm.color.copy(xrayColor(L.role === 'hole' ? HOLE_COLOR : L.color, L.selected));
+      wm.opacity = L.selected ? 1 : XRAY_OPACITY * fade;
+      wm.depthTest = false;
+      wire.renderOrder = 3;
+    } else {
+      wm.color.set(WIRE_COLOR);
+      wm.opacity = WIRE_OPACITY * fade;
+      wm.depthTest = true;
+      wire.renderOrder = e.decal ? 2 : 0;
+    }
+  }
+
+  /** Tel kafes nesnesi (ilk istekte kurulur) ve güncel geometrisi (`WireframeGeometry`, `geomKey` ile önbellekli). */
+  private ensureWire(e: Entry): THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> {
+    if (!e.wire) {
+      // Çizgiler derinlik yazmaz: birbirini ve saydam dolguları kesmez (opak dolgular onları yine gizler).
+      const material = new THREE.LineBasicMaterial({ color: WIRE_COLOR, transparent: true, opacity: WIRE_OPACITY, depthWrite: false });
+      e.wire = new THREE.LineSegments(new THREE.BufferGeometry(), material);
+      e.group.add(e.wire);
+    }
+    if (e.wireKey !== e.geomKey) {
+      e.wire.geometry.dispose();
+      e.wire.geometry = new THREE.WireframeGeometry(e.mesh.geometry);
+      e.wireKey = e.geomKey;
+    }
+    return e.wire;
+  }
+
+  /** Tel kafesi (geometri + malzeme) atar; yeniden gerekirse ensureWire kurar. */
+  private dropWire(e: Entry): void {
+    if (!e.wire) return;
+    e.wire.geometry.dispose();
+    e.wire.material.dispose();
+    e.group.remove(e.wire);
+    e.wire = null;
+    e.wireKey = '';
   }
 
   /** Eskiz görünüm durumu (kalem aracı); `redraw` false ise yalnızca saklanır (sonraki `sync` çizer). */
   setSketchState(state: SketchViewState, redraw = true): void {
     this.sketchState = state;
-    if (redraw && this.lastProject) this.sketch.sync(this.lastProject, state);
+    if (redraw && this.lastProject) {
+      this.sketch.sync(this.lastProject, state);
+      this.sketchHelperBox = this.sketch.helperBox();
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -260,12 +521,14 @@ export class Viewer {
     return { x: t.x, y: t.y, z: t.z };
   }
 
-  /** `p` derinliğinde bir ekran pikselinin mm karşılığı (yakalama toleransı). */
+  /** `p` derinliğinde bir ekran pikselinin mm karşılığı (yakalama toleransı; ortoda derinlikten bağımsız). */
   mmPerPixelAt(p: Vec3): number {
+    const H = Math.max(1, this.renderer.domElement.clientHeight);
+    if (this.camera instanceof THREE.OrthographicCamera) return (this.camera.top - this.camera.bottom) / this.camera.zoom / H;
     const cam = this.camera.position;
     const dir = this.controls.target.clone().sub(cam).normalize();
     const d = Math.max(new THREE.Vector3(p.x - cam.x, p.y - cam.y, p.z - cam.z).dot(dir), this.camera.near);
-    return (2 * d * Math.tan((this.camera.fov * DEG) / 2)) / Math.max(1, this.renderer.domElement.clientHeight);
+    return (2 * d * Math.tan((this.camera.fov * DEG) / 2)) / H;
   }
 
   /**
@@ -305,7 +568,8 @@ export class Viewer {
     el.className = 'name-label';
     const label = new CSS2DObject(el);
     this.labelsRoot.add(label);
-    return { group, mesh, edges, dims, label, geomKey: '' };
+    const look: Look = { role: 'solid', color: part.color, opacity: 1, explicit: false, double: false, selected: false };
+    return { group, mesh, edges, dims, label, geomKey: '', decal, wire: null, wireKey: '', look };
   }
 
   private rebuildGeometry(e: Entry, part: Part, project: Project, boxes: Map<string, THREE.Box3>, key: string): void {
@@ -319,6 +583,12 @@ export class Viewer {
     e.edges.geometry.dispose();
     // Kenar çizgileri yalnızca gerçek kırılımlarda; mesh parçalarında üçgen gürültüsü çizgi olmasın.
     e.edges.geometry = new THREE.EdgesGeometry(e.mesh.geometry, isScanLike(part.shape) ? 50 : 25);
+    // Tel kafes eskidi: hemen atılır, gerekirse (tel kafes / X-ışını) applyLook yeniden üretir.
+    if (e.wire) {
+      e.wire.geometry.dispose();
+      e.wire.geometry = new THREE.BufferGeometry();
+      e.wireKey = '';
+    }
     this.clearDims(e.dims);
     this.buildDims(e.dims, part, e.mesh.geometry);
     e.geomKey = key;
@@ -371,6 +641,7 @@ export class Viewer {
     e.mesh.material.dispose();
     e.edges.geometry.dispose();
     (e.edges.material as THREE.Material).dispose();
+    this.dropWire(e);
     this.partsRoot.remove(e.group);
     e.label.element.remove();
     this.labelsRoot.remove(e.label);
@@ -384,6 +655,7 @@ export class Viewer {
    * çözünürlüğünü ~12 mm'ye düşürüyor ve ince bir panelin arkasındaki parçayı öne çiziyordu; d × 0,002 ile ~0,3 mm.
    */
   private fitClipPlanes(): void {
+    if (this.camera === this.ortho) return this.fitOrthoDepth();
     const d = this.camera.position.distanceTo(this.controls.target);
     const near = Math.max(0.05, d * 0.002);
     const far = Math.max(d * 50, this.bedSize * 8, 2000);
@@ -391,6 +663,27 @@ export class Viewer {
       this.camera.near = near;
       this.camera.far = far;
       this.camera.updateProjectionMatrix();
+    }
+  }
+
+  /**
+   * Ortoda kamera her karede ideal uzaklığa konur (aynı bakış yönü): sahne (tabla + parçalar + eskiz + kalem yardımcıları)
+   * küresinin tamamı yakın düzlemin önünde kalır, hedef uzağa kaydırılıp dönülse de (camera-math.ts → orthoDepth).
+   */
+  private fitOrthoDepth(): void {
+    const cam = this.ortho;
+    const target = this.controls.target;
+    const box = this.depthBox.copy(this.sceneBox);
+    if (this.sketchHelperBox) box.union(this.sketchHelperBox);
+    const dir = this.depthDir.copy(cam.position).sub(target);
+    if (dir.lengthSq() < 1e-12) dir.set(0, 0, 1);
+    dir.normalize();
+    const d = orthoDepth(box.getBoundingSphere(this.depthSphere), target, dir, this.depthOut);
+    cam.position.copy(d.position);
+    if (Math.abs(d.near - cam.near) > d.near * 0.05 || Math.abs(d.far - cam.far) > d.far * 0.05) {
+      cam.near = d.near;
+      cam.far = d.far;
+      cam.updateProjectionMatrix();
     }
   }
 
@@ -476,10 +769,18 @@ export class Viewer {
         ));
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     const radius = Math.max(sphere.radius, 15);
-    const dist = (radius / Math.sin((this.camera.fov * DEG) / 2)) * 1.15;
+    const fov = this.persp.fov * DEG;
+    const dist = (radius / Math.sin(fov / 2)) * 1.15;
     const dir = this.camera.position.clone().sub(this.controls.target).normalize();
     this.controls.target.copy(sphere.center);
     this.camera.position.copy(sphere.center).addScaledVector(dir, dist);
+    if (this.camera === this.ortho) {
+      // Perspektif sığdırmanın hedefteki görünür yüksekliği: 2 · dist · tan(fov/2).
+      this.ortho.zoom = 1;
+      this.setOrthoFrustum(2 * dist * Math.tan(fov / 2));
+      this.applyLimits();
+      this.fitOrthoDepth();
+    }
   }
 
   setPreset(preset: ViewPreset, project: Project): void {
@@ -515,15 +816,20 @@ export class Viewer {
     const prevRatio = this.renderer.getPixelRatio();
     const prevSel = this.selBox.visible;
     const prevDims = [...this.entries.values()].map((e) => e.dims.visible);
-    this.selBox.visible = false;
-    if (!opts.dims) for (const e of this.entries.values()) e.dims.visible = false;
-    this.renderer.setPixelRatio(1);
-    this.renderer.setSize(opts.width, opts.height, false);
+    // Biçim arayüzdekinden bağımsızdır (verilmezse gölgeli); görüntüden sonra arayüzünki her yolda (finally) geri gelir.
+    const style = opts.style ?? 'shaded';
+    const restyle = style !== this.viewStyle;
     const out: { view: SnapshotView; png: string }[] = [];
-    this.sketch.setSnapshotMode(true);
     try {
+      // Geçici gölgelide tel geometri atılmaz (arayüz biçimi geri gelince yeniden üretilmesin).
+      if (restyle) for (const e of this.entries.values()) this.applyLook(e, style, true);
+      this.selBox.visible = false;
+      if (!opts.dims) for (const e of this.entries.values()) e.dims.visible = false;
+      this.renderer.setPixelRatio(1);
+      this.renderer.setSize(opts.width, opts.height, false);
+      this.sketch.setSnapshotMode(true);
       for (const view of opts.views) {
-        this.renderer.render(this.scene, this.snapshotCamera(view, box, opts.width / opts.height, opts.camera));
+        this.renderer.render(this.scene, this.snapshotCamera(view, box, opts.width / opts.height, opts.camera, opts.projection));
         out.push({ view, png: this.renderer.domElement.toDataURL('image/png') });
       }
     } finally {
@@ -532,6 +838,7 @@ export class Viewer {
       this.selBox.visible = prevSel;
       [...this.entries.values()].forEach((e, i) => (e.dims.visible = prevDims[i]));
       this.sketch.setSnapshotMode(false);
+      if (restyle) for (const e of this.entries.values()) this.applyLook(e, this.viewStyle);
     }
     return out;
   }
@@ -576,8 +883,21 @@ export class Viewer {
     return cam;
   }
 
-  private snapshotCamera(view: SnapshotView, box: THREE.Box3, aspect: number, opt: SnapshotCamera = {}): THREE.Camera {
+  /**
+   * Görüntü kamerası. `projection: 'ortho'`: `iso` ve `camera` (göz → hedef yönünde) de dik izdüşümle, kutuyu çerçeveleyerek
+   * çekilir; `eye` (göz hizası) her zaman perspektiftir. Verilmezse `iso` perspektif (30°), dik görünümler orto.
+   */
+  private snapshotCamera(view: SnapshotView, box: THREE.Box3, aspect: number, opt: SnapshotCamera = {}, projection?: SnapshotProjection): THREE.Camera {
     const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+    const ortho = projection === 'ortho';
+    if (view === 'camera' && ortho && opt.eye) {
+      const target = opt.target ? V(opt.target.x, opt.target.y, opt.target.z) : box.getCenter(new THREE.Vector3());
+      const dir = V(opt.eye.x, opt.eye.y, opt.eye.z).sub(target);
+      if (dir.lengthSq() < 1e-12) dir.set(1, -1.2, 0.95);
+      dir.normalize();
+      // Dik bakışta Z yukarı tanımsız: Y yukarı.
+      return orthoFrameCamera(dir, Math.abs(dir.z) > 0.999 ? V(0, 1, 0) : V(0, 0, 1), box, aspect);
+    }
     if (view === 'eye' || view === 'camera') return this.perspectiveCamera(view, box, aspect, opt);
     // [merkezden kameraya yön, kameranın yukarısı]
     const dirs: Record<Exclude<SnapshotView, 'eye' | 'camera'>, [THREE.Vector3, THREE.Vector3]> = {
@@ -591,9 +911,9 @@ export class Viewer {
     };
     const [dir, up] = dirs[view];
     dir.normalize();
-    const center = box.getCenter(new THREE.Vector3());
-    const radius = Math.max(box.getBoundingSphere(new THREE.Sphere()).radius, 5);
-    if (view === 'iso') {
+    if (view === 'iso' && !ortho) {
+      const center = box.getCenter(new THREE.Vector3());
+      const radius = Math.max(box.getBoundingSphere(new THREE.Sphere()).radius, 5);
       // Yakın düzlem mesafeyle orantılı: sabit 0,1 mm, 4 m'lik araçta derinlik çözünürlüğünü ~50 mm'ye düşürüyordu.
       const dist = (radius / Math.sin(15 * DEG)) * 1.05;
       const cam = new THREE.PerspectiveCamera(30, aspect, Math.max(0.1, dist * 0.05), dist * 2 + this.bedSize * 1.5);
@@ -603,26 +923,6 @@ export class Viewer {
       cam.updateMatrixWorld();
       return cam;
     }
-    // Dik izdüşüm: kutunun köşelerini kamera düzlemine izdüşürüp çerçevele (%6 pay).
-    const cam = new THREE.OrthographicCamera();
-    cam.up.copy(up);
-    cam.position.copy(center).addScaledVector(dir, radius * 4);
-    cam.lookAt(center);
-    cam.updateMatrixWorld();
-    let [x0, x1, y0, y1] = [Infinity, -Infinity, Infinity, -Infinity];
-    for (const cx of [box.min.x, box.max.x])
-      for (const cy of [box.min.y, box.max.y])
-        for (const cz of [box.min.z, box.max.z]) {
-          const p = V(cx, cy, cz).applyMatrix4(cam.matrixWorldInverse);
-          [x0, x1, y0, y1] = [Math.min(x0, p.x), Math.max(x1, p.x), Math.min(y0, p.y), Math.max(y1, p.y)];
-        }
-    let w = (x1 - x0) * 1.06;
-    let h = (y1 - y0) * 1.06;
-    if (w / h > aspect) h = w / aspect;
-    else w = h * aspect;
-    const [mx, my] = [(x0 + x1) / 2, (y0 + y1) / 2];
-    Object.assign(cam, { left: mx - w / 2, right: mx + w / 2, top: my + h / 2, bottom: my - h / 2, near: 0.1, far: radius * 10 });
-    cam.updateProjectionMatrix();
-    return cam;
+    return orthoFrameCamera(dir, up, box, aspect);
   }
 }

@@ -18,9 +18,9 @@
 
         <div class="tb-group">
           <button id="btn-new" title="Yeni proje">Yeni</button>
-          <button id="btn-open" title="Proje dosyası aç (.p3d.json)">Aç…</button>
+          <button id="btn-open" title="Proje dosyası aç (.p3d.json) ya da GLB'den yeni proje (tek ağ parçası, dosyadaki yerinde)">Aç…</button>
           <button id="btn-save" title="Projeyi dosyaya kaydet (Ctrl+S)">Kaydet</button>
-          <button id="btn-import" title="STL / OBJ / 3MF ağını parça olarak ekle (katı, delik ya da referans)">İçe aktar…</button>
+          <button id="btn-import" title="STL / OBJ / 3MF / GLB ağını parça olarak ekle (katı, delik ya da referans)">İçe aktar…</button>
           <div class="menu">
             <button id="btn-export" class="primary" aria-haspopup="true">Dışa aktar ▾</button>
             <div id="export-menu" class="menu-pop" hidden>
@@ -48,6 +48,11 @@
           <label class="switch" title="Parça isimlerini göster/gizle"><input type="checkbox" id="tg-names" /><span>İsimler</span></label>
           <label class="switch" title="Ölçüleri göster/gizle"><input type="checkbox" id="tg-dims" /><span>Ölçüler</span></label>
           <label class="switch" title="Delik parçalarının yarı saydam görüntüsü (gizliyken de keserler)"><input type="checkbox" id="tg-holes" /><span>Delikler</span></label>
+          <div class="seg" id="view-style" role="group" aria-label="Görünüm biçimi">
+            <button data-style="shaded" title="Gölgeli: dolgu ve kırılım çizgileri (W: biçimler arasında döner)">Gölgeli</button>
+            <button data-style="wire" title="Tel kafes: dolgu üstünde her üçgen kenarı, arkadakiler gizli — düşük poligon topolojisi (W)">Tel</button>
+            <button data-style="xray" title="X-ışını: dolgu soluk, arkadakiler dahil tüm üçgen kenarları parça renginde (W)">X-ışını</button>
+          </div>
         </div>
 
         <div class="tb-group">
@@ -61,12 +66,13 @@
           <button data-view="front" title="Önden görünüm">Ön</button>
           <button data-view="right" title="Sağdan görünüm">Sağ</button>
           <button id="btn-fit" title="Görünümü sığdır (F)">Sığdır</button>
+          <button id="btn-ortho" aria-pressed="false" title="Ortografik kamera (O / Num 5)">Orto</button>
         </div>
 
         <div class="spacer"></div>
         <button id="btn-settings" title="Tabla boyutu ve çözünürlük">Ayarlar</button>
-        <input type="file" id="file-input" accept=".json,.p3d" hidden />
-        <input type="file" id="mesh-input" accept=".stl,.obj,.3mf" hidden />
+        <input type="file" id="file-input" accept=".json,.p3d,.glb" hidden />
+        <input type="file" id="mesh-input" accept=".stl,.obj,.3mf,.glb" hidden />
       </header>
 
       <aside class="panel left">

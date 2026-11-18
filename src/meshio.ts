@@ -1,4 +1,4 @@
-// Ağ dosyası içe aktarma (STL, OBJ, 3MF) ve dışa aktarma (STL, 3MF). Tarayıcıda ve Node'da (CLI) çalışır.
+// Ağ dosyası içe aktarma (STL, OBJ, 3MF, GLB) ve dışa aktarma (STL, 3MF). Tarayıcıda ve Node'da (CLI) çalışır.
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { MeshoptSimplifier } from 'meshoptimizer';
 import * as THREE from 'three';
@@ -8,12 +8,29 @@ import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { MeshAsset, Vec3 } from '../shared/ops';
 import { makeAsset } from './assets';
 
-export const MESH_FORMATS = ['stl', 'obj', '3mf'] as const;
+export const MESH_FORMATS = ['stl', 'obj', '3mf', 'glb'] as const;
 export type MeshFormat = (typeof MESH_FORMATS)[number];
 
 export function meshFormatOf(fileName: string): MeshFormat | null {
   const ext = fileName.toLowerCase().split('.').pop() ?? '';
   return (MESH_FORMATS as readonly string[]).includes(ext) ? (ext as MeshFormat) : null;
+}
+
+/** Tanınmayan ağ dosyası için açıklama (glTF metin biçimine ayrı ipucu). */
+export function meshFormatHint(fileName: string): string {
+  return /\.gltf$/i.test(fileName)
+    ? 'glTF metin biçimi (.gltf) desteklenmiyor; tek dosyalık ikili .glb olarak dışa aktarın (ör. Blender: glTF Binary).'
+    : 'Desteklenen biçimler: STL, OBJ, 3MF, GLB.';
+}
+
+/** İçe aktarmada varsayılan üçgen sınırı (STL/OBJ/3MF): taranmış referans ağlar bunun üstündeyse sadeleştirilir. */
+export const DEFAULT_MAX_TRIS = 60000;
+/** GLB'de varsayılan sınır: oyun varlığında üçgen topolojisi önemlidir, pratikte sadeleştirme yok. */
+export const GLB_MAX_TRIS = 1_000_000;
+
+/** Biçimin varsayılan üçgen sınırı (arayüz İçe aktar…/Aç…, `p3d import` ve `--file ağ`; `--max-tris` verilmemişse). */
+export function defaultMaxTris(format: MeshFormat | null): number {
+  return format === 'glb' ? GLB_MAX_TRIS : DEFAULT_MAX_TRIS;
 }
 
 // ---------------------------------------------------------------------------
@@ -32,7 +49,8 @@ export function parseMeshFile(fileName: string, data: ArrayBuffer): Float32Array
     return concat(parts);
   }
   if (fmt === '3mf') return parse3mf(new Uint8Array(data));
-  throw new Error('Desteklenen biçimler: STL, OBJ, 3MF.');
+  if (fmt === 'glb') return parseGlb(data);
+  throw new Error(meshFormatHint(fileName));
 }
 
 function soupOf(g: THREE.BufferGeometry): Float32Array {
@@ -115,6 +133,363 @@ function transformSoup(soup: Float32Array, m: THREE.Matrix4): Float32Array {
     out[i + 1] = v.y;
     out[i + 2] = v.z;
   }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// GLB (glTF 2.0 ikili) okuma. Bağımlılıksız ve eşzamanlı (three'nin GLTFLoader'ı async; parseMeshFile senkron kalır),
+// yalnızca geometri: malzeme, doku, normal, animasyon ve morph hedefleri yok sayılır. Varsayılan sahnenin düğüm ağacı
+// dünya matrisleriyle gezilir; tüm üçgen ilkelleri tek çorbada birleşir (STL/OBJ/3MF gibi: bir dosya → bir ağ parçası).
+// Eksen ve birim gltf.ts'in tersi: glTF (X, Y, Z) → P3D (X, −Z, Y) × 1000 (`asset.extras.units` 'mm' ise × 1).
+
+const GLB_MAGIC = 0x46546c67; // 'glTF'
+const GLB_CHUNK_JSON = 0x4e4f534a; // 'JSON'
+const GLB_CHUNK_BIN = 0x004e4942; // 'BIN\0'
+/** Bileşen tipi → bayt. */
+const COMPONENT_BYTES: Record<number, number> = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
+const TYPE_SIZE: Record<string, number> = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
+/** Geometriyi okunamaz kılan sıkıştırma uzantıları: dosyada kullanılıyorsa (zorunlu ya da değil) hata. */
+const COMPRESSION_EXTENSIONS: Record<string, string> = {
+  KHR_draco_mesh_compression: 'Draco sıkıştırması',
+  EXT_meshopt_compression: 'meshopt sıkıştırması',
+};
+/** Zorunluysa okunamayan uzantı (yalnızca normal/doku nicemlenmişse dosya okunur; nicemlenmiş konum ayrıca hata verir). */
+const QUANTIZATION_EXTENSION = 'KHR_mesh_quantization';
+/** Bir erişimcinin en fazla değer sayısı (count × bileşen): bozuk ya da şişirilmiş `count` belleği tüketmesin. */
+const MAX_ACCESSOR_VALUES = 1e8;
+
+interface GltfAccessor {
+  bufferView?: number;
+  byteOffset?: number;
+  componentType: number;
+  normalized?: boolean;
+  count: number;
+  type: string;
+  sparse?: unknown;
+}
+interface GltfNode {
+  children?: number[];
+  mesh?: number;
+  skin?: number;
+  matrix?: number[];
+  translation?: number[];
+  rotation?: number[];
+  scale?: number[];
+  extensions?: { EXT_mesh_gpu_instancing?: { attributes?: Record<string, number> } };
+}
+interface GltfPrimitive {
+  attributes?: Record<string, number>;
+  indices?: number;
+  mode?: number;
+  extensions?: Record<string, unknown>;
+}
+interface GltfJson {
+  asset?: { version?: string; extras?: { units?: unknown } };
+  extensionsUsed?: string[];
+  extensionsRequired?: string[];
+  scene?: number;
+  scenes?: { nodes?: number[] }[];
+  nodes?: GltfNode[];
+  meshes?: { primitives?: GltfPrimitive[] }[];
+  skins?: { joints?: number[]; inverseBindMatrices?: number }[];
+  accessors?: GltfAccessor[];
+  bufferViews?: { buffer: number; byteOffset?: number; byteLength: number; byteStride?: number; extensions?: Record<string, unknown> }[];
+  buffers?: { uri?: string; byteLength?: number }[];
+}
+
+const glbCorrupt = (what: string) => new Error(`GLB bozuk: ${what}.`);
+const unsupported = (names: string[]) =>
+  new Error(
+    `GLB ${names.map((e) => `${COMPRESSION_EXTENSIONS[e] ?? 'nicemlenmiş köşe verisi'} (${e})`).join(', ')} kullanıyor; desteklenmiyor. ` +
+      'Sıkıştırmasız GLB olarak dışa aktarın (ör. Blender: Compression kapalı).',
+  );
+/** Uzun metni (ör. data: URI) hata mesajı için kısaltır. */
+const clip = (s: string, n = 60) => (s.length > n ? `${s.slice(0, n)}…` : s);
+
+/** GLB → üçgen çorbası (P3D mm, Z yukarı). */
+function parseGlb(data: ArrayBuffer): Float32Array {
+  const bytes = new Uint8Array(data);
+  const dv = new DataView(data);
+  if (bytes.length < 12 || dv.getUint32(0, true) !== GLB_MAGIC) throw new Error('GLB değil: dosya "glTF" imzasıyla başlamıyor (bozuk ya da başka bir biçim).');
+  const version = dv.getUint32(4, true);
+  if (version !== 2) throw new Error(`GLB sürümü ${version} desteklenmiyor; yalnızca glTF 2.0.`);
+  const end = Math.min(dv.getUint32(8, true), bytes.length);
+  let json: GltfJson | undefined;
+  let bin: Uint8Array | undefined;
+  for (let o = 12; o + 8 <= end; ) {
+    const len = dv.getUint32(o, true);
+    const type = dv.getUint32(o + 4, true);
+    const s = o + 8;
+    if (s + len > bytes.length) throw glbCorrupt('bir veri bölümü (chunk) dosyanın sonunu aşıyor');
+    if (type === GLB_CHUNK_JSON && !json) {
+      try {
+        json = JSON.parse(new TextDecoder().decode(bytes.subarray(s, s + len)));
+      } catch (e) {
+        throw glbCorrupt(`JSON bölümü okunamadı (${(e as Error).message})`);
+      }
+    } else if (type === GLB_CHUNK_BIN && !bin) bin = bytes.subarray(s, s + len);
+    o = s + len;
+  }
+  if (!json || typeof json !== 'object') throw glbCorrupt('JSON bölümü yok');
+  const gl = json;
+  // Sıkıştırma uzantısı kullanılıyorsa (zorunlu olmasa da: yedek veri çoğu zaman boştur) okunmaz; ilkel ve bufferView
+  // düzeyinde de aşağıda denetlenir.
+  const declared = [...new Set([...(gl.extensionsRequired ?? []), ...(gl.extensionsUsed ?? [])])];
+  const blocked = declared.filter((e) => e in COMPRESSION_EXTENSIONS);
+  if ((gl.extensionsRequired ?? []).includes(QUANTIZATION_EXTENSION)) blocked.push(QUANTIZATION_EXTENSION);
+  if (blocked.length) throw unsupported(blocked);
+  const k = gl.asset?.extras?.units === 'mm' ? 1 : 1000;
+
+  // Tamponlar: 0 numaralı, uri'siz tampon BIN bölümüdür; data: URI çözülür; harici dosya desteklenmez.
+  const buffers = new Map<number, Uint8Array>();
+  const buffer = (i: number): Uint8Array => {
+    let b = buffers.get(i);
+    if (b) return b;
+    const def = gl.buffers?.[i];
+    if (!def) throw glbCorrupt(`${i}. tampon tanımlı değil`);
+    if (def.uri === undefined) {
+      if (i !== 0 || !bin) throw glbCorrupt(`${i}. tamponun verisi yok`);
+      b = bin;
+    } else {
+      const m = /^data:[^,]*;base64,(.*)$/s.exec(def.uri);
+      if (!m) throw new Error(`GLB harici tampon dosyası kullanıyor (${clip(def.uri)}); desteklenmiyor — tek dosyalık .glb olarak dışa aktarın.`);
+      b = Uint8Array.from(atob(m[1]), (ch) => ch.charCodeAt(0));
+    }
+    buffers.set(i, b);
+    return b;
+  };
+
+  /** Erişimcinin değerleri (count × bileşen); bayt adımı, ofsetler ve normalize tamsayılar uygulanmış. */
+  const readAccessor = (index: number, what: string): { data: Float64Array; size: number; count: number; acc: GltfAccessor } => {
+    const a = gl.accessors?.[index];
+    if (!a) throw glbCorrupt(`${what} erişimcisi (${index}) yok`);
+    if (a.sparse) throw new Error(`GLB seyrek (sparse) erişimci kullanıyor (${what}); desteklenmiyor.`);
+    const size = TYPE_SIZE[a.type];
+    const cb = COMPONENT_BYTES[a.componentType];
+    if (!size || !cb || !Number.isInteger(a.count) || a.count < 0) throw glbCorrupt(`${what} erişimcisinin tipi geçersiz`);
+    if (a.count * size > MAX_ACCESSOR_VALUES) throw glbCorrupt(`${what} erişimcisi çok büyük (${a.count} öğe)`);
+    // bufferView yoksa tanım gereği sıfırlar.
+    if (a.bufferView === undefined || a.count === 0) return { data: new Float64Array(a.count * size), size, count: a.count, acc: a };
+    const view = gl.bufferViews?.[a.bufferView];
+    if (!view) throw glbCorrupt(`${what} erişimcisinin bufferView'ı (${a.bufferView}) yok`);
+    const comp = Object.keys(view.extensions ?? {}).filter((e) => e in COMPRESSION_EXTENSIONS);
+    if (comp.length) throw unsupported(comp);
+    const buf = buffer(view.buffer);
+    const elem = cb * size;
+    const stride = view.byteStride && view.byteStride > 0 ? view.byteStride : elem;
+    const viewStart = view.byteOffset ?? 0;
+    const start = viewStart + (a.byteOffset ?? 0);
+    if (viewStart + view.byteLength > buf.length || (a.byteOffset ?? 0) + stride * (a.count - 1) + elem > view.byteLength) {
+      throw glbCorrupt(`${what} erişimcisi tampon dışına taşıyor`);
+    }
+    // Sınır denetiminden sonra ayrılır: count veri boyutuyla sınırlıdır.
+    const out = new Float64Array(a.count * size);
+    const d = new DataView(buf.buffer, buf.byteOffset + start, view.byteLength - (a.byteOffset ?? 0));
+    const get: (o: number) => number = {
+      5120: (o: number) => d.getInt8(o),
+      5121: (o: number) => d.getUint8(o),
+      5122: (o: number) => d.getInt16(o, true),
+      5123: (o: number) => d.getUint16(o, true),
+      5125: (o: number) => d.getUint32(o, true),
+      5126: (o: number) => d.getFloat32(o, true),
+    }[a.componentType]!;
+    const norm = a.normalized ? { 5120: 127, 5121: 255, 5122: 32767, 5123: 65535 }[a.componentType as 5120] : undefined;
+    for (let i = 0; i < a.count; i++) {
+      for (let c = 0; c < size; c++) {
+        const v = get(i * stride + c * cb);
+        out[i * size + c] = norm ? Math.max(v / norm, -1) : v;
+      }
+    }
+    return { data: out, size, count: a.count, acc: a };
+  };
+
+  // Düğümlerin dünya matrisleri (ebeveyn zinciriyle; döngüye karşı korumalı).
+  const nodes = gl.nodes ?? [];
+  const parent = new Map<number, number>();
+  nodes.forEach((n, i) => n.children?.forEach((c) => parent.set(c, i)));
+  const worlds = new Map<number, THREE.Matrix4>();
+  const localOf = (n: GltfNode): THREE.Matrix4 => {
+    const m = new THREE.Matrix4();
+    if (Array.isArray(n.matrix) && n.matrix.length === 16) return m.fromArray(n.matrix);
+    const [tx, ty, tz] = n.translation ?? [0, 0, 0];
+    const [qx, qy, qz, qw] = n.rotation ?? [0, 0, 0, 1];
+    const [sx, sy, sz] = n.scale ?? [1, 1, 1];
+    return m.compose(new THREE.Vector3(tx, ty, tz), new THREE.Quaternion(qx, qy, qz, qw).normalize(), new THREE.Vector3(sx, sy, sz));
+  };
+  const worldOf = (i: number, depth = 0): THREE.Matrix4 => {
+    const cached = worlds.get(i);
+    if (cached) return cached;
+    const n = nodes[i];
+    if (!n) throw glbCorrupt(`${i}. düğüm yok`);
+    if (depth > nodes.length) throw glbCorrupt('düğüm ağacında döngü var');
+    const p = parent.get(i);
+    const m = p === undefined ? localOf(n) : worldOf(p, depth + 1).clone().multiply(localOf(n));
+    worlds.set(i, m);
+    return m;
+  };
+
+  /**
+   * EXT_mesh_gpu_instancing: düğümün örnek matrisleri (TRANSLATION / ROTATION / SCALE erişimcilerinden T · R · S); uzantı yoksa
+   * null. Örnek sayısı 0 ise düğüm hiç çizilmez.
+   */
+  const instancesOf = (node: GltfNode): THREE.Matrix4[] | null => {
+    const ext = node.extensions?.EXT_mesh_gpu_instancing;
+    if (!ext) return null;
+    const attrs = ext.attributes ?? {};
+    const read = (name: string, size: number) => {
+      if (attrs[name] === undefined) return null;
+      const r = readAccessor(attrs[name], `örnek ${name}`);
+      if (r.size !== size) throw glbCorrupt(`örnek ${name} erişimcisinin tipi geçersiz`);
+      return r;
+    };
+    const t = read('TRANSLATION', 3);
+    const r = read('ROTATION', 4);
+    const s = read('SCALE', 3);
+    const counts = [t, r, s].filter((x) => x).map((x) => x!.count);
+    if (!counts.length) return null;
+    if (counts.some((c) => c !== counts[0])) throw glbCorrupt('örnek (instancing) erişimcilerinin sayıları farklı');
+    return Array.from({ length: counts[0] }, (_, i) =>
+      new THREE.Matrix4().compose(
+        t ? new THREE.Vector3().fromArray(t.data, i * 3) : new THREE.Vector3(),
+        r ? new THREE.Quaternion().fromArray(r.data, i * 4).normalize() : new THREE.Quaternion(),
+        s ? new THREE.Vector3().fromArray(s.data, i * 3) : new THREE.Vector3(1, 1, 1),
+      ),
+    );
+  };
+
+  // Varsayılan sahnenin düğümleri (sahne yoksa kök düğümler), derinlik öncelikli.
+  const scene = gl.scenes?.length ? gl.scenes[gl.scene ?? 0] : undefined;
+  if (gl.scenes?.length && !scene) throw glbCorrupt(`varsayılan sahne (${gl.scene}) yok`);
+  const roots = scene ? (scene.nodes ?? []) : nodes.map((_, i) => i).filter((i) => !parent.has(i));
+  const order: number[] = [];
+  const seen = new Set<number>();
+  const visit = (i: number) => {
+    if (seen.has(i)) return;
+    seen.add(i);
+    order.push(i);
+    for (const c of nodes[i]?.children ?? []) visit(c);
+  };
+  roots.forEach(visit);
+
+  const chunks: Float32Array[] = [];
+  const v = new THREE.Vector3();
+  /** Dünya (glTF) konumlarından üçgenler, P3D eksen/birimiyle; aynalı köşeden başlayan üçgenin sarımı ters çevrilir. */
+  const emit = (tri: number[], world: Float64Array, mirrored: Uint8Array) => {
+    const out = new Float32Array(tri.length * 3);
+    for (let t = 0; t < tri.length; t += 3) {
+      const corners = mirrored[tri[t]] === 1 ? [tri[t], tri[t + 2], tri[t + 1]] : [tri[t], tri[t + 1], tri[t + 2]];
+      corners.forEach((c, j) => {
+        const o = (t + j) * 3;
+        out[o] = world[c * 3] * k;
+        out[o + 1] = -world[c * 3 + 2] * k;
+        out[o + 2] = world[c * 3 + 1] * k;
+      });
+    }
+    chunks.push(out);
+  };
+  for (const ni of order) {
+    const node = nodes[ni];
+    if (node?.mesh === undefined) continue;
+    const mesh = gl.meshes?.[node.mesh];
+    if (!mesh) throw glbCorrupt(`${node.mesh}. ağ (mesh) yok`);
+    const skin = node.skin !== undefined ? gl.skins?.[node.skin] : undefined;
+    if (node.skin !== undefined && !skin) throw glbCorrupt(`${node.skin}. iskelet (skin) yok`);
+    const instances = instancesOf(node);
+    for (const prim of mesh.primitives ?? []) {
+      const mode = prim.mode ?? 4;
+      if (mode < 4 || mode > 6) continue; // nokta / çizgi
+      const comp = Object.keys(prim.extensions ?? {}).filter((e) => e in COMPRESSION_EXTENSIONS);
+      if (comp.length) throw unsupported(comp);
+      const attrs = prim.attributes ?? {};
+      if (attrs.POSITION === undefined) continue;
+      const pa = gl.accessors?.[attrs.POSITION];
+      if (pa && (pa.componentType !== 5126 || pa.type !== 'VEC3')) {
+        throw new Error('GLB konumları (POSITION) float VEC3 değil (nicemlenmiş ağ); desteklenmiyor.');
+      }
+      const pos = readAccessor(attrs.POSITION, 'konum (POSITION)');
+      let idx: ArrayLike<number>;
+      if (prim.indices !== undefined) {
+        const ia = readAccessor(prim.indices, 'indis');
+        if (ia.size !== 1 || ![5121, 5123, 5125].includes(ia.acc.componentType)) throw glbCorrupt('indis erişimcisi işaretsiz tamsayı SCALAR değil');
+        idx = ia.data;
+        for (let i = 0; i < idx.length; i++) if (idx[i] >= pos.count) throw glbCorrupt('indis köşe sayısını aşıyor');
+      } else {
+        idx = Array.from({ length: pos.count }, (_, i) => i);
+      }
+      const tri = triangleIndices(idx, mode);
+      if (!tri.length) continue;
+
+      // Köşelerin dünya konumu (glTF) ve dönüşümün ayna olup olmadığı (sarım ters çevrilir).
+      const jointSets: [number, number][] = [];
+      for (let s = 0; attrs[`JOINTS_${s}`] !== undefined && attrs[`WEIGHTS_${s}`] !== undefined; s++) jointSets.push([attrs[`JOINTS_${s}`], attrs[`WEIGHTS_${s}`]]);
+      const nodeWorld = worldOf(ni);
+      if (skin && jointSets.length) {
+        if (instances) throw new Error('GLB iskeletli (skin) ağda örnekleme (EXT_mesh_gpu_instancing) kullanıyor; desteklenmiyor.');
+        // Skinned mesh: düğümün kendi dönüşümü yok sayılır (glTF); köşe = Σ w · (eklemDünya · tersBağlama) · v.
+        const joints = skin.joints ?? [];
+        let ibm: Float64Array | null = null;
+        if (skin.inverseBindMatrices !== undefined) {
+          const r = readAccessor(skin.inverseBindMatrices, 'ters bağlama matrisi');
+          if (r.size !== 16) throw glbCorrupt('ters bağlama matrisi erişimcisi MAT4 değil');
+          if (r.count < joints.length) throw glbCorrupt(`ters bağlama matrisi sayısı (${r.count}) eklem sayısından (${joints.length}) az`);
+          ibm = r.data;
+        }
+        const jointMats = joints.map((j, i) => {
+          const m = worldOf(j).clone();
+          return ibm ? m.multiply(new THREE.Matrix4().fromArray(ibm, i * 16)) : m;
+        });
+        const sets = jointSets.map(([j, w]) => {
+          const ja = readAccessor(j, 'eklem (JOINTS)');
+          const wa = readAccessor(w, 'ağırlık (WEIGHTS)');
+          if (ja.size !== 4 || wa.size !== 4 || ja.count < pos.count || wa.count < pos.count) throw glbCorrupt('eklem/ağırlık erişimcisi VEC4 değil ya da köşe sayısından kısa');
+          for (const x of ja.data) if (!(x >= 0 && x < joints.length)) throw glbCorrupt(`eklem indisi (${x}) iskeletin dışında (${joints.length} eklem)`);
+          return { j: ja.data, w: wa.data };
+        });
+        const world = new Float64Array(pos.count * 3);
+        const mirrored = new Uint8Array(pos.count);
+        const sum = new THREE.Matrix4();
+        for (let i = 0; i < pos.count; i++) {
+          const e = sum.elements.fill(0);
+          let total = 0;
+          for (const s of sets) {
+            for (let c = 0; c < 4; c++) {
+              const w = s.w[i * 4 + c];
+              if (!w) continue;
+              const jm = jointMats[s.j[i * 4 + c]];
+              for (let q = 0; q < 16; q++) e[q] += w * jm.elements[q];
+              total += w;
+            }
+          }
+          const m = total > 0 ? sum.multiplyScalar(1 / total) : nodeWorld;
+          v.set(pos.data[i * 3], pos.data[i * 3 + 1], pos.data[i * 3 + 2]).applyMatrix4(m).toArray(world, i * 3);
+          mirrored[i] = m.determinant() < 0 ? 1 : 0;
+        }
+        emit(tri, world, mirrored);
+        continue;
+      }
+      // Örneklemede her örnek ayrı kopya: dünya = düğüm dünyası · örnek matrisi (ayna örneğinde sarım ters çevrilir).
+      for (const inst of instances ?? [null]) {
+        const m = inst ? nodeWorld.clone().multiply(inst) : nodeWorld;
+        const world = new Float64Array(pos.count * 3);
+        for (let i = 0; i < pos.count; i++) {
+          v.set(pos.data[i * 3], pos.data[i * 3 + 1], pos.data[i * 3 + 2]).applyMatrix4(m).toArray(world, i * 3);
+        }
+        emit(tri, world, new Uint8Array(pos.count).fill(m.determinant() < 0 ? 1 : 0));
+      }
+    }
+  }
+  const soup = concat(chunks);
+  if (!soup.length) throw new Error('GLB içinde üçgen bulunamadı (yalnızca nokta/çizgi ya da boş sahne).');
+  return soup;
+}
+
+/** İlkel kipine göre üçgen köşe indisleri: 4 üçgen, 5 şerit (strip), 6 yelpaze (fan); sarım glTF tanımındaki gibi. */
+function triangleIndices(idx: ArrayLike<number>, mode: number): number[] {
+  const out: number[] = [];
+  const n = idx.length;
+  if (mode === 4) for (let i = 0; i + 2 < n; i += 3) out.push(idx[i], idx[i + 1], idx[i + 2]);
+  else if (mode === 5) for (let i = 0; i + 2 < n; i++) out.push(idx[i], idx[i + 1 + (i % 2)], idx[i + 2 - (i % 2)]);
+  else if (mode === 6) for (let i = 0; i + 2 < n; i++) out.push(idx[i + 1], idx[i + 2], idx[0]);
   return out;
 }
 

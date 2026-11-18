@@ -123,6 +123,15 @@ describe('p3d run', () => {
     expect(err('--eye', '1,1,1', '--target', '1,1,1')).toContain('--eye ile --target aynı nokta olamaz');
     expect(err('--views', 'front', '--fov', '40')).toContain('yalnızca perspektif görünümlerde');
     expect(err('--eye-height', 'yüksek')).toContain('--eye-height mm cinsinden');
+    // Biçim (tel kafes / X-ışını): bilinmeyen değer tarayıcı açılmadan hata, --file ile de.
+    expect(err('--style', 'bogus')).toContain('Bilinmeyen --style: bogus (olanlar: shaded, wire, xray');
+    expect(err('--style', 'wireframe', '--file', 'alt/kup.obj')).toContain('Bilinmeyen --style: wireframe');
+    // İzdüşüm: bilinmeyen değer, eye ile orto, ortoda --fov — tarayıcı açılmadan hata (--file ile de).
+    expect(err('--projection', 'iso')).toContain('Bilinmeyen --projection: iso (olanlar: perspective, ortho)');
+    expect(err('--projection', 'ortho', '--views', 'iso,eye')).toContain('eye görünümü göz hizasından perspektiftir; --projection ortho ile kullanılamaz');
+    expect(err('--projection', 'ortho', '--eye-height', '700')).toContain('--projection ortho ile kullanılamaz');
+    expect(err('--projection', 'ortho', '--eye', '0,-500,200', '--fov', '40')).toContain('Ortoda --fov anlamsız');
+    expect(err('--projection', 'ortografik', '--file', 'alt/kup.obj')).toContain('Bilinmeyen --projection: ortografik');
   }, 60_000);
 
   it('--help sunucu ve sekme denetiminden önce yanıtlanır (BoltRush isteği #22)', () => {
@@ -135,6 +144,9 @@ describe('p3d run', () => {
       expect(r.stdout).toContain('  snapshot --file m.p3d.json');
       expect(r.stdout).toContain('[--eye x,y,z]'); // devam satırı
       expect(r.stdout).toContain('side yok');
+      expect(r.stdout).toContain('[--style shaded|wire|xray]');
+      expect(r.stdout).toContain('[--projection perspective|ortho]');
+      expect(r.stdout).toContain('İzdüşüm (--projection)');
       expect(r.stdout).toContain('p3d guide verify');
       expect(r.stdout).not.toContain('import <dosya');
     }
@@ -374,12 +386,72 @@ describe('tarayıcısız komutlar (--file)', () => {
     expect(bad.stderr).toContain('yalnızca GLB için');
   }, 60_000);
 
-  it('measure / section --file proje dosyasında; ağ dosyası scene için reddedilir', () => {
+  it('measure / section --file proje dosyasında; ağ dosyası scene ile tek parçalı proje olarak okunur', () => {
     expect(p3d(['measure', '--file', 'model.p3d.json', '--parts', 'govde'], dir)).toContain('govde [solid]: kutu -20,-10,0 → 20,10,10 (40,20,10), hacim 8 cm³');
     expect(p3d(['section', '--file', 'model.p3d.json', '--parts', 'govde', '--axis', 'z', '--at', '5'], dir)).toContain('alan 800 mm²');
     const mesh = p3dRun(['scene', '--file', 'alt/kup.obj'], dir);
-    expect(mesh.code).toBe(1);
-    expect(mesh.stderr).toContain('yalnızca section --file');
+    expect(mesh.code).toBe(0);
+    expect(mesh.stdout).toContain(`ağ dosyası: ${path.join(dir, 'alt', 'kup.obj')} (bellekte tek parçalı proje, dosyadaki yerinde)`);
+    expect(mesh.stdout).toMatch(/ kup \[mesh\] mesh:12△ +\| konum=5,5,5 \| bbox=0,0,0 → 10,10,10/);
+  }, 60_000);
+
+  it('ağ dosyası --file (GLB): scene / measure / check import olmadan okur, hacim kaynak projeyle aynı; yazan komutlar reddeder', () => {
+    const ops = [
+      { op: 'create', shape: 'box', name: 'govde', params: [{ name: 'width', value: 40 }, { name: 'depth', value: 20 }, { name: 'height', value: 10 }], position: { x: 0, y: 0, z: 5 } },
+      { op: 'create', shape: 'cylinder', name: 'mil', params: [{ name: 'diameter', value: 10 }, { name: 'height', value: 30 }], position: { x: 0, y: 30, z: 8 }, rotation: { x: 0, y: 90, z: 20 } },
+    ];
+    expect(p3dRun(['apply', '--file', 'glbkaynak.p3d.json', '--new'], dir, { input: JSON.stringify(ops) }).code).toBe(0);
+    p3d(['export', 'kaynak.glb', '--file', 'glbkaynak.p3d.json'], dir);
+    const glb = path.join(dir, 'kaynak.glb');
+    const before = readFileSync(glb);
+
+    const src = p3d(['measure', '--file', 'glbkaynak.p3d.json'], dir);
+    const total = /TOPLAM katı: kutu (\S+ → \S+)/.exec(src)![1];
+    const union = /BİRLEŞİK hacim \(örtüşmeler bir kez\): (\S+) cm³/.exec(src)![1];
+
+    const scene = p3d(['scene', '--file', 'kaynak.glb'], dir);
+    expect(scene).toContain(`ağ dosyası: ${glb}`);
+    const line = / kaynak \[mesh\] mesh:(\d+)△ .*\| bbox=(\S+ → \S+) \|/.exec(scene)!;
+    expect(Number(line[1])).toBe(12 + 4 * 96); // kutu + silindir (çözünürlük 96), sadeleştirme yok
+    expect(line[2]).toBe(total);
+
+    const m = p3d(['measure', '--file', 'kaynak.glb'], dir);
+    expect(m).toContain(`BİRLEŞİK hacim (örtüşmeler bir kez): ${union} cm³`);
+    expect(m).toContain(`TOPLAM katı: kutu ${total}`);
+    const c = p3dRun(['check', '--file', 'kaynak.glb', '--profile', 'game'], dir);
+    expect(c.code).toBe(0);
+    expect(c.stdout).toContain('✓ Sorun bulunmadı.');
+    // --full: proje JSON'u; stdout başka klasöre kaydedilebileceği için kaynak yolu mutlak (ağ gömülmez, sınır GLB varsayılanı).
+    const full = JSON.parse(p3dRun(['scene', '--file', 'kaynak.glb', '--full'], dir).stdout);
+    expect(full.parts[0].geom).toMatchObject({ kind: 'mesh', src: glb, maxTris: 1000000 });
+    expect(full.assets).toBeUndefined();
+    // Proje dosyasında --full göreli kalır.
+    expect(JSON.parse(p3dRun(['scene', '--file', 'yol.p3d.json', '--full'], dir).stdout).parts[0].geom.src).toBe('alt/kup.obj');
+    // sketch listeleme ağ dosyasını okur (eskiz yok); --clear reddedilir.
+    const sk = p3dRun(['sketch', '--file', 'kaynak.glb'], dir);
+    expect(sk.code).toBe(0);
+    expect(sk.stdout).toContain(`ağ dosyası: ${glb}`);
+    expect(sk.stdout).toContain('eskiz yok.');
+    // section ağ dosyasını ham okur (dosya koordinatları; GLB'de Z yukarıya çevrilmiş).
+    expect(p3d(['section', '--file', 'kaynak.glb', '--axis', 'z', '--at', '5'], dir)).toContain('kaynak.glb: kutu');
+
+    // Yazan komutlar ağ dosyasını reddeder; ağ dosyası değişmez.
+    const apply = p3dRun(['apply', '--file', 'kaynak.glb'], dir, { input: '[]' });
+    expect(apply.code).toBe(1);
+    expect(apply.stderr).toContain('apply --file bir proje dosyası ister (.p3d.json); kaynak.glb bir ağ dosyası');
+    const exp = p3dRun(['export', 'kopya.stl', '--file', 'kaynak.glb'], dir);
+    expect(exp.code).toBe(1);
+    expect(exp.stderr).toContain('ağ dosyasına hiçbir şey yazılmaz');
+    expect(readdirSync(dir)).not.toContain('kopya.stl');
+    const clear = p3dRun(['sketch', '--clear', '--file', 'kaynak.glb'], dir);
+    expect(clear.code).toBe(1);
+    expect(clear.stderr).toContain('sketch --file bir proje dosyası ister (.p3d.json); kaynak.glb bir ağ dosyası');
+    expect(clear.stderr).toContain('scene, snapshot, measure, check, section ve sketch (yalnızca listeleme)');
+    expect(readFileSync(glb).equals(before)).toBe(true);
+    // glTF metin biçimi: açıklayıcı hata.
+    const gltf = p3dRun(['scene', '--file', 'model.gltf'], dir);
+    expect(gltf.code).toBe(1);
+    expect(gltf.stderr).toContain('.gltf desteklenmez');
   }, 60_000);
 
   it('sketch --file: metin listesi, --json, scene satırı; --clear yol/tümü (hata varsa yazmaz)', () => {

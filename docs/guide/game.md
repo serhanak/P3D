@@ -72,6 +72,10 @@ p3d export araba.glb [--file model.p3d.json] [--units m|mm] [--normals flat|smoo
   (ağırlık 1 — gerçek rig değil). Kemik adları Unreal için ASCII'ye çevrilir (`sol ön teker` → `sol_on_teker`), özgün ad
   `extras.name`'de. Teker kemiklerini araç ayarlarında bu adlarla eşleyin.
 - Arayüzde: Dışa aktar → "GLB (oyun motoru)" / "GLB + iskelet (Unreal araç)".
+- **Çıktıyı görmek:** `p3d snapshot --file araba.glb --style wire` (üçgen kenarları; `xray` arkadakiler dahil) ve `p3d scene|measure|
+  check --file araba.glb` GLB'yi içe aktarmadan okur (P3D'nin kendi GLB'leri iskeletli olanlar dahil yerinde çıkar; ayıklanmış
+  GLB'de atılan iç yüzler ve onarım bölmeleri görünür). Arayüzde **Aç…** GLB'yi yeni proje olarak açar, **W** tel kafese geçer.
+  Okuma yalnız geometridir (malzeme/normal okunmaz); Draco/meshopt sıkıştırmalı ve nicemlenmiş GLB desteklenmez.
 
 ## Kontrol
 `p3d check --profile game [--max-tris 20000] [--cull-hidden]`: z-fighting, boolean hatası, boş delik, **toplam üçgen bütçesi**

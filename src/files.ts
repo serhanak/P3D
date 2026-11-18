@@ -16,8 +16,8 @@ import { samePath } from '../scripts/config';
 import { getAsset, registerAsset } from './assets';
 import { initCsg } from './csg';
 import { glbBuild, selectParts } from './gltf';
-import { buildObj, mergedMesh, parseProject, worldMesh } from './io';
-import { build3mf, buildStl, meshAssetFromSoup, parseMeshFile } from './meshio';
+import { buildObj, mergedMesh, parseProject, projectFromMesh, worldMesh } from './io';
+import { build3mf, buildStl, defaultMaxTris, meshAssetFromSoup, meshFormatOf, parseMeshFile, type ImportedMesh } from './meshio';
 import { isDecal } from './model';
 import type { Part, Project } from './types';
 
@@ -38,7 +38,7 @@ export function readArrayBuffer(file: string): ArrayBuffer {
   return toArrayBuffer(readFileSync(file));
 }
 
-/** STL / OBJ / 3MF dosyasını üçgen çorbasına okur (mm, dosya koordinatları). */
+/** STL / OBJ / 3MF / GLB dosyasını üçgen çorbasına okur (mm, dosya koordinatları; GLB'de Z yukarıya çevrilmiş). */
 export function readMeshFile(file: string): Float32Array {
   return parseMeshFile(file, readArrayBuffer(file));
 }
@@ -214,7 +214,8 @@ async function resolveMeshSources(project: Project, dir: string, where: string, 
     try {
       const data = readFileSync(g.src);
       const stamp = sourceStamp(data);
-      const imp = await meshAssetFromSoup(path.basename(g.src).replace(/\.[^.]+$/, ''), parseMeshFile(g.src, toArrayBuffer(data)), g.maxTris);
+      const maxTris = g.maxTris ?? defaultMaxTris(meshFormatOf(g.src));
+      const imp = await meshAssetFromSoup(path.basename(g.src).replace(/\.[^.]+$/, ''), parseMeshFile(g.src, toArrayBuffer(data)), maxTris);
       registerAsset(imp.asset, g.asset);
       if (hasStamp(g) && !stampMatches(g, stamp)) {
         warnings.push(`'${p.name}': kaynak dosya değişmiş (${g.src}); ağ dosyanın yeni içeriğinden okundu, kaydedildiği hâlden farklı olabilir.`);
@@ -232,6 +233,40 @@ async function resolveMeshSources(project: Project, dir: string, where: string, 
         'Kaynak dosyayı yerine koyun, yolu (geom.src, proje dosyasına göreli) düzeltin ya da parçayı silin.',
     );
   }
+}
+
+/** Ağ dosyasından kurulan bellek projesi (`loadMeshFileProject`). */
+export interface MeshFileProject {
+  project: Project;
+  /** İçe aktarma özeti: dosyadaki merkez, boyut, özgün üçgen sayısı (sadeleştirildiyse `asset.triangles` daha küçük). */
+  mesh: ImportedMesh;
+}
+
+/**
+ * Ağ dosyasını (STL / OBJ / 3MF / GLB) bellekte tek parçalı bir projeye açar (`p3d scene|snapshot|measure|check --file ağ`):
+ * proje ve parça adı dosya adı (uzantısız), parça dosyadaki yerinde, üçgen sınırı biçimin varsayılanı (`defaultMaxTris`: GLB'de
+ * pratikte sadeleştirme yok), kaynak (`src` + damga) `p3d import` ile aynı; tabla ağı sığdıracak kadar büyür. Ağ dosyası hiç
+ * yazılmaz. Boolean çekirdeğini de hazırlar.
+ */
+export async function loadMeshFileProject(file: string): Promise<MeshFileProject> {
+  const abs = path.resolve(file);
+  let data: Buffer;
+  try {
+    data = readFileSync(abs);
+  } catch (e) {
+    throw new Error(statOf(abs) ? `${abs} okunamadı: ${(e as Error).message}` : `Dosya bulunamadı: ${abs}`);
+  }
+  const name = path.basename(abs).replace(/\.[^.]+$/, '') || 'Ağ';
+  const maxTris = defaultMaxTris(meshFormatOf(abs));
+  let soup: Float32Array;
+  try {
+    soup = parseMeshFile(abs, toArrayBuffer(data));
+  } catch (e) {
+    throw new Error(`${abs}: ${(e as Error).message}`);
+  }
+  const mesh = await meshAssetFromSoup(name, soup, maxTris);
+  await initCsg();
+  return { project: projectFromMesh(name, mesh, { src: abs, maxTris, ...sourceStamp(data) }), mesh };
 }
 
 export interface SaveOptions {
@@ -267,13 +302,14 @@ function relativeSrc(dir: string, to: string): string {
  * yazılır; ağ gömülmez, damgası (srcSize / srcHash) yazılır. Gömülenler: `embedAll`, `keep` kümesindekiler (dosyadan
  * gömülü gelenler, hedefte zaten gömülü olanlar), kaynağı olmayan / bulunamayan / okunamayan ve kaynağı kayıttaki
  * damgadan farklı olanlar (bellekteki ağ değişmiş kaynağın yerine geçmesin). Ağ verisi bellekte olmayan gömülecek
- * parçalar `missing`'e girer (çağıran yazmaz).
+ * parçalar `missing`'e girer (çağıran yazmaz). `absoluteSrc`: kaynak yolu göreli değil mutlak yazılır.
  */
 function serializeProject(
   project: Project,
   abs: string,
   embedAll: boolean,
   keep: ReadonlySet<string>,
+  absoluteSrc = false,
 ): Omit<SaveResult, 'file'> & { text: string; missing: string[] } {
   const dir = path.dirname(abs);
   const assets: Record<string, MeshAsset> = {};
@@ -297,7 +333,7 @@ function serializeProject(
     const src = g.src ? path.resolve(g.src) : undefined;
     const srcOk = !!src && !!statOf(src)?.isFile();
     const geom: MeshGeom = { ...g };
-    if (src && srcOk) geom.src = relativeSrc(dir, src);
+    if (src && srcOk) geom.src = absoluteSrc ? src : relativeSrc(dir, src);
     const a = getAsset(g.asset);
     const stamp = src && srcOk && !embedAll && !keep.has(g.asset) ? stampOf(src) : null;
     if (stamp) {
@@ -359,9 +395,10 @@ export function saveProjectFile(project: Project, file: string, opts: SaveOption
 
 /**
  * Projenin `file`'a kaydedilseydi yazılacak metni (saveProjectFile ile aynı kurallar; dosyaya yazmaz). `p3d scene
- * --file --full` bunu basar: `src` göreli, dosyada gömülü gelen ağlar gömülü.
+ * --file --full` bunu basar: `src` göreli, dosyada gömülü gelen ağlar gömülü. `absoluteSrc` (`--file ağ.glb`: çıktı başka
+ * bir klasöre kaydedilebilir): kaynak yolu mutlak.
  */
-export function projectFileText(project: Project, file: string, opts: Pick<SaveOptions, 'embed'> = {}): string {
+export function projectFileText(project: Project, file: string, opts: Pick<SaveOptions, 'embed'> & { absoluteSrc?: boolean } = {}): string {
   const abs = path.resolve(file);
   let existing: { assets: string[] } | null = null;
   try {
@@ -369,7 +406,7 @@ export function projectFileText(project: Project, file: string, opts: Pick<SaveO
   } catch {
     // P3D dosyası değil: yalnızca bu süreçte gömülü yüklenenler korunur
   }
-  const out = serializeProject(project, abs, !!opts.embed, keptEmbedded(existing));
+  const out = serializeProject(project, abs, !!opts.embed, keptEmbedded(existing), !!opts.absoluteSrc);
   if (out.missing.length) throw missingError(out.missing, abs);
   return out.text;
 }

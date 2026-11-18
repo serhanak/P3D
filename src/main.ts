@@ -1,12 +1,12 @@
 import './style.css';
 import wasmUrl from 'manifold-3d/manifold.wasm?url';
-import { wsFromPathname, wsLabel, wsPath, type Op } from '../shared/ops';
+import { VIEW_STYLES, wsFromPathname, wsLabel, wsPath, type Op, type ViewStyle } from '../shared/ops';
 import { claimAutosave, indexedDbBackend, localStorageBackend, type AutosaveRecord } from './autosave';
 import { sceneSummary, type ApplyResult } from './engine';
-import { MAX_BED, exportModel, meshPartsWithoutData, parseProject, projectToJson, download, safeFileName, type ExportKind } from './io';
+import { MAX_BED, exportModel, meshPartsWithoutData, parseProject, projectFromMesh, projectToJson, download, safeFileName, type ExportKind } from './io';
 import { connectBridge } from './bridge';
 import { initCsg } from './csg';
-import { meshAssetFromSoup, meshFormatOf, parseMeshFile } from './meshio';
+import { defaultMaxTris, meshAssetFromSoup, meshFormatHint, meshFormatOf, parseMeshFile } from './meshio';
 import { askClaude, fetchLlmStatus, type LlmStatus } from './nlp/llm';
 import { HELP_TEXT, parseCommand } from './nlp/parser';
 import { SketchTool } from './sketch-tool';
@@ -459,12 +459,33 @@ $('tg-dims').addEventListener('change', (e) =>
 $('tg-holes').addEventListener('change', (e) =>
   store.apply([{ op: 'view', show_holes: (e.target as HTMLInputElement).checked }]),
 );
+// Görünüm biçimi (yalnızca bellekte; projeye, geri-al geçmişine ve otomatik kayda girmez): W ile sırayla döner.
+const STYLE_LABEL: Record<ViewStyle, string> = { shaded: 'Gölgeli', wire: 'Tel kafes', xray: 'X-ışını' };
+const styleButtons = document.querySelectorAll<HTMLButtonElement>('[data-style]');
+function setViewStyle(style: ViewStyle): void {
+  viewer.setStyle(style);
+  styleButtons.forEach((b) => b.classList.toggle('active', b.dataset.style === style));
+}
+styleButtons.forEach((b) => b.addEventListener('click', () => setViewStyle(b.dataset.style as ViewStyle)));
+setViewStyle(viewer.style);
 $('btn-pen').addEventListener('click', () => sketchTool.toggle());
 $('tg-sketch').addEventListener('change', (e) => sketchTool.setVisible((e.target as HTMLInputElement).checked));
 document.querySelectorAll<HTMLButtonElement>('[data-view]').forEach((b) =>
   b.addEventListener('click', () => viewer.setPreset(b.dataset.view as ViewPreset, store.project)),
 );
 $('btn-fit').addEventListener('click', () => viewer.fit(store.project));
+// Kamera tipi (yalnızca bellekte; projeye girmez): perspektif ↔ ortografik, O / Num 5.
+const orthoButton = $<HTMLButtonElement>('btn-ortho');
+function toggleProjection(): void {
+  // Kalemle çizilirken / sürüklenirken kamera değişmez (taslak ekranda kaymasın).
+  if (sketchTool.busy()) return toast('Çizim sürerken kamera değişmez (Enter ile bitirin ya da Esc).');
+  const next = viewer.projection === 'ortho' ? 'perspective' : 'ortho';
+  viewer.setProjection(next);
+  orthoButton.classList.toggle('active', next === 'ortho');
+  orthoButton.setAttribute('aria-pressed', String(next === 'ortho'));
+  toast(next === 'ortho' ? 'Ortografik kamera' : 'Perspektif kamera');
+}
+orthoButton.addEventListener('click', toggleProjection);
 
 $<HTMLInputElement>('project-name').addEventListener('change', (e) => {
   const v = (e.target as HTMLInputElement).value.trim();
@@ -514,6 +535,7 @@ fileInput.addEventListener('change', async () => {
   const file = fileInput.files?.[0];
   fileInput.value = '';
   if (!file) return;
+  if (meshFormatOf(file.name) === 'glb') return openGlb(file);
   try {
     const dropped: string[] = [];
     const notes: string[] = [];
@@ -538,16 +560,44 @@ fileInput.addEventListener('change', async () => {
   }
 });
 
+/**
+ * Aç… ile GLB: yeni proje kurar (ad = dosya adı, tek ağ parçası dosyadaki yerinde, tabla gerekirse büyür); dosyaya bağlı olmaz
+ * (Kaydet yeni bir .p3d.json indirir, ağ gömülü). Proje dosyası açmakla aynı akış: önceki proje yerini alır.
+ */
+async function openGlb(file: File): Promise<void> {
+  try {
+    const name = file.name.replace(/\.[^.]+$/, '') || 'GLB';
+    const imp = await meshAssetFromSoup(name, parseMeshFile(file.name, await file.arrayBuffer()), defaultMaxTris('glb'));
+    const project = projectFromMesh(name, imp);
+    const prev = store.file;
+    store.load(project);
+    viewer.fit(store.project);
+    const tr = (n: number) => n.toLocaleString('tr-TR');
+    addLog(
+      'info',
+      `“${file.name}” açıldı: yeni proje, tek ağ parçası (${tr(imp.asset.triangles)} üçgen), dosyadaki yerinde; boyut ${imp.size.x} × ${imp.size.y} × ${imp.size.z} mm. ` +
+        'Üçgen topolojisi için Tel kafes / X-ışını (W). Kaydet yeni bir .p3d.json indirir (ağ gömülü).',
+    );
+    if (imp.asset.triangles < imp.originalTriangles) addLog('info', `Ağ ${tr(imp.originalTriangles)} → ${tr(imp.asset.triangles)} üçgene sadeleştirildi.`);
+    noteUnbound(prev);
+    toast(`GLB açıldı: ${file.name}`);
+  } catch (e) {
+    toast(`Açılamadı: ${(e as Error).message}`, true);
+  }
+}
+
 const meshInput = $<HTMLInputElement>('mesh-input');
 $('btn-import').addEventListener('click', () => meshInput.click());
 meshInput.addEventListener('change', async () => {
   const file = meshInput.files?.[0];
   meshInput.value = '';
   if (!file) return;
-  if (!meshFormatOf(file.name)) return toast('Desteklenen biçimler: STL, OBJ, 3MF.', true);
+  const format = meshFormatOf(file.name);
+  if (!format) return toast(meshFormatHint(file.name), true);
   try {
     addLog('info', `“${file.name}” okunuyor…`);
-    const imp = await meshAssetFromSoup(file.name.replace(/\.[^.]+$/, ''), parseMeshFile(file.name, await file.arrayBuffer()));
+    // GLB'de varsayılan sınır pratikte sadeleştirme yok (oyun varlığında üçgen topolojisi önemli); diğerlerinde 60 000.
+    const imp = await meshAssetFromSoup(file.name.replace(/\.[^.]+$/, ''), parseMeshFile(file.name, await file.arrayBuffer()), defaultMaxTris(format));
     logResult(store.apply([{ op: 'import_mesh', asset: imp.asset }]));
     if (imp.asset.triangles < imp.originalTriangles) {
       addLog('info', `Ağ ${imp.originalTriangles.toLocaleString('tr-TR')} → ${imp.asset.triangles.toLocaleString('tr-TR')} üçgene sadeleştirildi.`);
@@ -632,6 +682,16 @@ document.addEventListener('keydown', (e) => {
     sketchTool.toggle();
   } else if (e.key === 'f' || e.key === 'F') {
     viewer.fit(store.project);
+  } else if ((e.key === 'o' || e.key === 'O' || e.code === 'Numpad5') && !ctrl && !e.altKey) {
+    // Basılı tutma tekrarı yok sayılır. Kalemde eksen kilidi açıkken Num 5 sayı girişine aittir (kamera değişmez); sayı
+    // girişi etkinse kalem rakamı yakalama aşamasında zaten tüketir.
+    if (e.repeat || (e.code === 'Numpad5' && sketchTool.wantsNumber())) return;
+    toggleProjection();
+  } else if ((e.key === 'w' || e.key === 'W') && !ctrl && !e.altKey) {
+    if (e.repeat) return;
+    const next = VIEW_STYLES[(VIEW_STYLES.indexOf(viewer.style) + 1) % VIEW_STYLES.length];
+    setViewStyle(next);
+    toast(`Görünüm: ${STYLE_LABEL[next]}`);
   } else if (e.key === '/') {
     e.preventDefault();
     input.focus();

@@ -1,6 +1,7 @@
 # Proje durumu
 
-> Son güncelleme: **2026-11-16** — BoltRush #22: `p3d <komut> --help` sunucu/sekme denetiminden önce yanıtlanır (komut başına
+> Son güncelleme: **2026-11-18** — GLB okuma (arayüzde Aç…/İçe aktar…, `p3d import`, `--file x.glb`), tel kafes / X-ışını
+> görünümü (araç çubuğu + W, `snapshot --style wire|xray`), ortografik kamera (Orto düğmesi + O / Num 5, `snapshot --projection ortho`). Önceki: **2026-11-16** — BoltRush #22: `p3d <komut> --help` sunucu/sekme denetiminden önce yanıtlanır (komut başına
 > yardım; `--views side` hatası left/right önerir). Önceki: **2026-11-15** — BoltRush #21: `--cull-hidden` birleşim çizgisi T-kavşağı onarımı (su geçirmez görünen yüzey) ve
 > net kayıp kuralı (ayıklama üçgen sayısını hiç artırmaz). Önceki: **2026-11-15** — BoltRush #18–20: GLB gizli üçgen ayıklama (`--cull-hidden`), kaplama şekli `decal`,
 > `snapshot` perspektif kamera (`eye` göz hizası, `--eye/--target/--fov`). Önceki: **2026-11-15** — `sweep` (yol boyunca süpürme,
@@ -19,7 +20,7 @@
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (372 test, ~40 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
+1. `npm install` · `npm run typecheck` · `npm test` (409 test, ~50 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
    (README → Kurulum; `p3d status` kurulu skill eskiyse uyarır).
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
@@ -174,6 +175,36 @@
   sadeleştirme), `sliceMany` (bir ağda çok kesit, tek dönüşüm). İçe aktarma sadeleştirmesi `Regularize` ile.
   Testler her örneğin onarımsız yüklendiğini ve kapalı ağ olarak dışa aktarıldığını doğrular.
 - **Başlatıcı** (`scripts/launch.ts`): `npm run dev|start -- --llm --bridge --port --host --model --effort --claude-bin`.
+- **GLB okuma ve tel kafes görünümü (2026-11-18):**
+  - GLB okuma (`src/meshio.ts`, bağımlılıksız, eşzamanlı): düğüm ağacı (matrix/TRS), ayna dönüşümünde sarım çevirme, strip/fan,
+    `byteStride`, u8/u16/u32 indis, normalize tamsayı, `data:` URI, skin (Σ w · eklem dünyası · ters bağlama · v; P3D `--skeleton`
+    çıktısı doğru yerde). Eksen/birim `gltf.ts`'in tersi (glTF (X, Y, Z) → P3D (X, −Z, Y) × 1000; `asset.extras.units` 'mm' ise × 1).
+    Tüm ilkeller tek mesh parçasında birleşir (STL/OBJ/3MF gibi; `geom.src` ile yeniden üretim aynı, proje biçimi değişmedi). GLB'de
+    varsayılan sadeleştirme sınırı 1 000 000 üçgen (`defaultMaxTris`; topoloji görülsün diye), diğer biçimler 60 000.
+    `EXT_mesh_gpu_instancing` uygulanır (örnek başına kopya, aynalı örnekte sarım çevrilir; skin ile birlikte desteklenmez).
+    Desteklenmeyen (açık hata, sessiz kayıp yok): `.gltf`, Draco/meshopt (zorunlu, kullanılan, ilkel ya da bufferView düzeyinde),
+    zorunlu `KHR_mesh_quantization`, seyrek erişimci, harici tampon. Bozuk dosya (taşan/şişirilmiş erişimci, düğüm döngüsü, eksik ters
+    bağlama matrisi, eklem indisi dışarıda) "GLB bozuk" hatası verir.
+  - Arayüz: **İçe aktar…** GLB'yi parça olarak ekler; **Aç…** bir `.glb`'den yeni proje kurar (tek ağ parçası dosyadaki yerinde, tabla
+    sığacak kadar büyür, dosyaya bağlı değil). `.mts` arayüzden açılmaz (bilinçli: Node betiği; `p3d run` + `p3d open`).
+  - CLI: `scene/snapshot/measure/check/section/sketch --file x.glb|stl|obj|3mf` bellekte tek parçalı proje kurar; yazan komutlar
+    (`apply`, `export`, `sketch --clear`) ağ dosyasını reddeder; `scene --full` ağ dosyasında `src`'yi mutlak yazar. `p3d import x.glb`. Kararlı API'ye `defaultMaxTris`, `projectFromMesh`,
+    `loadMeshFileProject` (yalnız ekleme).
+  - Görünüm biçimi Gölgeli / Tel kafes / X-ışını: araç çubuğu düğmeleri (etiket "Tel"; dar ekranda araç çubuğu sığsın diye) ve **W**.
+    Yalnızca bellekte (`Project.view`'a girmez). Tel kafes: dolgu + her üçgen kenarı, arkadakiler gizli; X-ışını: dolgu soluk, tüm
+    kenarlar parça renginde. `WireframeGeometry` tembel, `geomKey` ile önbellekli, Gölgeli'ye dönüşte bırakılır; görünür üçgen ≥ 500 bin
+    ise günlükte bir kez yavaşlık uyarısı. `snapshot --style shaded|wire|xray` arayüzdeki biçimden bağımsız (`finally`'de geri
+    yüklenir); verilmezse eski görüntü bayt bayt aynı. `p3d-reviewer` incelemesi (kritik/yüksek yok; 2 orta, 6 düşük) düzeltildi.
+  - Ortografik kamera: görünüm grubunda **Orto** aç/kapa (`O` / `Num 5`; metin alanında, basılı tutma tekrarında ve kalem aracında
+    çizim/sürükleme sürerken tetiklenmez; eksen kilidi açıkken Num 5 sayı girişine gider). Perspektif ve orto kamera birlikte tutulur,
+    yalnızca bellekte; geçişte hedef, bakış yönü ve hedefteki görünür ölçek korunur. Kamera matematiği DOM'suz `src/camera-math.ts`'te
+    (`orthoHeightFor`, `perspDistanceFor`, `viewLimits`, `orthoDepth`, `orthoFrameCamera`): yakınlaştırma sahne yarıçapına göre
+    sınırlı (görünür yükseklik r·5e-4 … r·20), ortoda kamera her karede sahne küresinin (tabla + parçalar + eskiz + kalem yardımcıları)
+    dışında durur; derinlik doğrusal, 20 m tablada titreme yok. Seçim ışını, kalem aracı, etiketler, sığdırma ve yeniden boyutlanma iki tipte de çalışır. 1600 px altında
+    araç çubuğu düğme dolgusu küçülür (en dar ~1506 px). `snapshot --projection ortho`: `iso` ve `camera` orto (dik görünümler zaten
+    orto; `camera`'da `--target` yalnızca yön verir, çerçeve görünür kutuya oturur); `eye` perspektiftir, `ortho` + eye/
+    `--eye-height`/`--fov` tarayıcı açılmadan, köprüye doğrudan gelirse 400 hata; verilmezse görüntü bayt bayt aynı. `p3d-reviewer`
+    incelemesi (kritik/yüksek yok; 3 orta, 4 düşük) düzeltildi.
 - **Komut yardımı (2026-11-16, BoltRush isteği #22):** `p3d <komut> --help` / `-h` / `p3d help <komut>` sunucu, sekme ve çalışma
   alanı denetiminden önce yanıtlanır (eskiden `snapshot --help` sekme yokken "bağlı sekme yok" hatası veriyordu): kullanım metninden o
   komutun satırları + rehber konusu (snapshot'ta görünüm listesi, dev'de başlatıcı bayrakları); bayrak değeri olan `--help` ve `run`'da
@@ -229,6 +260,8 @@
 | Parça saydamlığı / çözünürlüğü | ✅ `tests/part-look.test.ts` + ayrıştırıcı/CLI/köprü testleri (toplam 33 yeni): Op'lar, aralık ve tip hataları, grup, `normalizeLlmOp`, rol varsayılanı ve opak referans, dosya gidiş-dönüşü ve onarım uyarıları, GLB alfa/BLEND (iskelet dahil), 3MF/MTL alfa, opacity 0'da dışa aktarım/hacim/check/delik aynı; analitik üçgen sayıları, 6 segmentte kapalılık, önbellek ayrımı, delikte etkin seg, yuvarlak olmayan şekilde uyarı, `update` atomikliği. Alan yokken STL/GLB/OBJ çıktısı HEAD ile bayt bayt aynı (9 dosya). `p3d-reviewer` incelemesi (kritik yok; 6 bulgu düzeltildi). Görünmez Chrome görüntüsünde cam yarı saydam, 8/96 segment küre, 6 segment torus doğru. Panel alanları ve saydam parçada tıklama gerçek tarayıcıda elle, yeni alanlar gerçek Claude ile ve Unreal'de **denenmedi** |
 | Kesimli kutu / snapshot boyutu / prizma fazı | ✅ 5 test (`tests/geom.test.ts`: BoltRush örneği `partsBox` 50 / `solidPartsBox` 0 = `worldMesh`, döndürülmüş + taşınmış parça (önbellek), deliksiz = `partBox`, tümüyle kesilen = boş; prizma n = 3–16 için rehberdeki üç kural ve BoltRush ölçümleri; `tests/bridge.test.ts`: `fitSnapshotSize` ve köprünün sekmeye ilettiği boyut; `tests/cli.test.ts`: geçersiz `--size` / görünüm). Elle: `p3d run` ile BoltRush yeniden üretimi, `measure --file` kesimli kutu, görünmez Chrome'da 4096x800 ve 6000x6000 → 4096x4096 PNG (başlık doğrulandı), altıgen prizma `y 90, z 30` önden düz tabanlı. Kullanıcının gerçek sekmesinde (donanım GPU) 4096 görüntü **denenmedi** |
 | Loft çakışık nokta | ✅ 4 test (`tests/geom.test.ts`: BoltRush örneği tam hacim 533,33 cm³ + `check --profile game` temiz + ayna; kapanış tekrarı / kapanışta ve başta dejenere kenar (prizmatoid tam hacmi 750) / eşleşmeyi bozan tekrar / 1024 sınırı; uç kesit, 3 kesitte kısmi çakışma düz ve yumuşak, ayna + `sharp`; yumuşak loft'ta çakışık nokta hacmi değiştirmez), düzeltme olmadan kırılıyorlar. Çakışık noktasız 8 tip loft'un ağı HEAD ile bayt bayt aynı; `p3d-reviewer` 120 rastgele loft'ta fark bulmadı, 3 bulgusu (ayna + sharp, 1024 sınırı, test kapsamı) düzeltildi. Elle: `p3d apply --new` + `measure` + `check` (düz ve yumuşak, 3 kesit), görünmez Chrome görüntüsünde çıkıntı ön kesitte kenardan doğuyor |
+| GLB okuma / tel kafes | ✅ `tests/glb-read.test.ts` (30; bozuk dosya, sıkıştırma reddi, skin + ayna, örnekleme gidiş-dönüşü dahil; 4 sahne × 4 GLB çeşidi (varsayılan, mm, yumuşak normal, iskelet) gidiş-dönüşte üçgen kümesi dünya ağıyla aynı (1e-3 mm, sarım), `cullHidden`, el yapımı GLB'ler (strip/fan, stride, ofset, TRS/matrix, negatif ölçek, data: URI, skin), hata durumları, tabla büyümesi, kaydet → aç) + CLI (`scene/measure/check --file x.glb` kaynak projeyle aynı kutu/hacim, yazan komut reddi ve dosya bayt bayt aynı, `--style` doğrulaması) + köprü (`style` iletimi). Elle: BoltRush `glb/` altındaki tüm GLB'ler ayrıştı, üçgen sayıları `index.json` ile aynı; `beam_steel_1x4.glb` 660 üçgen, 100 × 400 × 100; konsept-01/03 kutuları kaynak `.p3d.json` ile aynı; görünmez Chrome'da `snapshot --file x.glb --style wire/xray` ve arayüz (Aç… GLB, düğmeler, W, X-ışınında seçim; konsol temiz); `style` verilmeden snapshot HEAD ile bayt bayt aynı. Kullanıcının gerçek sekmesinde fareyle ve başka araçların ürettiği GLB'lerle (Blender vb.) **denenmedi** |
+| Ortografik kamera | ✅ `tests/camera-math.test.ts` (3: gidiş-dönüşte uzaklık/yükseklik, sınır kırpma, 4 yarıçap × 200 rastgele hedef/yönde sahne küresi [near, far] içinde ve kamera dışarıda, `orthoFrameCamera` çerçevesi) + köprü/CLI (`projection` iletimi, ortho + eye/fov/eye'sız camera reddi, yardım). Varsayılan ve orto snapshot önceki turla bayt bayt aynı. Görünmez Chrome + CDP: düğme/O/Num 5, tekrar tuşu, aşırı zoom sonrası geri dönüş, hedef kaydırıp döndürme, kalemde çizerken geçiş reddi, eksen kilidinde Num 5, 1021 parçalı araç 20 m tablada; konsol temiz. Kullanıcının sekmesinde fareyle **denenmedi** |
 | v0.3 özellikleri | ✅ 67 test (tekne şekli: kutu tablosu tam hacim, sıfır genişlikte kapanma, doğrulama; dışa aktarılan örnek tekne kapalı ağ dahil) (örtük yüzey küre hacmi, `sliceMany` = `sliceGeometry`, Regularize iğne üçgen <%1 dahil): yumuşak loft hacmi (daireye yakınsama), uç (koni ≈ πr²h/3), sharp (tam kutu), cuts, çerçeve (kapalı/açık alan), eğik yüzeye dik oturtma, birleşim hacmi, `check` çakışma bulur/temizde susar |
 | OBJ çıktısı | ✅ Her şekil için kapalı/doğru yönlü ağ ve hacim ≈ analitik değer (`tests/io.test.ts`) |
 | Proje kaydet/yükle | ✅ Gidiş-dönüş ve bozuk dosya onarımı testleri; `examples/` dosyaları onarımsız yüklenir |
@@ -304,6 +337,14 @@
 - Kaplama (`decal`) açık ağdır: baskı biçimlerine girmez; `lift` 0 verilemez (varsayılana döner).
 - `extrude`: boşluğun profil içinde/ayrık olduğu denetlenmez (kenara değen boşluk bozuk ağ verir); var olan dosyalar yüklenmez hâle
   gelmesin diye eklenmedi (sweep'te denetleniyor).
+- GLB okuma malzeme, renk, normal ve UV almaz: dosya tek renkli tek parça açılır (çok parçalı P3D GLB'si de birleşir; renkli
+  parçalar için kaynak `.p3d.json`'u açın). 1 000 000 üçgenlik GLB tarayıcının otomatik kayıt kotasını aşabilir (uyarı verilir).
+- Tel kafes: yüksek çözünürlüklü yuvarlak parçalar (96 segment) yoğun koyu görünür; X-ışını çizgileri tablanın altından da görünür;
+  tel kafeste kaplama dolgusu derinlik yazmadan en son çizilir (cam arkasındaki kaplama camla renklenmez). Araç çubuğu ~1506 px
+  altında taşar (1100 px altında görünüm grubu gizlenir; kısayollar çalışır).
+- Ortografik kamera sayfa yenilenince perspektife döner (yalnızca bellekte). Ortoda sığdırma perspektifle aynı yüksekliği alır (dar
+  pencerede yanlardan kırpılabilir). Hedef sahneden çok uzağa kaydırılırsa yörünge o hedef çevresinde döner (sahne kırpılmaz, kadraj
+  dışına çıkabilir). Ortoda üst üste binen CSS etiketlerinin sırası kameraya radyal uzaklıkla belirlenir (yanlış etiket üstte kalabilir).
 - `set_position` X/Y'yi parçanın merkezine uygular; tek kenarlı prizma/koni döndürülmüşse sınırlayıcı kutu
   merkezi ile küçük fark olabilir.
 

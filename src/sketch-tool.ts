@@ -148,6 +148,16 @@ export class SketchTool {
     else this.open();
   }
 
+  /** Çizim ya da sürükleme sürüyor (taslak, bekleyen nokta, sürüklenen nokta): kamera tipi o sırada değişmez. */
+  busy(): boolean {
+    return this.active && (!!this.drag || !!this.draft || !!this.pending);
+  }
+
+  /** Eksen kilidi açık: rakam tuşları (Num 5 dahil) sayı girişine aittir, kamera kısayolu olarak kullanılmaz. */
+  wantsNumber(): boolean {
+    return this.active && !!this.lock;
+  }
+
   /** Kalemi açar: düzlem = seçili yolun düzlemi; yoksa bakış yönüne göre (seçili parça varsa kameraya bakan yüzü). */
   open(): void {
     if (this.active) return;

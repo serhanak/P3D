@@ -38,6 +38,9 @@ export { decodedAsset, getAsset, registerAsset, usedAssets } from './assets';
 export type { DecodedMesh } from './assets';
 export { build3mf, buildStl, meshAssetFromSoup, parseMeshFile } from './meshio';
 export type { ImportedMesh, WorldMesh } from './meshio';
+// GLB de okunur (parseMeshFile); biçimin varsayılan üçgen sınırı (GLB 1 000 000, diğerleri 60 000) ve tek ağ parçalı proje.
+export { defaultMaxTris } from './meshio';
+export { projectFromMesh } from './io';
 
 // Denetim ve oyun dışa aktarımı
 export { checkProject } from './check';
@@ -48,3 +51,5 @@ export type { GlbOptions } from './gltf';
 // Node dosya yardımcıları
 export { exportFile, loadProjectFile, readMeshFile, saveProjectFile } from './files';
 export type { ExportFormat, ExportOptions, ExportResult, LoadOptions, SaveOptions, SaveResult } from './files';
+export { loadMeshFileProject } from './files';
+export type { MeshFileProject } from './files';

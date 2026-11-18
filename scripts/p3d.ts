@@ -20,20 +20,22 @@
 //                                      varsayılan: p3d.json → file. Sekmenin bağlı olmadığı mevcut bir dosyanın ya da
 //                                      dolu bir dosyanın boş sekmeyle üzerine yazmak --force ister; P3D dosyası olmayanın
 //                                      üzerine hiç yazılmaz. Kaynağı (src) olan ağlar yolla anılır, --embed ile gömülür.
-//   p3d snapshot [--views iso,front,right,top] [--size 1000x750] [--dims] [--out klasör]
+//   p3d snapshot [--views iso,front,right,top] [--size 1000x750] [--dims] [--out klasör] [--style shaded|wire|xray]
+//                [--projection perspective|ortho]   ortho: iso ve camera da dik izdüşüm (eye perspektif kalır)
 //                [--eye x,y,z] [--target x,y,z] [--fov 50] [--eye-height 1000]   perspektif (camera / eye görünümü)
-//   p3d import <dosya.stl|obj|3mf> [--name ad] [--role solid|hole|reference] [--color #hex]
-//              [--max-tris 60000] [--keep-position]   (parçaya kaynak yolu src olarak yazılır)
+//   p3d import <dosya.stl|obj|3mf|glb> [--name ad] [--role solid|hole|reference] [--color #hex]
+//              [--max-tris N] [--keep-position]   (parçaya kaynak yolu src olarak yazılır; sınır GLB'de 1 000 000, diğerlerinde 60 000)
 //
-// Sekme ya da dosya (--file verilmezse çalışma alanı sekmesinin sahnesi):
+// Sekme ya da dosya (--file verilmezse çalışma alanı sekmesinin sahnesi). scene/snapshot/measure/check/section/sketch (listeleme) --file bir ağ dosyası
+// (.stl/.obj/.3mf/.glb) da alır: bellekte tek parçalı proje, parça dosyadaki yerinde; ağ dosyasına hiçbir şey yazılmaz.
 //   p3d scene --file m.p3d.json [--full]   (--full: dosyadaki gibi; src göreli, gömülü ağlar gömülü)
 //   p3d check [--file m.p3d.json] [--profile print|game] [--max-tris N] [--cull-hidden]   z-fighting, boolean, ince parça, tabla /
 //                                      oyun: üçgen bütçesi, bozuk üçgen; hata varsa çıkış kodu 1
 //   p3d measure [--file m.p3d.json] [--parts a,b]
-//   p3d section --axis x|y|z --at v1,v2,… [--parts a,b] [--file m.p3d.json | ağ.stl|obj|3mf] [--tol 0.1]
+//   p3d section --axis x|y|z --at v1,v2,… [--parts a,b] [--file m.p3d.json | ağ.stl|obj|3mf|glb] [--tol 0.1]
 //   p3d export <çıktı.stl|3mf|obj|glb> [--file m.p3d.json] [--parts a,b] [--merge] [--skeleton] [--cull-hidden] [--units m|mm]
 //              [--normals flat|smooth]   --merge STL/3MF için; --skeleton/--units/--normals GLB için
-//   p3d snapshot --file m.p3d.json [--views …] [--size …] [--dims] [--out klasör]   makinedeki Chrome/Edge'i
+//   p3d snapshot --file m.p3d.json|ağ.glb [--views …] [--size …] [--dims] [--style …] [--projection …] [--out klasör]   makinedeki Chrome/Edge'i
 //                                      (P3D_CHROME) görünmez açar, geçici bir ws'de görüntü alır; sunucu açık olmalı
 //   p3d sketch [--file m.p3d.json] [--json] [--sample 8]   kullanıcının çizdiği eskiz yollarını listeler (dünya mm;
 //                                      --json: sahne özetindeki gibi, --sample eğri kenar başına örnek)
@@ -65,7 +67,9 @@ import {
   SNAPSHOT_FOV_MIN,
   SNAPSHOT_MAX_SIDE,
   SNAPSHOT_MIN_SIDE,
+  SNAPSHOT_PROJECTIONS,
   SNAPSHOT_VIEWS,
+  VIEW_STYLES,
   contentDigest,
   fitSnapshotSize,
   wsLabel,
@@ -80,9 +84,11 @@ import {
   type SceneSummarySketch,
   type SnapshotCamera,
   type SnapshotOptions,
+  type SnapshotProjection,
   type SnapshotView,
   type SweepGeom,
   type Vec3,
+  type ViewStyle,
 } from '../shared/ops.ts';
 import type { CheckOptions } from '../src/check.ts';
 import type { Project } from '../src/types.ts';
@@ -143,7 +149,8 @@ const list = (name: string) => flag(name)?.split(',').map((s) => s.trim()).filte
 
 const VALUE_FLAGS = new Set([
   '--label', '--views', '--size', '--out', '--name', '--role', '--color', '--max-tris', '--parts', '--axis', '--at', '--file',
-  '--tol', '--ops', '--profile', '--units', '--normals', '--sample', '--eye', '--target', '--fov', '--eye-height',
+  '--tol', '--ops', '--profile', '--units', '--normals', '--sample', '--eye', '--target', '--fov', '--eye-height', '--style',
+  '--projection',
 ]);
 /** Bayrak olmayan argümanlar (dosya yolları). */
 function positionals(): string[] {
@@ -244,23 +251,55 @@ function statOf(p: string) {
   }
 }
 
-/** --file türü uzantıdan: .json proje dosyası (.p3d.json), .stl/.obj/.3mf ağ dosyası. */
+/** --file türü uzantıdan: .json proje dosyası (.p3d.json), .stl/.obj/.3mf/.glb ağ dosyası. */
 function fileKind(file: string): 'project' | 'mesh' | null {
   const ext = path.extname(file).toLowerCase();
   if (ext === '.json') return 'project';
-  return ['.stl', '.obj', '.3mf'].includes(ext) ? 'mesh' : null;
+  return ['.stl', '.obj', '.3mf', '.glb'].includes(ext) ? 'mesh' : null;
 }
 
-/** `--file` ile verilen proje dosyası (mutlak); verilmemişse undefined. Ağ dosyası yalnızca `section` için geçerlidir. */
-function projectFileFlag(command: string): string | undefined {
+/**
+ * `--file` ile ağ dosyası alan, yalnızca okuyan komutlar: bellekte tek parçalı proje kurulur (section ham üçgenleri okur;
+ * sketch yalnızca listeler — ağda eskiz yoktur). Yazan komutlar (apply, export, sketch --clear) ağ dosyasını reddeder: ağ
+ * dosyasının üzerine hiçbir şey yazılmaz.
+ */
+const MESH_READERS = new Set(['scene', 'snapshot', 'measure', 'check', 'section', 'sketch']);
+const MESH_READERS_TEXT = 'scene, snapshot, measure, check, section ve sketch (yalnızca listeleme)';
+
+/** `--file` ile verilen dosya (mutlak) ve türü. */
+interface SourceFile {
+  file: string;
+  mesh: boolean;
+}
+
+/** `--file` kaynağı; verilmemişse undefined. Ağ dosyası yalnızca MESH_READERS'taki komutlarda geçerlidir. */
+function fileFlag(command: string): SourceFile | undefined {
   const f = flag('--file');
   if (f === undefined) return undefined;
   const file = fromCaller(f);
   const kind = fileKind(file);
-  if (kind === 'project') return file;
-  if (kind === 'mesh') throw new Error(`${command} --file bir proje dosyası ister (.p3d.json); ağ dosyaları (STL/OBJ/3MF) yalnızca section --file ile okunur.`);
-  throw new Error(`--file uzantısı tanınmadı (${path.basename(file)}): proje için .p3d.json${command === 'section' ? ', ağ için .stl / .obj / .3mf' : ''}.`);
+  const readsMesh = MESH_READERS.has(command) && !(command === 'sketch' && has('--clear'));
+  if (kind === 'project') return { file, mesh: false };
+  if (kind === 'mesh') {
+    if (readsMesh) return { file, mesh: true };
+    throw new Error(
+      `${command} --file bir proje dosyası ister (.p3d.json); ${path.basename(file)} bir ağ dosyası. Ağ dosyaları (STL/OBJ/3MF/GLB) ` +
+        `yalnızca okuyan komutlarda açılır: ${MESH_READERS_TEXT}; ağ dosyasına hiçbir şey yazılmaz.`,
+    );
+  }
+  const gltf = path.extname(file).toLowerCase() === '.gltf' ? ' (glTF metin biçimi .gltf desteklenmez; .glb olarak dışa aktarın)' : '';
+  throw new Error(`--file uzantısı tanınmadı (${path.basename(file)}): proje için .p3d.json${readsMesh ? ', ağ için .stl / .obj / .3mf / .glb' : ''}${gltf}.`);
 }
+
+/** `--file` ile verilen proje dosyası (mutlak); verilmemişse undefined. Ağ dosyası okuyan komutlarda bile burada reddedilir. */
+function projectFileFlag(command: string): string | undefined {
+  const src = fileFlag(command);
+  if (src?.mesh) throw new Error(`${command} --file bir proje dosyası ister (.p3d.json).`);
+  return src?.file;
+}
+
+/** Çıktıdaki kaynak satırı. */
+const sourceLabel = (src: SourceFile) => (src.mesh ? `ağ dosyası: ${src.file} (bellekte tek parçalı proje, dosyadaki yerinde)` : `dosya: ${src.file}`);
 
 /** Okunan proje + atlanan parçalar ("ad: neden") + yükleme uyarıları (ör. kaynak ağ dosyası değişmiş). */
 interface LoadedProject {
@@ -279,6 +318,22 @@ async function readProjectFile(file: string, strict: boolean): Promise<LoadedPro
   const warnings: string[] = [];
   const project = await loadProjectFile(file, strict ? { warnings } : { dropped, warnings });
   return { project, dropped, warnings };
+}
+
+/**
+ * `--file` kaynağını okur: proje dosyası (readProjectFile) ya da ağ dosyası (tek parçalı bellek projesi; `p3d import
+ * --keep-position` ile aynı parça, sınır biçimin varsayılanı). Ağ sadeleştirildiyse uyarı (topoloji dosyadakinden farklı).
+ */
+async function readSource(src: SourceFile, strict: boolean): Promise<LoadedProject> {
+  if (!src.mesh) return readProjectFile(src.file, strict);
+  const { loadMeshFileProject } = await import('../src/files.ts');
+  const { project, mesh } = await loadMeshFileProject(src.file);
+  const tr = (v: number) => v.toLocaleString('tr-TR');
+  const warnings =
+    mesh.asset.triangles < mesh.originalTriangles
+      ? [`'${project.parts[0].name}': ağ ${tr(mesh.originalTriangles)} → ${tr(mesh.asset.triangles)} üçgene sadeleştirildi (varsayılan sınır); üçgen topolojisi dosyadakinden farklı.`]
+      : [];
+  return { project, dropped: [], warnings };
 }
 
 /**
@@ -311,8 +366,8 @@ function printLoadNotes(l: { dropped: string[]; warnings: string[] }, toStderr =
  * parça varsa hata (export); değilse `dropped`'da döner.
  */
 async function sourceProject(command: string, strict = false): Promise<LoadedProject & { source: string }> {
-  const file = projectFileFlag(command);
-  if (file) return { ...(await readProjectFile(file, strict)), source: `dosya: ${file}` };
+  const src = fileFlag(command);
+  if (src) return { ...(await readSource(src, strict)), source: sourceLabel(src) };
   const { initCsg } = await import('../src/csg.ts');
   await initCsg();
   const r = await getScene({ full: true });
@@ -519,10 +574,10 @@ async function listSketch(): Promise<void> {
   // --json'da stdout yalnızca JSON kalsın (betikler okuyabilsin); başlık ve notlar stderr'e.
   const out = json ? console.error : console.log;
   let list: SceneSummarySketch[] | undefined;
-  const file = projectFileFlag('sketch');
-  if (file) {
-    const loaded = await readProjectFile(file, false);
-    out(`dosya: ${file}`);
+  const src = fileFlag('sketch');
+  if (src) {
+    const loaded = await readSource(src, false);
+    out(sourceLabel(src));
     printLoadNotes(loaded, json);
     const { sketchSummary } = await import('../src/sketch.ts');
     list = sketchSummary(loaded.project, seg);
@@ -686,6 +741,17 @@ function snapshotRequest(): { action: 'snapshot'; snapshot: SnapshotOptions } {
   if ((camera.target || camera.fov !== undefined) && !views.some((v) => v === 'eye' || v === 'camera')) {
     throw new Error('--target ve --fov yalnızca perspektif görünümlerde (eye, camera) geçerli.');
   }
+  // İzdüşüm: verilmezse gönderilmez (iso perspektif, dik görünümler orto; arayüzdeki kamera tipinden bağımsız).
+  const projection = flag('--projection');
+  if (projection !== undefined && !(SNAPSHOT_PROJECTIONS as readonly string[]).includes(projection)) {
+    throw new Error(`Bilinmeyen --projection: ${projection} (olanlar: ${SNAPSHOT_PROJECTIONS.join(', ')}).`);
+  }
+  if (projection === 'ortho') {
+    if (views.includes('eye')) {
+      throw new Error('eye görünümü göz hizasından perspektiftir; --projection ortho ile kullanılamaz (ortografik için iso ya da --eye x,y,z ile camera).');
+    }
+    if (camera.fov !== undefined) throw new Error('Ortoda --fov anlamsız (dik izdüşümde görüş açısı yok): --fov\'u kaldırın ya da --projection perspective kullanın.');
+  }
   const raw = flag('--size') ?? '1000x750';
   const m = /^\s*(\d+)\s*[xX×]\s*(\d+)\s*$/.exec(raw);
   if (!m || Number(m[1]) < 1 || Number(m[2]) < 1) throw new Error(`--size GENİŞLİKxYÜKSEKLİK (piksel) olmalı, ör. 1000x750 ('${raw}').`);
@@ -699,7 +765,22 @@ function snapshotRequest(): { action: 'snapshot'; snapshot: SnapshotOptions } {
     );
   }
   const hasCamera = Object.keys(camera).length > 0;
-  return { action: 'snapshot', snapshot: { views: views as SnapshotView[], ...fit, dims: has('--dims'), ...(hasCamera ? { camera } : {}) } };
+  // Biçim: verilmezse gönderilmez (sekme gölgeli çeker; arayüzdeki biçimden bağımsız).
+  const style = flag('--style');
+  if (style !== undefined && !(VIEW_STYLES as readonly string[]).includes(style)) {
+    throw new Error(`Bilinmeyen --style: ${style} (olanlar: ${VIEW_STYLES.join(', ')}; tel kafes: wire, arkadakiler dahil: xray).`);
+  }
+  return {
+    action: 'snapshot',
+    snapshot: {
+      views: views as SnapshotView[],
+      ...fit,
+      dims: has('--dims'),
+      ...(hasCamera ? { camera } : {}),
+      ...(style ? { style: style as ViewStyle } : {}),
+      ...(projection ? { projection: projection as SnapshotProjection } : {}),
+    },
+  };
 }
 
 /** --eye / --target x,y,z (mm), --fov derece (10–120), --eye-height mm; geçersiz değer hata. */
@@ -740,9 +821,10 @@ const SNAP_CONNECT_MS = 30_000;
  * `snapshot --file`: makinedeki Chrome/Edge'i görünmez açar, geçici bir çalışma alanında (`_snap-<rastgele>`) projeyi
  * yükler, görüntü alır. Tarayıcı süreç ağacı ve geçici profil her durumda (hata dahil) kapatılır/silinir.
  */
-async function snapshotFile(file: string): Promise<void> {
-  const req = snapshotRequest(); // geçersiz --size/--views tarayıcı açılmadan hata versin
-  const loaded = await readProjectFile(file, false);
+async function snapshotFile(src: SourceFile): Promise<void> {
+  const req = snapshotRequest(); // geçersiz --size/--views/--style tarayıcı açılmadan hata versin
+  const { file } = src;
+  const loaded = await readSource(src, false);
   printLoadNotes(loaded);
   const { project } = loaded;
   try {
@@ -938,16 +1020,19 @@ const USAGE = [
   '  ops [--ops ops.json] [--label "metin"]   (ya da stdin: … < ops.json)',
   '  open [dosya.p3d.json] [--force] · save [dosya.p3d.json] [--force] [--embed]   (dosya verilmezse p3d.json → "file")',
   '  snapshot [--views iso,front,back,left,right,top,bottom,eye,camera] [--size 1000x750] [--dims] [--out klasör]',
+  '           [--style shaded|wire|xray]   biçim: gölgeli (varsayılan) / tel kafes / X-ışını',
+  '           [--projection perspective|ortho]   ortho: iso ve camera da dik izdüşüm (eye perspektif kalır)',
   '           [--eye x,y,z] [--target x,y,z] [--fov 50] [--eye-height 1000]   perspektif: camera (göz konumu) / eye (göz hizası)',
-  '  import <dosya.stl|obj|3mf> [--name ad] [--role solid|hole|reference] [--color #hex] [--max-tris N] [--keep-position]',
+  '  import <dosya.stl|obj|3mf|glb> [--name ad] [--role solid|hole|reference] [--color #hex] [--max-tris N] [--keep-position]',
+  '         (--max-tris varsayılanı GLB 1 000 000, diğerleri 60 000)',
   '',
-  'Sekme ya da dosya (--file m.p3d.json ile tarayıcısız):',
-  '  scene --file m.p3d.json [--full]',
-  '  check [--file m.p3d.json] [--profile print|game] [--max-tris N] [--cull-hidden]',
-  '  measure [--file m.p3d.json] [--parts a,b]',
-  '  section --axis x|y|z --at v1,v2 [--parts a,b] [--file m.p3d.json | ağ.stl|obj|3mf] [--tol 0.1]',
+  'Sekme ya da dosya (--file m.p3d.json ile tarayıcısız; scene/snapshot/measure/check/section/sketch ağ dosyası da alır: --file ağ.glb|stl|obj|3mf):',
+  '  scene --file m.p3d.json|ağ.glb [--full]',
+  '  check [--file m.p3d.json|ağ.glb] [--profile print|game] [--max-tris N] [--cull-hidden]',
+  '  measure [--file m.p3d.json|ağ.glb] [--parts a,b]',
+  '  section --axis x|y|z --at v1,v2 [--parts a,b] [--file m.p3d.json | ağ.stl|obj|3mf|glb] [--tol 0.1]',
   '  export <çıktı.stl|3mf|obj|glb> [--file m.p3d.json] [--parts a,b] [--merge] [--skeleton] [--cull-hidden] [--units m|mm] [--normals flat|smooth]',
-  '  snapshot --file m.p3d.json [--views …] [--size …] [--dims] [--out klasör]   (görünmez Chrome/Edge; P3D_CHROME)',
+  '  snapshot --file m.p3d.json|ağ.glb [--views …] [--size …] [--dims] [--style …] [--projection …] [--out klasör]   (görünmez Chrome/Edge; P3D_CHROME)',
   '  sketch [--file m.p3d.json] [--json] [--sample 8]   (kullanıcının çizdiği eskiz yolları)',
   '  sketch --clear [ad] [--file m.p3d.json] [--label "metin"]   (ad yoksa tüm eskiz silinir)',
   '',
@@ -967,7 +1052,12 @@ const HELP_TOPIC: Record<string, string> = {
   run: 'scripts', sketch: 'sketch', status: 'workspaces', view: 'workspaces', open: 'workspaces', save: 'workspaces',
 };
 const HELP_NOTES: Record<string, string[]> = {
-  snapshot: [`Görünümler: ${SNAPSHOT_VIEWS.join(', ')} (yan görünüm left / right; side yok).`],
+  snapshot: [
+    `Görünümler: ${SNAPSHOT_VIEWS.join(', ')} (yan görünüm left / right; side yok).`,
+    'Biçimler (--style): shaded (gölgeli, varsayılan) · wire (tel kafes: her üçgen kenarı, arkadakiler gizli) · xray (X-ışını: arkadakiler dahil tüm kenarlar, parça renginde).',
+    'İzdüşüm (--projection): perspective (varsayılan: iso perspektif 30°, dik görünümler orto) · ortho (iso ve camera da dik izdüşüm, kutuyu çerçeveler; eye ve --fov ile kullanılamaz).',
+    'Ortoda camera: --eye → --target (yoksa kutu merkezi) yalnızca bakış yönünü verir; çerçeve her zaman görünür kutuya oturur.',
+  ],
   dev: ['Bayraklar: --llm auto|api|claude-cli|off · --bridge / --no-bridge · --port N · --host adres · --model id · --effort düzey · --claude-bin yol'],
 };
 
@@ -1043,18 +1133,20 @@ async function main(): Promise<void> {
     }
     case 'scene': {
       const full = has('--full');
-      const file = projectFileFlag('scene');
-      if (file) {
-        const loaded = await readProjectFile(file, false);
+      const src = fileFlag('scene');
+      if (src) {
+        const { file } = src;
+        const loaded = await readSource(src, false);
         if (full) {
           // Dosyadaki gibi (src göreli, dosyada gömülü ağlar gömülü); stdout yalnızca JSON, notlar stderr'e.
           const { projectFileText } = await import('../src/files.ts');
-          console.error(`dosya: ${file}`);
+          console.error(sourceLabel(src));
           printLoadNotes(loaded, true);
-          console.log(projectFileText(loaded.project, file));
+          // Ağ dosyasında stdout başka bir klasöre kaydedilebilir: kaynak yolu mutlak yazılır (proje dosyasında göreli kalır).
+          console.log(projectFileText(loaded.project, file, { absoluteSrc: src.mesh }));
         } else {
           const { sceneSummary } = await import('../src/engine.ts');
-          console.log(`dosya: ${file}`);
+          console.log(sourceLabel(src));
           printLoadNotes(loaded);
           printScene(sceneSummary(loaded.project, null));
         }
@@ -1215,20 +1307,21 @@ async function main(): Promise<void> {
       return;
     }
     case 'snapshot': {
-      const file = projectFileFlag('snapshot');
-      if (file) return snapshotFile(file);
+      const src = fileFlag('snapshot');
+      if (src) return snapshotFile(src);
       const req = snapshotRequest();
       writeSnapshots(await post(req), req.snapshot);
       return;
     }
     case 'import': {
       const arg = positionals()[0];
-      if (!arg) throw new Error('Dosya yolu gerekli: import <dosya.stl|obj|3mf>');
+      if (!arg) throw new Error('Dosya yolu gerekli: import <dosya.stl|obj|3mf|glb>');
       const file = fromCaller(arg);
       if (!statOf(file)?.isFile()) throw new Error(`Dosya bulunamadı: ${file}`);
-      const maxTris = Number(flag('--max-tris') ?? 60000);
+      const { defaultMaxTris, meshAssetFromSoup, meshFormatOf, parseMeshFile } = await import('../src/meshio.ts');
+      // Varsayılan sınır biçime göre: GLB'de pratikte sadeleştirme yok (oyun varlığının üçgen topolojisi), diğerlerinde 60 000.
+      const maxTris = Number(flag('--max-tris') ?? defaultMaxTris(meshFormatOf(file)));
       if (!Number.isInteger(maxTris) || maxTris < 1) throw new Error(`--max-tris pozitif bir tam sayı olmalı ('${flag('--max-tris')}').`);
-      const { meshAssetFromSoup, parseMeshFile } = await import('../src/meshio.ts');
       const { sourceStamp } = await import('../src/files.ts');
       const name = flag('--name') ?? path.basename(file).replace(/\.[^.]+$/, '');
       const data = readFileSync(file);

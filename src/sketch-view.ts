@@ -172,6 +172,17 @@ export class SketchView {
     return sketchBox(this.project.sketch);
   }
 
+  /**
+   * Kalem yardımcılarının kutusu (taslak, imleç, tutamaçlar, eksen kilidi kılavuzu, düzlem ızgarası); yoksa null. Ortografik
+   * kameranın derinlik hesabına katılır (sahne kutusunun dışına taşan yardımcı kırpılmasın).
+   */
+  helperBox(): THREE.Box3 | null {
+    this.root.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(this.overlay);
+    if (this.grid) box.expandByObject(this.grid);
+    return box.isEmpty() ? null : box;
+  }
+
   /** Snapshot sırasında yalnızca yollar, oklar, işaretler ve adlar görünür; seçim vurgusu yol rengine döner. */
   setSnapshotMode(on: boolean): void {
     this.snapshotMode = on;

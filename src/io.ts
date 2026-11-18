@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 import { strToU8, zipSync } from 'fflate';
-import { SHAPES, isGeomShape } from '../shared/ops';
+import { SHAPES, isGeomShape, type MeshGeom } from '../shared/ops';
 import { getAsset, registerAsset, usedAssets } from './assets';
 import { isHexColor, normalizeHex } from './colors';
-import { newId, partMatrix } from './engine';
+import { applyOps, newId, partMatrix } from './engine';
 import { sanitizeGeom } from './geom';
-import { build3mf, buildStl, type WorldMesh } from './meshio';
+import { build3mf, buildStl, type ImportedMesh, type WorldMesh } from './meshio';
 import { unionGeometries } from './csg';
 import { exportGeometry, exportableParts, isDecal, printableParts } from './model';
 import { MAX_RESOLUTION, MIN_RESOLUTION, PALETTE, defaultParams, sanitizeParams, usesResolution } from './shapes';
@@ -37,6 +37,22 @@ export function projectToJson(project: Project): string {
  */
 export function meshPartsWithoutData(project: Project): Part[] {
   return project.parts.filter((p) => p.geom?.kind === 'mesh' && !getAsset(p.geom.asset));
+}
+
+/**
+ * Tek ağ parçalı yeni proje (arayüzde GLB'yi Aç…, CLI'de `--file ağ.glb|stl|obj|3mf`): proje ve parça adı `name`, parça
+ * dosyadaki yerinde (`imp.center`, `--keep-position` gibi). Tabla, ağın XY kutusu (orijin merkezli) sığmıyorsa sığacak kadar
+ * büyütülür (en fazla MAX_BED). `source`: kaynak dosya bilgisi (`src`, `maxTris`, damga; `p3d import` ile aynı alanlar).
+ */
+export function projectFromMesh(name: string, imp: ImportedMesh, source: Pick<MeshGeom, 'src' | 'maxTris' | 'srcSize' | 'srcHash'> = {}): Project {
+  const project = newProject(name);
+  const res = applyOps(project, [{ op: 'import_mesh', asset: imp.asset, name, position: imp.center, ...source }], null);
+  if (res.errors.length) throw new Error(res.errors.join(' '));
+  // Tabla orijinde ortalı: kenar = 2 × ağın orijine en uzak kenarı (+%5 pay, 10 mm'ye yuvarlanır).
+  const need = (c: number, s: number) => Math.min(MAX_BED, Math.ceil((2 * (Math.abs(c) + s / 2) * 1.05) / 10) * 10);
+  project.settings.bedX = Math.max(project.settings.bedX, need(imp.center.x, imp.size.x));
+  project.settings.bedY = Math.max(project.settings.bedY, need(imp.center.y, imp.size.y));
+  return project;
 }
 
 /**

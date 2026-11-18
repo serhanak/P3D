@@ -16,7 +16,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   SNAPSHOT_FOV_MAX,
   SNAPSHOT_FOV_MIN,
+  SNAPSHOT_PROJECTIONS,
   SNAPSHOT_VIEWS,
+  VIEW_STYLES,
   fitSnapshotSize,
   normalizeWs,
   wsPath,
@@ -31,8 +33,10 @@ import {
   type SceneSummary,
   type SnapshotCamera,
   type SnapshotOptions,
+  type SnapshotProjection,
   type SnapshotView,
   type Vec3,
+  type ViewStyle,
 } from '../shared/ops.ts';
 
 interface Client {
@@ -145,7 +149,24 @@ function snapshotOptions(raw: unknown): SnapshotOptions {
   const num = (v: unknown, d: number) => (Number(v) > 0 && Number.isFinite(Number(v)) ? Number(v) : d);
   // Sınır aşılırsa en-boy oranı korunarak küçültülür (eskiden her kenar ayrı ayrı 2400'e kırpılıyordu).
   const { width, height } = fitSnapshotSize(num(o.width, 1000), num(o.height, 750));
-  return { views: views.length ? views : ['iso', 'front', 'right', 'top'], width, height, dims: o.dims === true, ...(camera ? { camera } : {}) };
+  // Biçim (tel kafes / X-ışını) yalnızca bilinen değerse iletilir; yoksa sekme gölgeli çeker.
+  const style = (VIEW_STYLES as readonly unknown[]).includes(o.style) ? (o.style as ViewStyle) : undefined;
+  // İzdüşüm de yalnızca bilinen değerse iletilir (yoksa perspektif). Ortoda göz hizası (eye) perspektif kalırdı ve göz konumu
+  // olmayan camera görünümü düşerdi: sessiz kalmasın diye açık hata (CLI bunları tarayıcı açılmadan bildirir).
+  const projection = (SNAPSHOT_PROJECTIONS as readonly unknown[]).includes(o.projection) ? (o.projection as SnapshotProjection) : undefined;
+  if (projection === 'ortho' && Array.isArray(o.views)) {
+    if (o.views.includes('eye')) throw new BridgeError(400, 'eye görünümü göz hizasından perspektiftir; projection "ortho" ile kullanılamaz.');
+    if (o.views.includes('camera') && !camera?.eye) throw new BridgeError(400, 'camera görünümü göz konumu (camera.eye) ister; ortoda da.');
+  }
+  return {
+    views: views.length ? views : ['iso', 'front', 'right', 'top'],
+    width,
+    height,
+    dims: o.dims === true,
+    ...(camera ? { camera } : {}),
+    ...(style ? { style } : {}),
+    ...(projection ? { projection } : {}),
+  };
 }
 
 /** Perspektif kamera seçenekleri: geçersiz alanlar atılır, görüş açısı sınırlara çekilir (CLI aralık dışını hata sayar). */

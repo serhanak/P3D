@@ -111,7 +111,7 @@ src/sketch-view.ts   Eskizin three.js çizimi (yollar, oklar, ad sprite'ları, d
 src/sketch-tool.ts   Kalem aracı (DOM): çizim, nokta seçme/taşıma, eksen kilidi, sayısal giriş, yüzen eskiz çubuğu
 src/csg.ts           manifold-3d: başlatma (initCsg), çıkarma (delik), hacim, düzlem kesiti
 src/model.ts         Parçanın son geometrisi (delikler çıkarılmış): görünüm, dışa aktarım ve hacim ortak
-src/meshio.ts        STL/OBJ/3MF okuma (+ kaynak, sadeleştirme, merkezleme), STL/3MF yazma
+src/meshio.ts        STL/OBJ/3MF/GLB okuma (GLB: bağımlılıksız, düğüm ağacı + skin; + kaynak, sadeleştirme, merkezleme), STL/3MF yazma
 src/engine.ts        applyOps(): işlemleri projeye uygular; bbox, parça bulma, adlandırma, sahne özeti
 src/store.ts         Store: proje durumu, geri al/yinele (JSON anlık görüntü), dosya bağı ve "kaydedilmedi" durumu
 src/autosave.ts      Otomatik kayıt arka uçları: kök localStorage, çalışma alanları IndexedDB; bozuk kayıt yedeği, tek yazar kilidi
@@ -124,6 +124,7 @@ src/nlp/llm.ts       /api/status ve /api/nl istemcisi
 src/text.ts          fold(): Türkçe küçük harf + aksan kaldırma (1:1 karakter eşlemesi)
 src/colors.ts        Renk adları (TR/EN) → hex, "açık/koyu" değiştiricileri
 src/viewer.ts        three.js görünümü: tabla, parçalar, isim/ölçü etiketleri (CSS2DRenderer), seçim, kamera, snapshot()
+src/camera-math.ts   Kamera matematiği (DOM'suz): perspektif ↔ orto ölçeği, yakınlaştırma sınırları, ortoda derinlik, snapshot orto çerçevesi
 src/io.ts            Proje dosyası doğrulama (parseProject), OBJ/MTL üretimi, ZIP, indirme
 src/ui.ts            Sol parça listesi + sağ özellik paneli (olay delegasyonu, HTML string render)
 src/main.ts          Uygulama kurulumu: araç çubuğu, komut konsolu, kısayollar, ilk açılış örneği
@@ -152,7 +153,10 @@ tests/               parser.test.ts (ayrıştırıcı+motor), io.test.ts (OBJ ma
                      sketch.test.ts (eskiz Op'ları, özet, örnekleme, dosya, Store seçimi), sketch-edit.test.ts (kalem matematiği),
                      part-look.test.ts (parça saydamlığı ve parça çözünürlüğü: Op, dosya, GLB/3MF/MTL, önbellek, delik),
                      sweep.test.ts (süpürme: hacimler, çerçeve, doğrulama hataları, dikiş, ayna, çözünürlük, Retro boru),
-                     cull.test.ts (gizli üçgen ayıklama), decal.test.ts (kaplama şekli: ağ, yerleşim, dışa aktarım, check)
+                     cull.test.ts (gizli üçgen ayıklama), decal.test.ts (kaplama şekli: ağ, yerleşim, dışa aktarım, check),
+                     glb-read.test.ts (GLB okuma: P3D GLB gidiş-dönüşü — m/mm, iskelet, ayıklama; el yapımı GLB: strip/fan,
+                     byteStride, düğüm ağacı, ayna, skin, instancing; hata durumları; ağ dosyasından tek parçalı proje),
+                     camera-math.test.ts (perspektif ↔ orto ölçeği ve sınırları, ortoda derinlik/yakın düzlem, snapshot orto çerçevesi)
 examples/            Örnek .p3d.json projeleri (Aç… ile yüklenir); io.test.ts hepsinin onarımsız yüklendiğini doğrular
 examples/tools/      Örnek üreteçleri (tsx ile çalışır, tsconfig dışı): build-3dbenchy.ts referans STL'den Benchy'yi kurar
 docs/STATUS.md       Güncel durum, doğrulama durumu, bilinen sorunlar, yol haritası
@@ -311,6 +315,12 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
 - `CSS2DObject` DOM öğeleri, nesnenin ebeveyni sahneden çıkarılınca kendiliğinden silinmez;
   `viewer.ts` bunları `clearDims()` / `disposeEntry()` içinde elle siler. Yeni etiket eklerken aynısını yapın.
 - Geometri/malzeme `dispose()` edilmeden atılmaz.
+- Görünüm biçimi (gölgeli / tel kafes / X-ışını) yalnızca bellektedir (`Project.view`'a alan eklenmez). Tel geometri tembeldir
+  (yalnız tel kafes / X-ışınında, `geomKey` ile önbellekli); gölgeliye dönüşte ve `disposeEntry`'de dispose edilir. `snapshot`'ın
+  `style`'ı arayüz biçiminden bağımsızdır (yoksa gölgeli) ve arayüz biçimi `finally`'de geri yüklenir.
+- Kamera tipi (perspektif / ortografik) yalnızca bellektedir; `this.camera` iki tipten biridir ve onu kullanan kod (ışın, ekran
+  izdüşümü, piksel ölçeği, sığdırma, kırpma düzlemleri) ikisini de desteklemeli. Ortoda kamera sahne kutusunun (tabla + parçalar +
+  eskiz) dışında durur. `snapshot` kendi kameralarını kullanır (`projection`; arayüz kamerasından bağımsız).
 - Kaplama malzemesi `polygonOffset` −1/−2 (katılar +1/+1) ve `double` ise iki yüzlü çizilir.
 - `snapshot`: dik görünümler kutuya sığdırılır; perspektif görünümler `eye` (göz hizası, `SnapshotCamera.eyeHeight`) ve
   `camera` (`eye` zorunlu) `perspectiveCamera`'dadır; yakın düzlem uzaklıkla orantılıdır.

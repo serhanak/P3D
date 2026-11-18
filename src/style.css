@@ -251,6 +251,27 @@ input[type='color']::-webkit-color-swatch {
   background: #fff;
 }
 
+/* Bitişik düğme grubu (görünüm biçimi: Gölgeli / Tel kafes / X-ışını); seçili olan button.active */
+.seg {
+  display: inline-flex;
+}
+.seg button {
+  padding: 4px 7px;
+  border-radius: 0;
+  margin-left: -1px;
+}
+.seg button:first-child {
+  margin-left: 0;
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+.seg button:last-child {
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.seg button.active {
+  position: relative;
+  z-index: 1;
+}
+
 .menu {
   position: relative;
 }
@@ -646,6 +667,16 @@ dialog::backdrop {
 .toast.error {
   border-color: var(--err);
   color: #ffd2d2;
+}
+
+/* Dar pencerede (ör. 1536 px: %125 ölçekli 1920) araç çubuğu taşmasın: düğme iç boşlukları daralır. */
+@media (max-width: 1600px) {
+  .tb-group > button:not(.icon),
+  .tb-group > .menu > button,
+  #btn-settings {
+    padding-left: 7px;
+    padding-right: 7px;
+  }
 }
 
 @media (max-width: 1100px) {

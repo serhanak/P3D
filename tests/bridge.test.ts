@@ -314,6 +314,46 @@ describe('köprü: çalışma alanları', () => {
     expect((await snap({ views: ['iso'] })).camera).toBeUndefined();
   });
 
+  it('snapshot biçimi: wire / xray / shaded sekmeye iletilir; bilinmeyen ya da verilmeyen biçim gönderilmez (gölgeli)', async () => {
+    const t = await openTab('snap-bicim');
+    await t.put(['a']);
+    t.auto(['a']);
+    const snap = async (snapshot: Record<string, unknown>) => {
+      await api('POST', '/api/bridge/ops', { ws: 'snap-bicim', action: 'snapshot', snapshot });
+      return t.commands.at(-1)!.snapshot!;
+    };
+    expect(await snap({ views: ['front'], style: 'wire' })).toMatchObject({ views: ['front'], style: 'wire' });
+    expect((await snap({ views: ['iso'], style: 'xray' })).style).toBe('xray');
+    expect((await snap({ views: ['iso'], style: 'shaded' })).style).toBe('shaded');
+    expect('style' in (await snap({ views: ['iso'], style: 'bogus' }))).toBe(false);
+    expect('style' in (await snap({ views: ['iso'] }))).toBe(false);
+  });
+
+  it('snapshot izdüşümü: ortho / perspective sekmeye iletilir; bilinmeyen ya da verilmeyen gönderilmez', async () => {
+    const t = await openTab('snap-izdusum');
+    await t.put(['a']);
+    t.auto(['a']);
+    const snap = async (snapshot: Record<string, unknown>) => {
+      await api('POST', '/api/bridge/ops', { ws: 'snap-izdusum', action: 'snapshot', snapshot });
+      return t.commands.at(-1)!.snapshot!;
+    };
+    expect(await snap({ views: ['iso'], projection: 'ortho', style: 'wire' })).toMatchObject({ views: ['iso'], projection: 'ortho', style: 'wire' });
+    expect((await snap({ views: ['iso'], projection: 'perspective' })).projection).toBe('perspective');
+    expect('projection' in (await snap({ views: ['iso'], projection: 'orthographic' }))).toBe(false);
+    expect('projection' in (await snap({ views: ['iso'] }))).toBe(false);
+    // Ortoda eye (perspektif kalırdı) ve göz konumsuz camera (düşerdi): sessiz değil, 400 ve sekmeye gitmez.
+    const sent = t.commands.length;
+    const eye = await api('POST', '/api/bridge/ops', { ws: 'snap-izdusum', action: 'snapshot', snapshot: { views: ['iso', 'eye'], projection: 'ortho' } });
+    expect(eye.status).toBe(400);
+    expect((eye.data as { error: string }).error).toContain('eye görünümü göz hizasından perspektiftir');
+    const cam = await api('POST', '/api/bridge/ops', { ws: 'snap-izdusum', action: 'snapshot', snapshot: { views: ['camera'], projection: 'ortho', camera: { fov: 40 } } });
+    expect(cam.status).toBe(400);
+    expect((cam.data as { error: string }).error).toContain('camera görünümü göz konumu');
+    expect(t.commands.length).toBe(sent);
+    // Göz konumlu camera ortoda geçer.
+    expect(await snap({ views: ['camera'], projection: 'ortho', camera: { eye: { x: 1, y: -1, z: 1 } } })).toMatchObject({ views: ['camera'], projection: 'ortho' });
+  });
+
   it('/workspaces bağlı sekmeleri ve son sahneyi listeler', async () => {
     const a = await openTab('liste-a');
     await openTab('liste-a');
