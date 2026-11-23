@@ -11,7 +11,8 @@ biçimler. Bunlar gerekiyorsa GLB'yi Blender'da sürdürün.
   `resolution` (6–192) proje ayarını o parçada geçersiz kılar: ör. proje 8, teker `resolution: 16`; ya da eklem/eldiven
   küreleri `resolution: 6` (küre 6 segmentte 36, 8'de 48 üçgen). Silindir, boru, koni, küre, torus, döndürme, yumuşak
   loft ve yaylı ya da yuvarlak kesitli süpürmede geçerlidir; diğer şekillerde uyarıyla yok sayılır (`p3d guide modeling` →
-  "Parça çözünürlüğü"). `hull` çözünürlükle sadeleşmez; gövdeye `geom.maxTris`
+  "Parça çözünürlüğü"). **Yumuşak loft (`smooth: true`) 36'nın altındaki çözünürlükte yumuşamaz** (ağ köşeli loft'la aynı;
+  işlem iletisi uyarır): düşük projede yumuşak loft'a `resolution: 48` verin. `hull` çözünürlükle sadeleşmez; gövdeye `geom.maxTris`
   ile üçgen bütçesi verin (ör. `{"kind": "hull", "stations": […], "maxTris": 1500}`): ağ bütçeyi aşmaz, keskin
   küpeşte/ayna kalır, bozuk üçgen bırakmaz.
 - **Borular ve bükülen profiller** (tampon, korkuluk, kafes): parça parça prizma yerine tek `sweep` (`p3d guide modeling` →

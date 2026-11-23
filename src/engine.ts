@@ -22,7 +22,19 @@ import {
 } from '../shared/ops';
 import { decodedAsset, getAsset, makeAsset, newAssetId, registerAsset } from './assets';
 import { resolveColor } from './colors';
-import { GeomError, decalLift, defaultGeom, describeGeom, geometryVolume, loftCommonSections, meshSource, sanitizeGeom } from './geom';
+import {
+  GeomError,
+  SMOOTH_LOFT_AXIAL_SEG,
+  SMOOTH_LOFT_PERIM_SEG,
+  decalLift,
+  defaultGeom,
+  describeGeom,
+  geometryVolume,
+  loftCommonSections,
+  loftSubdiv,
+  meshSource,
+  sanitizeGeom,
+} from './geom';
 import { csgReady } from './csg';
 import {
   MAX_RESOLUTION,
@@ -681,6 +693,27 @@ function resolutionFor(part: Part, r: number, geom: Part['geom']): { value?: num
   return { value: r };
 }
 
+/**
+ * Yumuşak loft etkin çözünürlükte (eksik) yumuşuyorsa uyarı: alt bölüm 1'e inince ağ `smooth: false` ile aynıdır ve bu sessiz
+ * kalmamalı (BoltRush isteği #23). Kesitler arası yumuşatma yalnızca ≥ 3 kesitte anlamlıdır (2 kesitte ara değerleme doğrusal).
+ * Ağ değişmez; yalnızca işlem iletisi.
+ */
+function smoothLoftWarning(part: Part, seg: number): string | undefined {
+  const g = part.geom;
+  if (part.shape !== 'loft' || g?.kind !== 'loft' || !g.smooth) return undefined;
+  const s = partSeg(part, seg);
+  const { perim, axial } = loftSubdiv(s);
+  const axialMatters = g.sections.length > 2;
+  if (perim > 1 && (axial > 1 || !axialMatters)) return undefined;
+  const need = axialMatters ? SMOOTH_LOFT_AXIAL_SEG : SMOOTH_LOFT_PERIM_SEG;
+  const res = `çözünürlük ${s} (${part.resolution !== undefined ? 'parça' : 'proje ayarı'})`;
+  const rule = `yumuşatma çevrede en az ${SMOOTH_LOFT_PERIM_SEG}, kesitler arasında en az ${SMOOTH_LOFT_AXIAL_SEG} çözünürlük ister`;
+  if (perim === 1) {
+    return `'${part.name}': yumuşatma etkisiz — ${res} ile yumuşak loft smooth: false ile aynı köşeli ağı verir; ${rule} (parçaya resolution: ${need} verin).`;
+  }
+  return `'${part.name}': ${res} ile yumuşak loft yalnızca çevrede yumuşar, kesitler arasındaki yüzey doğrusal kalır; ${rule} (parçaya resolution: ${need} verin).`;
+}
+
 /** geom doğrulaması: temizlenmiş geometriyi döndürür (parçaya yazmaz); hatalar işlem hatasıdır. */
 function geomValue(part: Part, raw: unknown, seg: number): PartGeom {
   if (!isGeomShape(part.shape)) throw new OpError(`${SHAPE_DEFS[part.shape].label} şekli geom almaz; ölçüleri params ile verin.`);
@@ -864,6 +897,8 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
             (part.opacity !== undefined ? `, ${opacityNote(part.opacity)}` : '') + (part.resolution !== undefined ? `, çözünürlük ${part.resolution}` : '');
           res.messages.push(`'${part.name}' ${def.label.toLocaleLowerCase('tr')} oluşturuldu (${describeParams(part)}${roleNote}${look}).`);
           if (resWarning) res.messages.push(resWarning);
+          const smoothWarning = smoothLoftWarning(part, seg);
+          if (smoothWarning) res.messages.push(smoothWarning);
           break;
         }
         case 'import_mesh': {
@@ -1005,6 +1040,9 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           touch(part);
           res.messages.push(notes.length ? `'${part.name}': ${notes.join('; ')}.` : `'${part.name}' değişmedi.`);
           if (resolution?.warning) res.messages.push(resolution.warning);
+          // Yalnızca yumuşatmayı etkileyen alanlar verildiyse (renk değişikliği her seferinde uyarı basmasın).
+          const smoothWarning = geom || resIn !== undefined ? smoothLoftWarning(part, seg) : undefined;
+          if (smoothWarning) res.messages.push(smoothWarning);
           break;
         }
         case 'move': {

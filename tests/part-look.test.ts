@@ -10,7 +10,8 @@ import { buildGlb } from '../src/gltf';
 import { buildObj, parseProject, projectToJson, worldMesh } from '../src/io';
 import { build3mf } from '../src/meshio';
 import { displayOpacity, exportableParts, geometryKey, solidKey, solidVolume } from '../src/model';
-import { MAX_RESOLUTION, MIN_RESOLUTION, partSeg } from '../src/shapes';
+import { SMOOTH_LOFT_AXIAL_SEG, SMOOTH_LOFT_PERIM_SEG, loftSubdiv, sanitizeGeom } from '../src/geom';
+import { MAX_RESOLUTION, MIN_RESOLUTION, buildGeometry, partSeg } from '../src/shapes';
 import { newProject, type Part, type Project } from '../src/types';
 
 beforeAll(() => initCsg());
@@ -607,6 +608,78 @@ describe('parça çözünürlüğü: işlemler ve dosya', () => {
     const back = parseProject({ ...JSON.parse(projectToJson(p)), parts: [{ ...JSON.parse(projectToJson(p)).parts[0], resolution: 8 }] }, [], warnings);
     expect('resolution' in back.parts[0]).toBe(false);
     expect(warnings).toEqual(["'a': çözünürlük (resolution) 'loft' (yumuşak olmayan) şeklinde kullanılmaz; kaldırıldı."]);
+  });
+
+  it('yumuşak loft eşiği (BoltRush #23): 36 altında ağ köşeli loft’la aynı, işlem iletisi uyarır; ağ değişmez', () => {
+    // BoltRush yeniden üretimi: y ekseni, sekizgen altı kesit.
+    const oct = (r: number) => Array.from({ length: 8 }, (_, i) => [r * Math.cos((i * Math.PI) / 4), r * Math.sin((i * Math.PI) / 4)] as [number, number]);
+    const ats = [14, 56, 170, 430, 544, 586];
+    const radii = [40, 80, 100, 100, 80, 40];
+    const loft = (smooth: boolean, n = ats.length) => ({
+      kind: 'loft' as const,
+      axis: 'y' as const,
+      smooth,
+      sections: ats.slice(0, n).map((a, i) => ({ at: a, points: oct(radii[i]) })),
+    });
+    const tris = (g: ReturnType<typeof loft>, s: number) => {
+      const geo = buildGeometry('loft', { scale: 1 }, s, sanitizeGeom('loft', g));
+      return { n: (geo.index ? geo.index.count : geo.getAttribute('position').count) / 3, pos: Array.from(geo.getAttribute('position').array) };
+    };
+    // Eşikler formülle tutarlı.
+    for (let s = MIN_RESOLUTION; s <= MAX_RESOLUTION; s++) {
+      const { perim, axial } = loftSubdiv(s);
+      expect(perim > 1).toBe(s >= SMOOTH_LOFT_PERIM_SEG);
+      expect(axial > 1).toBe(s >= SMOOTH_LOFT_AXIAL_SEG);
+    }
+    const flat = tris(loft(false), 96);
+    expect(flat.n).toBe(92);
+    for (const s of [6, 16, 35]) expect(tris(loft(true), s)).toEqual(flat); // aynı ağ
+    expect(tris(loft(true), 36).n).toBe(2 * 8 * 2 * 5 * 1 + 2 * (16 - 2)); // yalnızca çevre: 188
+    expect(tris(loft(true), 48).n).toBe(348);
+
+    // Uyarılar: etkisiz (parça / proje ayarı), yarım (36–47, ≥ 3 kesit), iki kesitte yarım sayılmaz, yeterli çözünürlükte yok.
+    const p = project([], 16);
+    const res = applyOps(
+      p,
+      [
+        { op: 'create', shape: 'loft', name: 'torba', geom: loft(true), position: at(0, 0, 0), resolution: 16 },
+        { op: 'create', shape: 'loft', name: 'proje', geom: loft(true), position: at(300, 0, 0) },
+        { op: 'create', shape: 'loft', name: 'yarım', geom: loft(true), position: at(600, 0, 0), resolution: 40 },
+        { op: 'create', shape: 'loft', name: 'iki', geom: loft(true, 2), position: at(900, 0, 0), resolution: 40 },
+        { op: 'create', shape: 'loft', name: 'iyi', geom: loft(true), position: at(1200, 0, 0), resolution: 48 },
+        { op: 'create', shape: 'loft', name: 'köşeli', geom: loft(false), position: at(1500, 0, 0) },
+      ],
+      null,
+    );
+    expect(res.errors).toEqual([]);
+    const warn = res.messages.filter((m) => !m.includes('oluşturuldu'));
+    expect(warn).toEqual([
+      "'torba': yumuşatma etkisiz — çözünürlük 16 (parça) ile yumuşak loft smooth: false ile aynı köşeli ağı verir; yumuşatma çevrede en az 36, kesitler arasında en az 48 çözünürlük ister (parçaya resolution: 48 verin).",
+      expect.stringMatching(/^'proje': yumuşatma etkisiz — çözünürlük 16 \(proje ayarı\) ile/),
+      expect.stringMatching(/^'yarım': çözünürlük 40 \(parça\) ile yumuşak loft yalnızca çevrede yumuşar, .*resolution: 48 verin\)\.$/),
+    ]);
+    expect(res.messages.find((m) => m.startsWith("'torba' loft oluşturuldu"))).toContain('çözünürlük 16');
+
+    // update: çözünürlük ya da geometri verilince değerlendirilir; renk değişikliği uyarı basmaz.
+    const u = applyOps(
+      p,
+      [
+        { op: 'update', part: 'iyi', resolution: 20 },
+        { op: 'update', part: 'torba', color: '#ff0000' },
+        { op: 'update', part: 'köşeli', geom: loft(true) },
+        { op: 'update', part: 'torba', resolution: 48 },
+      ],
+      null,
+    );
+    expect(u.errors).toEqual([]);
+    expect(u.messages).toEqual([
+      "'iyi': çözünürlük 20.",
+      expect.stringMatching(/^'iyi': yumuşatma etkisiz — çözünürlük 20 \(parça\)/),
+      "'torba': renk #ff0000.",
+      expect.stringMatching(/^'köşeli': geometri: /),
+      expect.stringMatching(/^'köşeli': yumuşatma etkisiz — çözünürlük 16 \(proje ayarı\)/),
+      "'torba': çözünürlük 48.",
+    ]);
   });
 
   it('kopya ve ayna saydamlık ile çözünürlüğü taşır; oluşturma mesajında görünür', () => {

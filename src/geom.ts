@@ -700,6 +700,18 @@ export function loftCommonSections(g: LoftGeom): LoftGeom {
   };
 }
 
+/**
+ * Yumuşak loft'un alt bölüm sayıları: çevrede kenar başına `perim` ≈ seg/24, eksende kesit aralığı başına `axial` ≈ seg/32
+ * (en az 1). 1 = o yönde yumuşatma yok (ağ `smooth: false` ile aynı); eşikler `SMOOTH_LOFT_PERIM_SEG` / `SMOOTH_LOFT_AXIAL_SEG`.
+ */
+export function loftSubdiv(seg: number): { perim: number; axial: number } {
+  return { perim: Math.max(1, Math.round(seg / 24)), axial: Math.max(1, Math.round(seg / 32)) };
+}
+/** Yumuşak loft'un çevrede yumuşamaya başladığı en küçük çözünürlük (loftSubdiv: round(36/24) = 2). */
+export const SMOOTH_LOFT_PERIM_SEG = 36;
+/** Yumuşak loft'un kesitler arasında yumuşamaya başladığı en küçük çözünürlük (loftSubdiv: round(48/32) = 2). */
+export const SMOOTH_LOFT_AXIAL_SEG = 48;
+
 function loftRaw(g: LoftGeom, seg: number): RawMesh {
   const ringSecs = g.sections.filter((s) => s.points.length > 1);
   const sameCount = ringSecs.every((s) => s.points.length === ringSecs[0].points.length);
@@ -708,8 +720,7 @@ function loftRaw(g: LoftGeom, seg: number): RawMesh {
 
   if (g.smooth) {
     // Çevre boyunca: kenar başına ~seg/24 alt bölüm; eksen boyunca: kesit aralığı başına ~seg/32 alt bölüm.
-    const sub = Math.max(1, Math.round(seg / 24));
-    const subA = Math.max(1, Math.round(seg / 32));
+    const { perim: sub, axial: subA } = loftSubdiv(seg);
     const sharp = new Set(sameCount ? (g.sharp ?? []) : []);
     rings = rings.map((r) => (r.length === 1 ? r : smoothLoop(r, sub, sharp)));
     const N = Math.max(...rings.map((r) => r.length));

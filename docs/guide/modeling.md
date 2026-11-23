@@ -54,7 +54,11 @@ noktalar çevre boyunca sıralıdır. Nokta sayısını makul tutun (çokgen ba�
   Topuz, şişe, flanş, pahlı somun.
 - **`loft`** `{kind, axis, sections: [{at, points}], smooth, sharp}`: kesitler arası yüzey. Her kesitte **aynı nokta sayısı**,
   aynı başlangıç noktası ve aynı dönüş yönü (ör. alt orta, saat yönünün tersi). Uçta tek noktalı kesit sivri bitirir.
-  `smooth: true` organik yüzey (monoton kübik, taşmaz), `sharp` keskin kalacak indisler. Kesit noktalarını eğri boyunca eşit
+  `smooth: true` organik yüzey (monoton kübik, taşmaz), `sharp` keskin kalacak indisler. Yumuşatma etkin çözünürlüğe bağlıdır
+  (aşağıda "Parça çözünürlüğü"): çevrede kenar başına `round(çözünürlük / 24)`, kesitler arasında aralık başına
+  `round(çözünürlük / 32)` alt bölüm. **Çözünürlük 36'nın altında yumuşatma etkisizdir** (ağ `smooth: false` ile aynı; oyun
+  projelerinin 8 / 16 değerleri dahil), 36–47 arasında yalnızca çevrede yumuşar; düşük poligon projede yumuşak loft'a
+  `resolution: 48` verin. İşlem iletisi bu durumda uyarır. Kesit noktalarını eğri boyunca eşit
   yay uzunluğuyla dağıtın. Bir kesitte **ardışık iki noktayı çakıştırmak** (dejenere kenar) noktanın orada erimiş olması
   demektir: nokta sayısı ve indis eşleşmesi korunur, nokta öbür kesitte açılır (kesit boyunca doğup büyüyen çıkıntı/oyuk;
   `smooth` yüzeyini değiştirmez). Çakışık noktalar sayılınca da kesitlerin nokta sayısı eşit değilse tekrarlar atılır ve
@@ -180,8 +184,15 @@ noktalar çevre boyunca sıralıdır. Nokta sayısını makul tutun (çokgen ba�
 - Kürede enlem sayısı segmentten türer (`max(4, segment/2)`), torusta kesit segmenti de (`max(4, min(12, segment − 4),
   segment/3)`). Üçgen sayıları: küre `2·s·(enlem − 1)` (8 → 48, 16 → 224), silindir `4·s`, torus `2·s·kesit` (16 → 384);
   süpürme: `p3d guide game` → "Süpürme üçgen sayısı".
+- **Yumuşak loft eşiği:** alt bölüm çevrede `p = max(1, round(s/24))`, kesit aralığı başına `a = max(1, round(s/32))`;
+  1 = o yönde yumuşatma yok. **s < 36: yumuşatma etkisiz** (ağ `smooth: false` ile bayt bayt aynı), 36–47: yalnızca çevrede
+  (kesitler arası doğrusal), ≥ 48: iki yönde (varsayılan proje ayarı 96: p = 4, a = 3). İki kesitli loft'ta kesitler arası
+  yüzey her çözünürlükte doğrusaldır (yalnızca çevre yumuşar). `create` / `update` (geom ya da çözünürlük verilince) etkisiz
+  ya da yarım yumuşatmada işlem iletisine uyarı yazar. Uçsuz, N noktalı K kesitli dışbükey loft'ta üçgen sayısı
+  `2·N·p·(K − 1)·a + 2·(N·p − 2)`: sekizgen 6 kesit s ≤ 35'te 92, 48'de 348.
 - Oyun için tipik kullanım: proje ayarı düşük (ör. 8), göze batan büyük yuvarlaklar (teker) `resolution: 16`; ya da proje
-  ayarı yüksek, küçük küreler/eklemler `resolution: 6–8`.
+  ayarı yüksek, küçük küreler/eklemler `resolution: 6–8`. Yumuşak loft'a düşük projede `resolution: 48` (çevrede 2, kesitler
+  arasında 2 alt bölüm; 72 → 3 / 2, 96 → 4 / 3).
 
 ## Yüzeye oturtma
 `place_on_surface {part, target, near, offset}`: parçayı hedefin `near` noktasına en yakın yüzey noktasına koyar ve yerel +Z
