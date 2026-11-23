@@ -392,6 +392,63 @@ describe('loft yumuşatma, uç ve keskin köşeler', () => {
     expect(err([create('a', 'loft', { kind: 'loft', axis: 'z', sections: [{ at: 0, points: ngon(5, 6) }, { at: 5, points: [[0, 0]] }, { at: 9, points: ngon(5, 6) }] })])).toMatch(/yalnızca ilk ya da son/);
     expect(err([create('b', 'loft', { kind: 'loft', axis: 'z', sections: [{ at: 0, points: ngon(5, 6) }, { at: 5, points: ngon(5, 8) }], sharp: [0] })])).toMatch(/nokta sayısı aynı/);
   });
+
+  it('iki farklı noktalı uç kesit = çizgi: kırma ve beşik çatı mahyası (BoltRush #28)', () => {
+    const base: [number, number][] = [[-2000, -1000], [2000, -1000], [2000, 1000], [-2000, 1000]];
+    const roof = (name: string, top: [number, number][], extra: object = {}, bottom: [number, number][] = base) =>
+      create(name, 'loft', { kind: 'loft', axis: 'z', sections: [{ at: 0, points: bottom }, { at: 800, points: top }], ...extra });
+    const tris = (p: Project, name: string) => worldMesh(p, p.parts.find((q) => q.name === name)!).tris.length / 3;
+    // Kırma çatı: iki yan dörtgen + iki uç üçgen + taban = 8 üçgen (20 mm'lik ince dikdörtgen mahyada 12); hacim h/6·(A0 + 4·Am).
+    const hip = 800 / 6 * (8e6 + 4 * 3000 * 1000);
+    const p = project([
+      roof('istek', [[-1000, 0], [1000, 0], [1000, 0], [-1000, 0]]),
+      roof('kısa', [[-1000, 0], [1000, 0]]),
+      roof('ters', [[1000, 0], [-1000, 0]]),
+      roof('saat', [[-1000, 0], [1000, 0]], {}, [...base].reverse()),
+      roof('beşik', [[-2000, 0], [2000, 0]]),
+      roof('ince', [[-1000, -10], [1000, -10], [1000, 10], [-1000, 10]]),
+    ]);
+    for (const name of ['istek', 'kısa', 'ters', 'saat']) {
+      const s = solid(p, name);
+      expect(s.bad).toBe(0);
+      expect(s.vol / hip).toBeCloseTo(1, 6);
+      expect(tris(p, name)).toBe(8);
+    }
+    expect(p.parts.find((q) => q.name === 'kısa')!.geom).toMatchObject({ sections: [{ points: base }, { points: [[-1000, 0], [1000, 0], [1000, 0], [-1000, 0]] }] });
+    expect(solid(p, 'beşik').vol).toBeCloseTo((4000 * 2000 * 800) / 2, 0);
+    expect(tris(p, 'beşik')).toBe(8);
+    expect(tris(p, 'ince')).toBe(12);
+    expect(checkProject(p, { profile: 'game' }).filter((i) => /bozuk|üretilemedi/.test(i.message))).toEqual([]);
+    // Yumuşak (çözünürlük 48: çevrede 2 alt bölüm, çizgi yumuşamaz), üç kesit, alt uçta çizgi, aynalama: kapalı ağ.
+    const q = project([
+      create('yumuşak', 'loft', { kind: 'loft', axis: 'z', smooth: true, sections: [{ at: 0, points: base }, { at: 300, points: base.map(([x, y]) => [x * 0.8, y * 0.8]) }, { at: 800, points: [[-1000, 0], [1000, 0]] }] }),
+      create('alt', 'loft', { kind: 'loft', axis: 'z', sections: [{ at: 0, points: [[-1000, 0], [1000, 0]] }, { at: 800, points: base }] }),
+      roof('kayık', [[-500, 0], [1500, 0]]),
+      { op: 'mirror', part: 'kayık', plane: 'x', at: 0, name: 'ayna' } as Op,
+    ]);
+    q.settings.resolution = 48;
+    for (const name of ['yumuşak', 'alt', 'kayık', 'ayna']) expect(solid(q, name).bad).toBe(0);
+    expect(solid(q, 'alt').vol / hip).toBeCloseTo(1, 6);
+    expect(solid(q, 'ayna').vol).toBeCloseTo(solid(q, 'kayık').vol, 0);
+    // Yumuşak + çizgi + ayna (çözünürlük 96: çevrede 4 alt bölüm, tam orta nokta aynada öbür uca): hacim birebir.
+    const hex = ngon(1000, 6).map(([x, y]) => [Math.round(x), Math.round(y)] as [number, number]);
+    const m = project([
+      create('altıgen', 'loft', { kind: 'loft', axis: 'z', smooth: true, sections: [{ at: 0, points: hex }, { at: 500, points: hex.map(([x, y]) => [x * 0.8, y * 0.8] as [number, number]) }, { at: 800, points: [[-400, -100], [500, 200]] }] }),
+      { op: 'mirror', part: 'altıgen', plane: 'x', at: 0, name: 'altıgen2' } as Op,
+    ]);
+    m.settings.resolution = 96;
+    expect(solid(m, 'altıgen2').bad).toBe(0);
+    expect(solid(m, 'altıgen2').vol / solid(m, 'altıgen').vol).toBeCloseTo(1, 9);
+    // Dosya gidiş-dönüşü: kaydedilen (eşlenmiş) biçim yeniden doğrulanınca değişmez.
+    const json = JSON.parse(projectToJson(q));
+    expect(parseProject(json).parts.map((x) => x.geom)).toEqual(q.parts.map((x) => x.geom));
+    // Hatalar: ortadaki çizgi, belirsiz eşleme (komşu nokta çizginin ortasında), eşit olmayan çokgen kesitler.
+    const err = (sections: { at: number; points: [number, number][] }[]) => applyOps(newProject(), [create('x', 'loft', { kind: 'loft', axis: 'z', sections })], null).errors.join(' ');
+    expect(err([{ at: 0, points: base }, { at: 400, points: [[-1000, 0], [1000, 0]] }, { at: 800, points: base }])).toMatch(/çizgi\) kesit yalnızca ilk ya da son/);
+    expect(err([{ at: 0, points: ngon(1000, 6) }, { at: 800, points: [[0, -400], [0, 400]] }])).toMatch(/hangi uca ineceği belirsiz/);
+    expect(err([{ at: 0, points: base }, { at: 300, points: ngon(1500, 5) }, { at: 800, points: [[-1000, 0], [1000, 0]] }])).toMatch(/aynı sayıda nokta ister/);
+    expect(err([{ at: 0, points: base }, { at: 800, points: [[-1000, 0], [0, 0], [1000, 0]] }])).toMatch(/alanı sıfır.*yalnızca iki farklı nokta/);
+  });
 });
 
 describe('delik hedefi (cuts)', () => {

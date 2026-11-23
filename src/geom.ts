@@ -118,7 +118,13 @@ function loftLoops(items: { raw: unknown; what: string }[]): { loops: Pt2[][]; c
   const forms = items.map(({ raw, what }) => {
     const pts = loopPoints(raw, what);
     const strict = dropRepeats(pts, true, true);
-    checkLoop(strict, what);
+    try {
+      checkLoop(strict, what);
+    } catch (e) {
+      // Aynı doğrudaki noktalar: büyük olasılıkla mahya/kama sırtı kastedildi.
+      if (e instanceof GeomError && /alanı sıfır/.test(e.message)) throw new GeomError(`${e.message} Uçta çizgi (mahya, kama sırtı) için kesitte yalnızca iki farklı nokta verin.`);
+      throw e;
+    }
     raws.push(pts);
     return [dropRepeats(pts, false, true), pts, strict];
   });
@@ -129,6 +135,37 @@ function loftLoops(items: { raw: unknown; what: string }[]): { loops: Pt2[][]; c
   }
   return { loops: forms.map((x) => x[2]), closing: 0 };
 }
+
+/**
+ * Çizgi (yalnızca iki farklı noktalı) loft kesitini komşu halkanın nokta sayısına eşler. Verilen biçim (ham ya da sondaki
+ * kapanış tekrarı atılmış) komşuyla aynı sayıdaysa olduğu gibi kalır (ör. kırma çatı mahyası [a, b, b, a]: iki yan dörtgen, iki
+ * uç üçgen). Değilse (ör. yalnızca [a, b]) komşunun her noktası çizginin kendi yanındaki ucuna eşlenir (orta dikmeye göre
+ * izdüşüm). Sonuç döngüsel olarak tam iki ardışık öbek olmalı; ağda çizgi iki köşedir (ardışık çakışık nokta = tek köşe).
+ */
+function lineSection(pts: Pt2[], ring: Pt2[], what: string): Pt2[] {
+  const n = ring.length;
+  let out = [pts, dropRepeats(pts, false, true)].find((f) => f.length === n);
+  if (!out) {
+    const [P, Q] = dropRepeats(pts, true, true);
+    const [du, dv] = [Q[0] - P[0], Q[1] - P[1]];
+    const len = Math.hypot(du, dv);
+    const [mu, mv] = [(P[0] + Q[0]) / 2, (P[1] + Q[1]) / 2];
+    out = ring.map(([u, v]) => {
+      const s = ((u - mu) * du + (v - mv) * dv) / len;
+      if (Math.abs(s) < 1e-6) {
+        throw new GeomError(`${what}: komşu kesitin bir noktası çizginin ortasına denk geliyor, hangi uca ineceği belirsiz; çizgi kesiti komşu kesitle aynı sayıda noktayla verin (ör. [a, b, b, a]).`);
+      }
+      return s < 0 ? P : Q;
+    });
+  }
+  if (repeatGroups(out).count !== 2) {
+    throw new GeomError(`${what}: çizgi kesit komşu kesitle eşlenemedi (komşu noktalar çizginin iki ucuna ardışık iki öbek hâlinde inmeli); çizgi kesiti komşu kesitle aynı sayıda noktayla verin (ör. [a, b, b, a]).`);
+  }
+  return out;
+}
+
+/** Halka çizgi kesit mi (döngüsel ardışık tekrarlar atılınca iki nokta; sıfır alanlı, kapaksız). */
+const isLineRing = (pts: Pt2[]) => pts.length > 1 && repeatGroups(pts).count === 2;
 
 function axisOf(v: unknown): GeomAxis {
   if (v === undefined || v === null || v === '') return 'z';
@@ -172,24 +209,39 @@ export function sanitizeGeom(shape: GeomShape, raw: unknown): PartGeom {
           if (!pt.every(Number.isFinite)) throw new GeomError(`Kesit ${i + 1}: geçersiz uç noktası.`);
           return { at, apex: pt };
         }
+        // Yalnızca iki farklı noktası olan kesit = çizgi (mahya, kama sırtı): loft o doğruda biter (BoltRush #28). Komşu
+        // halkayla eşleşme sonra kurulur (verilen sayı eşitse olduğu gibi, değilse uçlara izdüşümle).
+        const pts = loopPoints(o.points, `Kesit ${i + 1}`);
+        if (dropRepeats(pts, true, true).length === 2) return { at, line: pts, what: `Kesit ${i + 1}` };
         return { at, raw: o.points, what: `Kesit ${i + 1}` };
       });
-      const { loops, closing } = loftLoops(parsed.flatMap((s) => (s.apex ? [] : [{ raw: s.raw, what: s.what! }])));
+      const { loops, closing } = loftLoops(parsed.flatMap((s) => (s.apex || s.line ? [] : [{ raw: s.raw, what: s.what! }])));
       let r = 0;
-      const sections = parsed.map((s) => ({ at: s.at, points: s.apex ? [s.apex] : loops[r++] }));
+      const sections = parsed.map((s) => ({ at: s.at, points: s.apex ? [s.apex] : s.line ? s.line : loops[r++], line: !!s.line, what: s.what }));
       sections.sort((a, b) => a.at - b.at);
       for (let i = 1; i < sections.length; i++) {
         if (sections[i].at - sections[i - 1].at < 1e-3) throw new GeomError(`İki kesit aynı konumda (at = ${sections[i].at}).`);
       }
-      const apexIdx = sections.flatMap((s, i) => (s.points.length === 1 ? [i] : []));
-      if (apexIdx.some((i) => i !== 0 && i !== sections.length - 1)) throw new GeomError('Tek noktalı (uç) kesit yalnızca ilk ya da son kesit olabilir.');
-      const rings = sections.filter((s) => s.points.length > 1);
+      const ends = (i: number) => i === 0 || i === sections.length - 1;
+      if (sections.some((s, i) => s.points.length === 1 && !ends(i))) throw new GeomError('Tek noktalı (uç) kesit yalnızca ilk ya da son kesit olabilir.');
+      const line = sections.find((s, i) => s.line && !ends(i));
+      if (line) throw new GeomError(`${line.what}: iki farklı noktalı (çizgi) kesit yalnızca ilk ya da son kesit olabilir; aradaki kesitin alanı olmalı.`);
+      const rings = sections.filter((s) => s.points.length > 1 && !s.line);
       if (!rings.length) throw new GeomError('Loft için en az bir çokgen kesit gerekli.');
-      const out: LoftGeom = { kind: 'loft', axis: axisOf(g.axis), sections };
+      for (const [i, s] of sections.entries()) {
+        if (!s.line) continue;
+        const nb = sections[i === 0 ? 1 : i - 1];
+        if (nb.points.length === 1 || nb.line) throw new GeomError(`${s.what}: çizgi kesitin komşusu çokgen kesit olmalı.`);
+        if (rings.some((q) => q.points.length !== rings[0].points.length)) {
+          throw new GeomError(`${s.what}: çizgi kesitli loft'ta çokgen kesitler aynı sayıda nokta ister (yeniden örnekleme çizgiyi eşleyemez).`);
+        }
+        s.points = lineSection(s.points, nb.points, s.what ?? 'Kesit');
+      }
+      const out: LoftGeom = { kind: 'loft', axis: axisOf(g.axis), sections: sections.map(({ at, points }) => ({ at, points })) };
       if (g.smooth === true) out.smooth = true;
       if (Array.isArray(g.sharp) && g.sharp.length) {
         const n = rings[0].points.length;
-        if (rings.some((s) => s.points.length !== n)) throw new GeomError("'sharp' için tüm kesitlerde nokta sayısı aynı olmalı.");
+        if (out.sections.some((s) => s.points.length > 1 && s.points.length !== n)) throw new GeomError("'sharp' için tüm kesitlerde nokta sayısı aynı olmalı.");
         // Atılan kapanış noktası (ilk noktayla çakışık) ilk noktanın kendisidir.
         const sharp = [...new Set(g.sharp.map(Number).map((k) => (Number.isInteger(k) && k >= n && k < closing ? 0 : k)))].sort((a, b) => a - b);
         if (sharp.some((k) => !Number.isInteger(k) || k < 0 || k >= n)) throw new GeomError(`'sharp' indisleri 0…${n - 1} arası tam sayı olmalı.`);
@@ -674,8 +726,13 @@ function loftRings(g: LoftGeom): Pt2[][] {
   const ringSecs = g.sections.filter((s) => s.points.length > 1);
   const sameCount = ringSecs.every((s) => s.points.length === ringSecs[0].points.length);
   const n = Math.min(MAX_POINTS, Math.max(...ringSecs.map((s) => s.points.length)));
-  return g.sections.map((s) => {
+  // Çizgi kesitin alanı sıfırdır: dolaşım yönünü komşu halkadan alır (komşu ters çevrilirse o da; indis eşleşmesi korunur).
+  // Çizgi kesit yalnızca uçtadır ve sayılar eşittir (sanitizeGeom).
+  const flip = g.sections.map((s) => s.points.length > 1 && signedArea(s.points) < 0);
+  const reversed = (p: Pt2[]) => [p[0], ...p.slice(1).reverse()];
+  return g.sections.map((s, k) => {
     if (s.points.length === 1) return s.points;
+    if (isLineRing(s.points)) return flip[k === 0 ? 1 : k - 1] ? reversed(s.points) : s.points;
     if (sameCount) return ccw(s.points);
     return resample(startAtBottom(ccw(s.points)), n).map(([u, v]) => [r4(u), r4(v)] as Pt2);
   });
@@ -722,7 +779,15 @@ function loftRaw(g: LoftGeom, seg: number): RawMesh {
     // Çevre boyunca: kenar başına ~seg/24 alt bölüm; eksen boyunca: kesit aralığı başına ~seg/32 alt bölüm.
     const { perim: sub, axial: subA } = loftSubdiv(seg);
     const sharp = new Set(sameCount ? (g.sharp ?? []) : []);
-    rings = rings.map((r) => (r.length === 1 ? r : smoothLoop(r, sub, sharp)));
+    // Çizgi kesit çevrede yumuşatılmaz: komşu halkanın alt noktaları çizginin uçlarına yelpazelenir (ağda çizgi yine iki
+    // köşe). Kenarın ilk yarısındaki alt nokta başlangıç ucuna, ikinci yarısındaki bitiş ucuna; tam ortadaki aynalanmış
+    // loft'ta öbür uca (dolaşım ters, yan dörtgenler öbür köşegenden: üçgen kümesi birebir ayna).
+    const lineSub = (r: Pt2[]) =>
+      r.flatMap((p, i) => {
+        const q = r[(i + 1) % r.length];
+        return Array.from({ length: sub }, (_, k) => (2 * k < sub || (2 * k === sub && !g.mirrored) ? p : q));
+      });
+    rings = rings.map((r) => (r.length === 1 ? r : isLineRing(r) ? lineSub(r) : smoothLoop(r, sub, sharp)));
     const N = Math.max(...rings.map((r) => r.length));
     const K = rings.length;
     // Eksen boyunca: her çevre noktası için u(at) ve v(at) ayrı ayrı monoton kübikle ara değerlenir.
@@ -790,7 +855,7 @@ function loftRaw(g: LoftGeom, seg: number): RawMesh {
   }
   // Kapaklar (uç noktası olmayan uçlar): ilk kesit -w, son kesit +w yönüne bakar.
   const cap = (k: number, up: boolean) => {
-    if (rings[k].length === 1) return;
+    if (rings[k].length === 1 || groups[k].count < 3) return; // uç noktası ya da çizgi kesit: kapak yok
     // Kontur tekil köşelerden (köşe sırası = pos'a yazılış sırası).
     const pts = new Array<Pt2>(groups[k].count);
     groups[k].group.forEach((g, i) => (pts[g] ??= rings[k][i]));

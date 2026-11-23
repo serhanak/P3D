@@ -1,6 +1,7 @@
 # Proje durumu
 
-> Son güncelleme: **2026-11-23** — BoltRush #26 / #27: `check` başka opak katının içinde kalan örtüşmeyi z-fighting saymaz; `hull`
+> Son güncelleme: **2026-11-24** — BoltRush #28: loft'un uç kesiti çizgi olabilir (kırma/beşik çatı mahyası; 12 yerine 8 üçgen).
+> Önceki: **2026-11-23** — BoltRush #26 / #27: `check` başka opak katının içinde kalan örtüşmeyi z-fighting saymaz; `hull`
 > `maxTris` alt sınırı 100 → 20. Önceki: **2026-11-23** — BoltRush #25: `check` z-fighting iletisi gerçek örtüşme alanını yazar, kıl payı şeritte ortak nokta
 > ipucu. Önceki: **2026-11-23** — BoltRush #24: gizli yüz ayıklamada değme kuralı (ince kamada, eksende buluşan dilimlerde tam
 > çakışan ortak yüz kalınlıktan bağımsız atılır). Önceki: **2026-11-23** — BoltRush #23: yumuşak loft eşiği (çözünürlük < 36 yumuşatmaz) rehberde, etkisiz ya da yarım
@@ -24,7 +25,7 @@
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (415 test, ~60 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
+1. `npm install` · `npm run typecheck` · `npm test` (416 test, ~60 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
    (README → Kurulum; `p3d status` kurulu skill eskiyse uyarır).
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
@@ -209,6 +210,18 @@
     orto; `camera`'da `--target` yalnızca yön verir, çerçeve görünür kutuya oturur); `eye` perspektiftir, `ortho` + eye/
     `--eye-height`/`--fov` tarayıcı açılmadan, köprüye doğrudan gelirse 400 hata; verilmezse görüntü bayt bayt aynı. `p3d-reviewer`
     incelemesi (kritik/yüksek yok; 3 orta, 4 düşük) düzeltildi.
+- **Loft çizgi uç kesiti (2026-11-24, BoltRush isteği #28):** uçta tek noktalı kesit sivri bitiriyordu, ama iki farklı noktaya inen
+  kesit (kırma çatı mahyası) çakışık nokta çiftleriyle de "en az 3 farklı nokta" hatası veriyordu; geçici çözüm 20 mm'lik ince
+  dikdörtgen mahyaydı (12 üçgen). Şimdi yalnızca iki farklı noktası olan ilk/son kesit **çizgi kesittir**: komşuyla aynı sayıda
+  tekrarlı nokta (`[a, b, b, a]`) olduğu gibi kullanılır, yalnızca iki uç (`[a, b]`) verilirse komşu halkanın her noktası çizginin
+  kendi yanındaki ucuna izdüşümle eşlenip bu biçimde kaydedilir (ortaya düşen nokta belirsiz: hata; döngüsel iki öbek olmayan
+  eşleme: hata). Ağda çizgi iki köşedir (`repeatGroups`): yan dörtgen üçgene iner, kapak yok; dolaşım yönü komşu halkadan alınır
+  (saat yönünde taban ters çevrilince çizgi de), yumuşatmada çizgi çevrede yumuşatılmaz (noktaları `sub` kez tekrarlanır).
+  Çizgi kesit yalnız uçta, komşusu çokgen, çokgen kesitler eşit sayıda (yeniden örnekleme çizgiyi eşleyemez). Kırma çatı 8 üçgen,
+  hacim h/6·(A₀ + 4·A_orta) birebir; beşik çatı 8 üçgen. Yumuşatmada komşu kenarın alt noktaları yakın uca yelpazelenir (tam orta
+  aynada öbür uca: ayna hacmi birebir; `p3d-reviewer` bulgusu — önce hepsi başlangıç ucuna gidiyordu, altıgende ayna %0,24 farklıydı).
+  Aynı doğrudaki 3+ noktalı kesitin "alanı sıfır" hatası iki nokta ipucu verir. Çizgi kesit içermeyen loft'ların ağı değişmedi.
+  Rehber (modeling), Claude talimatı.
 - **`check` gizli örtüşme (2026-11-23, BoltRush isteği #26):** iki parçanın aynı düzlemde aynı yöne bakan yüzleri başka bir kapalı opak
   katının içinde örtüşse de (duvara gömülü söve/kepenk/denizlik arka yüzleri; hiç görünmez, `--cull-hidden` yazmaz) "ekranda titreşir"
   hatası veriliyordu. Şimdi örtüşme çokgeninin görünür kesri sayılır (`src/cull.ts` → `Occluders.classify`, `check.ts` →
@@ -305,6 +318,7 @@
 | Birleşim çizgisi onarımı (#21) | ✅ `tests/cull.test.ts` (5 sahne: iki kutu, ters, yan yana, çerçeve + levha, köşegen; dünya, GLB düz/yumuşak, iskelet; çatlak yapan T-kavşağı 0, bit eşliği, normaller, net kayıp kuralı, hiçbir sahnede toplam > seçeneksiz). Elle: iki kutu seçeneksizle bayt bayt aynı, 4 prizma 112 → 76 (eklenen 0), Benchy 3 629 / 5. Boltrush `glbcmp` (Godot, 626 görünüş): onarımdan önce iki kutu 17, ters 13, yan yana 7 iç delik → onarımla iç delik 0 (kalan 1–8 piksel siluet kenarında alt piksel yuvarlama; net kayıp kuralıyla bu üç sahne artık hiç ayıklanmıyor). **BoltRush doğruladı (0d7376a):** seçeneksiz 172 pist nesnesi + 432 parça dosyası bayt bayt aynı; ayıklamayla pist nesneleri 49 687 → 42 690 (−%14,1), parçalar 298 446 → 267 709 (−%10,3), LOD1 68 076 → 59 443 üçgen, `check` temiz; `glbcmp` (176 yön) iki kütüphanede iç delik 0 (yalnız 2 siluet pikseli), önceki 19 sorunlu varlık temiz; 12 RC3'te GPU kare süresi p50 4,26 → 4,11 ms |
 | `sweep` | ✅ `tests/sweep.test.ts` (29 test; 9'u inceleme düzeltmelerinin kırılan testleri) + `game.test.ts` (3 sweep parçası × 2 dönüş × 3 düzlem birebir ayna) + `cli.test.ts`: düz yol = extrude hacmi; gönyeli L/Z yol = alan × orta çizgi (1e-6); kapalı daire yol Pappus (kiriş düzeltmeli); 3B rmf/up/kemer kapalı manifold; hata mesajları (sığmayan yarıçap "en fazla", katlanma, 150° gönye, biçim); dikiş indisi 6–24 segment; uç uca dikişsiz; çözünürlük 8 → 76, 32 → 700 üçgen; GLB, `check --profile game`, dosya gidiş-dönüşü, Claude şeması null/0 doldurmaları. Elle: `apply --new` + `scene` + `check` + `measure` + STL/GLB/3MF; görünmez Chrome görüntülerinde pahlı tampon halkası, içi boş 3B boru, düşey kemer, gönyeli çerçeve, Retro tamponu doğru. `p3d-reviewer` (~1500 rastgele süpürme; 1 yüksek: kapak T-kavşağı, 3 orta, 5 düşük) düzeltildi; Ø6/Ø3 boru, delikle kesilmiş yaylı boru ve iki boşluklu profil `check` (print/game) temiz. Gerçek Claude ile, kullanıcının sekmesinde panelden ve Unreal'de **denenmedi**. **BoltRush doğruladı (568f464):** sweep kullanan 4 pist nesnesinin GLB'leri bayt bayt aynı, 215 parça + 172 pist nesnesi yeniden üretildi (geometri aynı, `check --profile game` temiz), Retro boru tamponları tek sweep'e geçti (4 parçada 2572 → 2004 üçgen, 0,4 mm çap hilesi kalktı) |
 | Parça saydamlığı / çözünürlüğü | ✅ `tests/part-look.test.ts` + ayrıştırıcı/CLI/köprü testleri (toplam 33 yeni): Op'lar, aralık ve tip hataları, grup, `normalizeLlmOp`, rol varsayılanı ve opak referans, dosya gidiş-dönüşü ve onarım uyarıları, GLB alfa/BLEND (iskelet dahil), 3MF/MTL alfa, opacity 0'da dışa aktarım/hacim/check/delik aynı; analitik üçgen sayıları, 6 segmentte kapalılık, önbellek ayrımı, delikte etkin seg, yuvarlak olmayan şekilde uyarı, `update` atomikliği. Alan yokken STL/GLB/OBJ çıktısı HEAD ile bayt bayt aynı (9 dosya). `p3d-reviewer` incelemesi (kritik yok; 6 bulgu düzeltildi). Görünmez Chrome görüntüsünde cam yarı saydam, 8/96 segment küre, 6 segment torus doğru. Panel alanları ve saydam parçada tıklama gerçek tarayıcıda elle, yeni alanlar gerçek Claude ile ve Unreal'de **denenmedi** |
+| Loft çizgi uç kesiti (#28) | ✅ 1 test (`tests/geom.test.ts`: istekteki `[a, b, b, a]`, kısa `[a, b]`, ters uçlar, saat yönünde taban → 8 üçgen, kapalı, hacim birebir; beşik çatı 8 üçgen tam hacim; ince dikdörtgen mahya 12; yumuşak 3 kesit (çözünürlük 48), alt uçta çizgi, aynalama kapalı; hatalar: ortadaki çizgi, belirsiz eşleme, eşit olmayan çokgen kesitler). Elle: çözünürlük 36/48/96 yumuşak 2–3 kesit kapalı; uç noktası + çatı 10 üçgen; `apply --new` + `check --profile game` temiz; görünmez Chrome tel kafes görüntüsünde kırma/beşik/yumuşak çatı doğru. BoltRush'ın 709 önizleme/kit dosyası + `examples/`'taki 1695 loft'un ağı (köşe + indis) HEAD ile birebir aynı |
 | `check` gizli örtüşme (#26) | ✅ 1 test (`tests/geom.test.ts`: istekteki duvar + iki kutu, üç profil/`cullHidden` birebir aynı; yalnız arka yüzler çakışıkken duvarla 0 not, duvarsız 6000 mm²; istekteki b ile ön yüzler kalır 12 000 → 6000; saydam duvar örtmez; arka yüzler duvar yüzeyinde gizli; iki blok birleşimi gizli; yarım duvar 3000 mm² (+%1'den az); aynı düzlemdeki üçüncü parça örtmez; 37° + 23° döndürülmüş sahnede aynı sonuç). Elle: BoltRush kitleri (Ege, Akdeniz, ralli, köy, arazi, panayır: 63 nesne, önizleme betiğiyle scratchpad'e üretildi) + `examples/` + konsept-01/02/03 = 67 dosyada `check --profile game` HEAD ile birebir aynı (hepsinde 0 z-fighting; süre aynı); 450 parçalı kötü durum sahnesi (233 örtüşme) 1,11 → 0,99 sn, düşen 133 notun hepsi gizli (100 gömülü çift + 33 bitişik iki duvar bloğu arasındaki iç yüz). `p3d-reviewer` (kritik/yüksek yok; dönmüş sahne, kaplama çifti, 1e5–2e6 mm koordinat, referans/saydam örtücü elle doğru): 1 orta (#27, aşağıda) ve performans bulgusu düzeltildi (aday süzme: kısmi örtülü 192 segmentlik iki disk + 400/1600 dolgu HEAD 1,6 / 15,2 sn → 2,2 / 17,0 sn; ilk sürümde 3,1 / 19,6); sığ gömülme (< 0,05 mm), kapalı oyuk ve dar boşlukta alan fazlalığı bilinen sorunlarda |
 | `hull` `maxTris` ≥ 20 (#27) | ✅ `tests/geom.test.ts`: çalı öbeği 20 ve 60 üçgende kapalı, bütçe içinde (> %80'i), hacim kaybı < %40 / %5, `check --profile game` temiz; 20 × 5 × 1000 mm gövde 20 üçgende kapalı, hacim > %90; 2 × 5 × 1000 mm gövde bütçe önerili işlem hatası (parça oluşmaz); doğrulama 10 hata, 20 kabul. İnce gövdede boş ağ `p3d-reviewer` bulgusuydu (eski sınır 100'de de hacmin %1'i). Elle: 5 tablo × 6 bütçe (20–200) ve rastgele 36 tablo × 3 bütçe (20/24/32): açık kenar 0, bozuk üçgen 0, bütçe aşımı yok |
 | `check` örtüşme alanı (#25) | ✅ 1 test (`tests/geom.test.ts`: iki kutu 10 mm bindirme 2200 mm² ve kaydırma önerisi; 30/45/60° döndürülmüş çift ≈2200; iki süpürme kemer tam birleşimde temiz, 0,05 mm kayıkta 1–20 mm² + kıl payı ipucu ~0,01x mm) + kaplama testi yeni biçimle. Elle: 22,5° kırık birleşimli kemer 8 951 mm² gerçek kama (57 mm genişlik → kıl payı sayılmaz) |
@@ -349,7 +363,10 @@
 - Loft kesitlerinde nokta karşılığı kullanıcıya/yapay zekâya bağlı; farklı sayıda noktada otomatik hizalama basittir
   (alttaki nokta), bükülme olabilir. `smooth` olmadan yüzey kesitler arasında doğrusaldır. Çakışık nokta yalnızca tam eşitse
   (1e-4 mm yuvarlamadan sonra) dejenere kenar sayılır; dosyaya önceden kaydedilmiş (noktası atılmış) hatalı loft'lar kendiliğinden
-  düzelmez, kesitleri yeniden üretin.
+  düzelmez, kesitleri yeniden üretin. Çizgi uç kesitte (#28) kaydırılmış eşleme (`[b, b, a, a]`) ya da komşu kesitin dışına taşan
+  çizgi denetlenmez (burulmuş ya da kendini kesen ağ). Yumuşak loft'un aynasında hacim birebir, ama kapak üçgenlemesi birkaç üçgende
+  farklı olabilir (çizgiden bağımsız, öncesinde de var). `p3d-reviewer` #28 incelemesinde önceden var olan bir hata buldu:
+  yumuşak + `sharp` + `mirror` (ör. üçgen taban, `sharp: [0, 2]`, çözünürlük 192, z aynası) aynada 3 açık kenar bırakıyor; düzeltilmedi.
 - `place_on_surface` deliksiz yüzeye göre çalışır ve en yakın noktayı kaba kuvvetle arar (çok büyük ağlarda yavaş).
 - Loft, ucunda sıfıra inen ya da topolojisi değişen gövdelerde (tekne başı/kıçı, küpeşte + kuyu) bozuk sonuç verir;
   bu gövdeler için `hull` şekli kullanılmalı.

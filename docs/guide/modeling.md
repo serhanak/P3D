@@ -53,7 +53,13 @@ noktalar çevre boyunca sıralıdır. Nokta sayısını makul tutun (çokgen ba�
 - **`revolve`** `{kind, axis, profile}`: profil noktaları `[r, a]` (r ≥ 0 eksene uzaklık, a eksen boyunca), 360° döndürülür.
   Topuz, şişe, flanş, pahlı somun.
 - **`loft`** `{kind, axis, sections: [{at, points}], smooth, sharp}`: kesitler arası yüzey. Her kesitte **aynı nokta sayısı**,
-  aynı başlangıç noktası ve aynı dönüş yönü (ör. alt orta, saat yönünün tersi). Uçta tek noktalı kesit sivri bitirir.
+  aynı başlangıç noktası ve aynı dönüş yönü (ör. alt orta, saat yönünün tersi). Uçta tek noktalı kesit sivri bitirir; yalnızca
+  iki farklı noktası olan uç kesit **çizgide** biter (kırma/beşik çatı mahyası, kama sırtı): ya yalnız iki uç `[[u1, v1], [u2, v2]]`
+  (komşu kesitin her noktası çizginin kendi yanındaki ucuna iner; bir nokta tam ortaya düşerse belirsiz, hata) ya da komşuyla
+  aynı sayıda, tekrarlı nokta (dikdörtgen tabanda `[a, b, b, a]`: iki yan dörtgen + iki uç üçgen; kaydedilen biçim budur). Çizgi
+  kesit yalnızca ilk/son kesittir, kapaksızdır, yumuşatılmaz; çokgen kesitler aynı nokta sayısında olmalı. Kırma çatı 8 üçgen
+  (ince dikdörtgen mahyayla 12). Tekrarlı biçimde uçları komşunun dolaşım yönünde verin (`[b, b, a, a]` gibi kaydırılmış eşleme
+  yüzeyi sessizce burar) ve çizgiyi komşu kesitin üstünde/içinde tutun (dışarı taşan çizgi kendini kesen ağ verebilir; denetlenmez).
   `smooth: true` organik yüzey (monoton kübik, taşmaz), `sharp` keskin kalacak indisler. Yumuşatma etkin çözünürlüğe bağlıdır
   (aşağıda "Parça çözünürlüğü"): çevrede kenar başına `round(çözünürlük / 24)`, kesitler arasında aralık başına
   `round(çözünürlük / 32)` alt bölüm. **Çözünürlük 36'nın altında yumuşatma etkisizdir** (ağ `smooth: false` ile aynı; oyun
