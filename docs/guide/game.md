@@ -14,7 +14,8 @@ biçimler. Bunlar gerekiyorsa GLB'yi Blender'da sürdürün.
   "Parça çözünürlüğü"). **Yumuşak loft (`smooth: true`) 36'nın altındaki çözünürlükte yumuşamaz** (ağ köşeli loft'la aynı;
   işlem iletisi uyarır): düşük projede yumuşak loft'a `resolution: 48` verin. `hull` çözünürlükle sadeleşmez; gövdeye `geom.maxTris`
   ile üçgen bütçesi verin (ör. `{"kind": "hull", "stations": […], "maxTris": 1500}`): ağ bütçeyi aşmaz, keskin
-  küpeşte/ayna kalır, bozuk üçgen bırakmaz.
+  küpeşte/ayna kalır, bozuk üçgen bırakmaz. Alt sınır 20 (bitki öbeği, saksı gibi küçük dolgu nesneleri); bütçe ≲ 60'ta sivri
+  uçlu gövde içe doğru küçülür (`p3d guide modeling` → `hull`).
 - **Borular ve bükülen profiller** (tampon, korkuluk, kafes): parça parça prizma yerine tek `sweep` (`p3d guide modeling` →
   "Süpürme"): tek kapalı ağ, iç kapak ve bindirme yok, z-fighting yok. **Süpürme üçgen sayısı:** kesitte N nokta (yuvarlak
   kesitte N = s, içi boşsa 2s; H boşluk), s etkin çözünürlük. Halka sayısı m = 2 (uçlar) + gönye köşesi başına 1 + yay başına
@@ -84,7 +85,8 @@ p3d export araba.glb [--file model.p3d.json] [--units m|mm] [--normals flat|smoo
   Okuma yalnız geometridir (malzeme/normal okunmaz); Draco/meshopt sıkıştırmalı ve nicemlenmiş GLB desteklenmez.
 
 ## Kontrol
-`p3d check --profile game [--max-tris 20000] [--cull-hidden]`: z-fighting, boolean hatası, boş delik, **toplam üçgen bütçesi**
+`p3d check --profile game [--max-tris 20000] [--cull-hidden]`: z-fighting (başka bir opak katının içinde kalan örtüşme sayılmaz:
+duvara gömülü iki pervazın çakışan arka yüzleri hiç görünmez; `--cull-hidden`'dan bağımsız), boolean hatası, boş delik, **toplam üçgen bütçesi**
 (parça başına dağılım; bütçenin ≥ %5'ini tutan yuvarlak parçalar etkin segmentleriyle listelenip parça başına `resolution`
 önerilir) ve bozuk (alanı ~0) üçgenler. Tabla teması ve 0,8 mm ince parça kuralları atlanır. Gizli üçgenler ayrıca
 bildirilmez (yığılı model de "check temiz" olabilir). `--cull-hidden` (betikte `checkProject(p, { profile: 'game', cullHidden:

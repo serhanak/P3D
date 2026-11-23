@@ -82,7 +82,7 @@ export interface HullGeom {
   kind: 'hull';
   stations: HullStation[];
   /**
-   * Üçgen bütçesi (100–1 000 000; oyun varlığı): ağ en fazla bu kadar üçgene sadeleştirilir, ızgara da ona göre küçülür.
+   * Üçgen bütçesi (20–1 000 000; oyun varlığı): ağ en fazla bu kadar üçgene sadeleştirilir, ızgara da ona göre küçülür.
    * Yoksa ayrıntılı ağ (~30–60 bin üçgen, baskı için).
    */
   maxTris?: number;

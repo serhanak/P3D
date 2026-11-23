@@ -331,6 +331,8 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
   atılan üçgen köşeleri T noktası adayıdır, yalnız çatlak yapan kalan kenarlar bölünür; ayıklama üçgen sayısını hiç artırmaz
   (parçanın bölme maliyeti atılanlara eşit/fazlaysa atılanlar geri konur). Seçeneksiz çıktı bayt bayt aynı kalmalı. `check --profile game` gizli üçgen için **ayrı uyarı vermez**
   (temiz model temiz kalmalı); yalnız bütçe aşımı uyarısına not ekler, `--cull-hidden` ile bütçeyi ayıklanmış sayıyla hesaplar.
+  `check` z-fighting'i aynı örtücü kuralıyla (`Occluders`, her profilde) başka opak katının içinde kalan örtüşmeyi saymaz; örtücü
+  yakında yoksa ileti değişmez.
 - Eskiz adları WebGL `Sprite`'tır (CSS etiketi değil; `snapshot` görüntüsüne girsin diye), piksel ölçeği `onBeforeRender`'da
   kameradan hesaplanır. Doku önbelleği `SketchView` içinde temizlenir; sprite'ların paylaşılan geometrisi dispose edilmez.
 

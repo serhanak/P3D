@@ -19,7 +19,7 @@ import type {
   SweepPoint,
 } from '../shared/ops';
 import { decodedAsset } from './assets';
-import { frameRing, hullSolid } from './csg';
+import { HullBudgetError, frameRing, hullSolid } from './csg';
 
 export class GeomError extends Error {}
 
@@ -226,7 +226,7 @@ export function meshSource(g: Record<string, unknown>): Pick<MeshGeom, 'src' | '
 
 const MAX_STATIONS = 512;
 /** Tekne üçgen bütçesi sınırları (`HullGeom.maxTris`). */
-export const HULL_MIN_TRIS = 100;
+export const HULL_MIN_TRIS = 20;
 export const HULL_MAX_TRIS = 1_000_000;
 const MAX_BREADTHS = 256;
 
@@ -824,7 +824,8 @@ function meshGeometry(asset: string, scale: number): THREE.BufferGeometry {
 // ---------------------------------------------------------------------------
 // Tekne (endaze): tablo → örtük yüzey ∩ yan profil
 
-const hullCache = new Map<string, THREE.BufferGeometry>();
+/** Üretilen ağ ya da kalıcı bütçe hatası (`HullBudgetError`: her çizimde ızgarayı yeniden üretmesin). */
+const hullCache = new Map<string, THREE.BufferGeometry | Error>();
 
 /**
  * Alttan taşma (0…1 mm): düz tabanlı istasyonda (taban yarı genişliği ≥ 1.5) gövde omurganın 1 mm altına taşar ve
@@ -929,6 +930,7 @@ function hullMesh(g: HullGeom, edge: number): THREE.BufferGeometry {
 function hullGeometry(g: HullGeom, seg: number): THREE.BufferGeometry {
   const key = `${seg}|${JSON.stringify(g)}`;
   let cached = hullCache.get(key);
+  if (cached instanceof Error) throw cached;
   if (!cached) {
     const st = g.stations;
     const edge = Math.min(1, Math.max(0.15, 34 / seg)); // çözünürlük 96 → 0.35 mm
@@ -943,10 +945,18 @@ function hullGeometry(g: HullGeom, seg: number): THREE.BufferGeometry {
     const budget = hullCellBudget(g);
     let k = Math.max(1, Math.cbrt(cells(1) / budget));
     while (cells(k) > budget) k *= 1.05;
-    if (k === 1) cached = hullMesh(g, edge);
-    else {
-      cached = hullMesh(scaledHull(g, 1 / k), edge);
-      cached.scale(k, k, k);
+    try {
+      if (k === 1) cached = hullMesh(g, edge);
+      else {
+        cached = hullMesh(scaledHull(g, 1 / k), edge);
+        cached.scale(k, k, k);
+      }
+    } catch (e) {
+      if (e instanceof HullBudgetError) {
+        if (hullCache.size > 16) hullCache.clear();
+        hullCache.set(key, e);
+      }
+      throw e;
     }
     if (hullCache.size > 16) hullCache.clear();
     hullCache.set(key, cached);

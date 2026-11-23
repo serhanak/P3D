@@ -4,8 +4,9 @@
 // baskı kuralları yok).
 // Kaplamalar (decal) kalınlıksız açık ağdır: ince parça / tabla / gizli yüz kurallarına girmez; z-fighting'de yalnızca gerçekten
 // çakışık (aynı düzlemde) oldukları yüzler bildirilir — taşıyıcı yüzden `lift` kadar ayrık kaplama temizdir.
+// Z-fighting'de başka bir opak katının içinde kalan örtüşme sayılmaz (hiç görünmez; profil ve `cullHidden`'dan bağımsız).
 import * as THREE from 'three';
-import { cullAndRepair } from './cull';
+import { Occluders, cullAndRepair } from './cull';
 import { partBox } from './engine';
 import { worldMesh } from './io';
 import type { WorldMesh } from './meshio';
@@ -150,11 +151,60 @@ function unproject(t: PlaneTri, [u, v]: V2): THREE.Vector3 {
 const DECAL_COPLANAR = 1e-3;
 
 /**
+ * Gizli örtüşme (Boltrush isteği #26): örtüşme bölgesinin önünde bu kadar (mm) derinlikte başka bir opak katının malzemesi varsa
+ * bölge görünmez. Kova dilimi (0,02 mm) bundan dar: aynı kovadaki eş düzlemli, aynı yöne bakan yüzler (öbür parça, üçüncü bir
+ * titreşen parça) bölgeyi örtmüş sayılmaz.
+ */
+const HIDDEN_PUSH = 0.05;
+/**
+ * Kısmen örtülü örtüşme üçgeni en çok bu kadar kez dörde bölünür (kenar 1/16). En küçük bölmede karışık kalan parça, iç örnek
+ * noktalarının hepsi örtücülerin içindeyse gizli (iki bloğun birleşim çizgisi), değilse görünür sayılır.
+ */
+const HIDDEN_DEPTH = 4;
+
+/**
+ * Örtüşme çokgeninin (dışbükey, düzlemde; `n` önü) görünür alan kesri: yelpaze üçgenleri örtücülere göre sınıflanır, kısmen
+ * örtülen üçgen dörde bölünür. Hiçbir örtücü yakında değilse tam 1 (alanlar değişmez).
+ */
+function visibleFraction(poly: THREE.Vector3[], n: [number, number, number], occ: Occluders, skip: ReadonlySet<number>): number {
+  const box = new THREE.Box3().setFromPoints(poly);
+  const cands = occ.near(box.min.toArray(), box.max.toArray(), HIDDEN_PUSH, skip);
+  if (!cands.length) return 1;
+  const area = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3) => new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a)).length() / 2;
+  const mid = (a: THREE.Vector3, b: THREE.Vector3) => a.clone().add(b).multiplyScalar(0.5);
+  const walk = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, s: number, depth: number): number => {
+    const cls = occ.classify([a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z], n, HIDDEN_PUSH, cands, depth === HIDDEN_DEPTH);
+    if (cls === 1) return 0;
+    if (cls === 0 || depth === HIDDEN_DEPTH) return s;
+    const [ab, bc, ca] = [mid(a, b), mid(b, c), mid(c, a)];
+    return [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]].reduce((sum, [p, q, r]) => sum + walk(p, q, r, s / 4, depth + 1), 0);
+  };
+  let total = 0;
+  let visible = 0;
+  for (let k = 1; k + 1 < poly.length; k++) {
+    const s = area(poly[0], poly[k], poly[k + 1]);
+    total += s;
+    visible += walk(poly[0], poly[k], poly[k + 1], s, 0);
+  }
+  return total > 0 ? visible / total : 1;
+}
+
+/**
  * Aynı düzlemde, aynı yöne bakan, üst üste binen yüzeyler: farklı parçalar arasında z-fighting. Kaplama–katı çiftinde yalnızca
- * tam çakışık düzlemler (DECAL_COPLANAR); kaplama–kaplama çifti katılar gibi.
+ * tam çakışık düzlemler (DECAL_COPLANAR); kaplama–kaplama çifti katılar gibi. Örtüşmenin başka bir opak katının içinde kalan
+ * kısmı sayılmaz (`visibleFraction`; örtücüler ayıklamadakiyle aynı: kaplama olmayan, görünen saydamlığı 1, kapalı katılar).
  */
 function coplanarOverlaps(project: Project, solids: Part[], meshOf: (p: Part) => WorldMesh): CheckIssue[] {
   const decalIds = new Set(solids.filter(isDecal).map((p) => p.id));
+  // İlk örtüşmede kurulur: temiz modelde maliyeti yok.
+  let occ: { set: Occluders; index: Map<string, number> } | undefined;
+  const occluders = () => {
+    if (!occ) {
+      const bodies = solids.filter((p) => !isDecal(p));
+      occ = { set: new Occluders(bodies.map((p) => ({ ...meshOf(p), occluder: displayOpacity(p) >= 1 }))), index: new Map(bodies.map((p, k) => [p.id, k])) };
+    }
+    return occ;
+  };
   const buckets = new Map<string, PlaneTri[]>();
   const a = new THREE.Vector3();
   const b = new THREE.Vector3();
@@ -201,17 +251,27 @@ function coplanarOverlaps(project: Project, solids: Part[], meshOf: (p: Part) =>
         let width = 0;
         let checks = 0;
         const decalPair = decalIds.has(ids[i]) !== decalIds.has(ids[j]);
+        let skip: Set<number> | undefined;
         outer: for (const ta of byPart.get(ids[i])!) {
           for (const tb of byPart.get(ids[j])!) {
             if (++checks > 200000) break outer;
             if (decalPair && Math.abs(ta.d - tb.d) >= DECAL_COPLANAR) continue;
             if (!trianglesOverlap(ta.pts, tb.pts)) continue;
-            est += Math.min(ta.area, tb.area);
             const poly = triangleIntersection(ta.pts, tb.pts);
+            const poly3 = poly.map((v) => unproject(ta, v));
+            // Görünür kesir: başka bir opak katının içinde kalan kısım sayılmaz (iki parça kendini örtmez).
+            let vis = 1;
+            if (poly3.length >= 3) {
+              const o = occluders();
+              skip ??= new Set([ids[i], ids[j]].flatMap((id) => (o.index.has(id) ? [o.index.get(id)!] : [])));
+              vis = visibleFraction(poly3, ta.n, o.set, skip);
+              if (vis === 0) continue;
+            }
+            est += Math.min(ta.area, tb.area) * vis;
             if (!poly.length) continue;
             // İzdüşüm alanı / |n·atılan eksen| = düzlemdeki alan.
-            real += Math.abs(signedArea(poly)) / Math.abs(ta.n[ta.drop]);
-            width = Math.max(width, minWidth(poly.map((v) => unproject(ta, v))));
+            real += (Math.abs(signedArea(poly)) / Math.abs(ta.n[ta.drop])) * vis;
+            width = Math.max(width, minWidth(poly3));
           }
         }
         if (est < 0.01) continue;

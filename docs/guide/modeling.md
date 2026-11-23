@@ -68,8 +68,12 @@ noktalar çevre boyunca sıralıdır. Nokta sayısını makul tutun (çokgen ba�
   tüm genişlikleri 0 olan istasyon sivri uçtur. Tekne, kano, gövde, araç kaportası gibi sivrilen gövdeler için. Oyuk (güverte)
   için ikinci bir `hull` delik. Üretimi ~1–4 sn sürer; her boyutta çalışır (1 m üstü gövdeler aynı ızgara bütçesiyle,
   ayrıntı gövde boyunun ~%0,4'ü). Üretilemeyen geometri işlem hatası olarak döner, `check` de bildirir. Varsayılan ağ
-  ayrıntılıdır (~30–60 bin üçgen, çözünürlükten bağımsız); düşük poligon için `maxTris` (100–1 000 000) üçgen bütçesi verin:
-  ağ en fazla o kadar üçgen olur, üretim de hızlanır (2 m'lik gövde 1000 üçgende ~0,4 sn, hacim farkı < %0,5).
+  ayrıntılıdır (~30–60 bin üçgen, çözünürlükten bağımsız); düşük poligon için `maxTris` (20–1 000 000) üçgen bütçesi verin:
+  ağ en fazla o kadar üçgen olur, üretim de hızlanır (2 m'lik gövde 1000 üçgende ~0,4 sn, hacim farkı < %0,5). Sadeleşmiş ağın
+  köşeleri yüzeyde kalır: çok küçük bütçede (≲ 60) sivri uçlu gövde içe doğru küçülür (çalı öbeği 20 üçgende hacmin ~%33'ünü,
+  40'ta ~%8'ini kaybeder; düz aynalı saksı 20'de ~%4). Küçülmeyi istasyon genişliklerini biraz büyüterek telafi edin. Çok ince/uzun
+  gövde (ör. 2 × 5 × 1000 mm) küçük bütçede kendi üstüne çöker: sadeleşmiş ağ gövde hacminin %30'undan azını tutuyorsa işlem hata
+  verir ve yeterli bütçeyi söyler ("maxTris en az ~N verin").
 - **`sweep`** `{kind, path, closed, bend, profile, holes, diameter, innerDiameter, up, frame}`: sabit bir kesit 3B çoklu çizgi
   boyunca süpürülür. Boru, kulp, korkuluk, tampon, pervaz, kablo kanalı gibi kesiti değişmeyen ama yolu dönen parçalar için
   (extrude yalnızca düz gider; kesit değişiyorsa loft). Ayrıntı aşağıda.

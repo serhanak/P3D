@@ -23,6 +23,8 @@ export function initCsg(wasmUrl?: string): Promise<void> {
 export const csgReady = () => wasm !== null;
 
 export class CsgError extends Error {}
+/** Tekne verilen üçgen bütçesine sadeleştirilemiyor (`hullSolid`): girdiye bağlı, kalıcı (önbelleğe alınabilir). */
+export class HullBudgetError extends CsgError {}
 
 /** BufferGeometry → Manifold (köşeler kaynaklanır; kapalı değilse CsgError). */
 function toManifold(g: THREE.BufferGeometry, matrix?: THREE.Matrix4): Manifold {
@@ -281,11 +283,44 @@ export function hullSolid(
     // kesilir, son ağ bütçeye indirilir (hafif düzenlemeyle): önce kesim çizgisindeki iğne üçgenler gider, şekil korunur
     // (2,2 m'lik gövde 200 üçgende hacim farkı < %1; doğrudan bütçeye sadeleştirip kesmek bütçeyi aşıyor, hedefi küçültmek
     // gövdeyi çökertiyordu).
-    const pre = target.strict ? 2 * target.tris : target.tris;
-    const cut = track(track(regularized(raw, pre, target.strict ? 1 : 0.002)).intersect(env));
-    if (!target.strict || cut.numTri() <= target.tris) return toGeometry(cut);
-    return toGeometry(track(regularized(cut, target.tris, 1, true)));
+    if (!target.strict) return toGeometry(track(track(regularized(raw, target.tris, 0.002)).intersect(env)));
+    const budget = (tris: number, pre: number) => {
+      const cut = track(track(regularized(raw, pre * tris, 1)).intersect(env));
+      return cut.numTri() <= tris ? cut : track(regularized(cut, tris, 1, true));
+    };
+    // Bütçe sınırsız sapmayla sadeleştirir: ince/uzun gövde (2 × 5 × 1000 mm) kendi üstüne çökebiliyordu (boş ya da hacmin
+    // %1'i; BoltRush #27 incelemesi). Sonuç kesimsiz-sadeleştirmesiz gövdenin hacmiyle (`ref`) karşılaştırılır: hacmin
+    // HULL_GOOD'undan azını tutuyorsa daha büyük ön hedeflerle de denenir, en yakını seçilir; hiçbiri HULL_VALID'e
+    // ulaşmazsa sessizce bozuk ağ yerine hata (yeterli bütçe önerisiyle).
+    const ref = track(raw.intersect(env)).volume();
+    const score = (m: Manifold) => (m.numTri() < 4 || !(ref > 0) ? 0 : Math.min(m.volume() / ref, ref / m.volume()) || 0);
+    const best = (tris: number) => {
+      let pick: { m: Manifold; s: number } | undefined;
+      for (const pre of HULL_PRE) {
+        const m = budget(tris, pre);
+        const s = score(m);
+        if (!pick || s > pick.s) pick = { m, s };
+        if (s >= HULL_GOOD) break;
+      }
+      return pick!;
+    };
+    const got = best(target.tris);
+    if (got.s >= HULL_VALID) return toGeometry(got.m);
+    // Öneri: bütçeyi ikiye katlayarak hacmin yarısını tutan ilk değer.
+    let need: number | undefined;
+    for (let t = target.tris * 2; t <= target.tris * 64 && need === undefined; t *= 2) if (best(t).s >= 0.5) need = t;
+    throw new HullBudgetError(
+      `Tekne bu üçgen bütçesine sadeleştirilemiyor (maxTris ${target.tris}: sadeleşmiş ağda gövde hacminin yalnızca %${Math.round(100 * got.s)} kadarı kalıyor; ` +
+        `ince ya da çok uzun gövde). ${need ? `maxTris en az ~${need} verin` : 'maxTris değerini büyütün ya da gövdeyi kalınlaştırın'}.`,
+    );
   } finally {
     for (const x of keep) x.delete();
   }
 }
+
+/** Bütçeli teknede ön sadeleştirme hedefleri (bütçenin katı; ilk yeterli olan kullanılır). */
+const HULL_PRE = [2, 4, 8, 16];
+/** Hacmin bu kesrini tutan sonuç yeterlidir (başka ön hedef denenmez). */
+const HULL_GOOD = 0.9;
+/** En iyi sonuç hacmin bu kesrinden azını tutuyorsa gövde o bütçeye sadeleştirilemiyor sayılır (hata). */
+const HULL_VALID = 0.3;

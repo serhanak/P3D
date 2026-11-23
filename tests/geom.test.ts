@@ -505,6 +505,51 @@ describe('çerçeve, yüzeye yerleştirme, birleştirme, denetim', () => {
     expect(area).toBeLessThan(20);
     expect(s[0].message).toMatch(/Kıl payı örtüşme \(en fazla ~0,01\d* mm genişlikte şerit, örtüşen üçgenlere oranı %[\d,]+\): .*Ortak noktaları iki parçada da aynı değerlerle verin\.$/);
   });
+
+  it('check: başka opak katının içinde kalan örtüşme z-fighting sayılmaz (BoltRush #26)', () => {
+    const box = (name: string, w: number, d: number, h: number, [x, y, z]: number[], extra: Partial<Op> = {}) =>
+      ({ op: 'create', shape: 'box', name, params: [{ name: 'width', value: w }, { name: 'depth', value: d }, { name: 'height', value: h }], position: { x, y, z }, ...extra }) as Op;
+    const zf = (ops: Op[]) => {
+      const p = project(ops);
+      const all = [checkProject(p), checkProject(p, { profile: 'game' }), checkProject(p, { profile: 'game', cullHidden: true })].map((r) =>
+        r.filter((i) => /z-fighting/.test(i.message)).map((i) => i.message),
+      );
+      expect(all[1]).toEqual(all[0]); // profil ve cullHidden'dan bağımsız
+      expect(all[2]).toEqual(all[0]);
+      return all[0];
+    };
+    const area = (m: string) => Number(/örtüşme ≈([\d.]+) mm²/.exec(m)![1]);
+    // İstekteki gibi: a (y −20…30) ile b'nin arka yüzleri y = 30'da çakışık, x 0…100 × z 470…530 = 6000 mm²; duvar y 0…200.
+    const a = box('a', 200, 50, 100, [0, 5, 500]);
+    const b = box('b', 200, 40, 60, [100, 10, 500]); // ön yüzü a'nınkinden ayrık (y −10)
+    const wall = (extra: Partial<Op> = {}) => box('duvar', 1000, 200, 1000, [0, 100, 500], extra);
+    expect(zf([a, b])).toHaveLength(1);
+    expect(area(zf([a, b])[0])).toBeCloseTo(6000, 1);
+    expect(zf([wall(), a, b])).toEqual([]);
+    // İstekteki b (y −20…30): ön yüzler de y = −20'de çakışık ve duvarın dışında: yalnızca onlar kalır (12 000 → 6000).
+    const b50 = box('b', 200, 50, 60, [100, 5, 500]);
+    expect(area(zf([a, b50])[0])).toBeCloseTo(12000, 1);
+    const front = zf([wall(), a, b50]);
+    expect(front).toHaveLength(1);
+    expect(front[0]).toMatch(/normal 0\.00, -1\.00, 0\.00, düzlem 20\.00 mm, örtüşme ≈6000\.00 mm²/);
+    // Saydam duvar örtmez (ayıklamadaki gibi); arka yüzler duvar yüzeyinde (y = 0) de gizli.
+    expect(zf([wall({ opacity: 0.5 }), a, b])).toHaveLength(1);
+    expect(zf([wall(), box('a', 200, 50, 100, [0, -25, 500]), box('b', 200, 40, 60, [100, -20, 500])])).toEqual([]);
+    // Duvar iki bloktan, birleşim çizgisi örtüşmenin ortasında (x = 50): her nokta bir bloğun içinde → gizli.
+    const blocks = [box('d1', 550, 200, 1000, [-225, 100, 500]), box('d2', 450, 200, 1000, [275, 100, 500])];
+    expect(zf([...blocks, a, b])).toEqual([]);
+    // Yalnız x < 50'yi örten duvar: görünen yarı (3000 mm²) bildirilir (bölme yaklaşığı: %1).
+    const half = zf([blocks[0], a, b]);
+    expect(half).toHaveLength(1);
+    expect(area(half[0]) / 3000 - 1).toBeGreaterThanOrEqual(0);
+    expect(area(half[0]) / 3000 - 1).toBeLessThan(0.01);
+    // Aynı düzlemde aynı yöne bakan üçüncü parça (c'nin arka yüzü de y = 30) örtmez: üç çift de titreşir.
+    expect(zf([box('c', 300, 100, 300, [0, -20, 500]), a, b])).toHaveLength(3);
+    // Eğik düzlemde de: sahne birlikte döndürülünce aynı sonuç.
+    const turned = (ops: Op[]) => [...ops, { op: 'group', parts: ops.map((o) => (o as { name: string }).name), name: 'g' } as Op, { op: 'rotate', part: 'g', axis: 'z', degrees: 37 } as Op, { op: 'rotate', part: 'g', axis: 'x', degrees: 23 } as Op];
+    expect(zf(turned([wall(), a, b]))).toEqual([]);
+    expect(area(zf(turned([a, b]))[0])).toBeCloseTo(6000, -1);
+  });
 });
 
 describe('örtük yüzey, çoklu kesit, düzgün sadeleştirme', () => {
@@ -637,7 +682,43 @@ describe('tekne (endaze) şekli', () => {
     const p0 = project([banana(200)]);
     expect(tris(p0)).toBeLessThanOrEqual(200);
     expect(Math.abs(solid(p0, 'tekne').vol / b.vol - 1)).toBeLessThan(0.03);
-  }, 30000);
+    // Alt sınır 20 (BoltRush #27: bitki öbeği, saksı): kapalı ağ, bütçe içinde, bozuk üçgen yok. Köşeler yüzeyde kaldığından
+    // sivri uçlu gövde küçülür (çalı 20 üçgende ~−%33, 60'ta ~−%2); düz aynalı saksı ~−%4.
+    const bush = (maxTris: number) =>
+      create('tekne', 'hull' as never, {
+        kind: 'hull',
+        maxTris,
+        stations: [
+          [-200, 40, 220, [0, 0, 0, 0]], [-120, 10, 280, [80, 120, 110, 60]], [0, 0, 300, [110, 150, 140, 80]],
+          [120, 10, 280, [80, 120, 110, 60]], [200, 40, 220, [0, 0, 0, 0]],
+        ].map(([x, keel, sheer, breadth]) => ({ x, keel, sheer, breadth })),
+      } as never);
+    const full = solid(project([bush(4000)]), 'tekne').vol;
+    for (const [m, loss] of [[20, 0.4], [60, 0.05]]) {
+      const p = project([bush(m)]);
+      const s = solid(p, 'tekne');
+      expect(s.bad).toBe(0);
+      expect(tris(p)).toBeLessThanOrEqual(m);
+      expect(tris(p)).toBeGreaterThan(m * 0.8);
+      expect(1 - s.vol / full).toBeLessThan(loss);
+      expect(checkProject(p, { profile: 'game' }).filter((i) => i.level === 'hata' || /bozuk/.test(i.message))).toEqual([]);
+    }
+    // İnce/uzun gövde (genişlik 20 ya da 2 mm, yükseklik 5, boy 1000 mm) sınırsız sapmalı sadeleştirmede kendi üstüne çökebiliyordu (boş ağ ya da hacmin
+    // %1'i, hata yok): büyük ön hedeflerle de denenir; hiçbiri yetmezse bütçe önerisiyle işlem hatası.
+    const thin = (w: number, maxTris: number) => {
+      const p = newProject();
+      const r = applyOps(p, [create('ince', 'hull' as never, { kind: 'hull', maxTris, stations: [0, 500, 1000].map((x) => ({ x, keel: 0, sheer: 5, breadth: [w, w, w] })) } as never)], null);
+      return { p, err: r.errors.join(' ') };
+    };
+    const t10 = thin(10, 20);
+    expect(t10.err).toBe('');
+    expect(tris(t10.p)).toBeLessThanOrEqual(20);
+    expect(solid(t10.p, 'ince').bad).toBe(0);
+    expect(solid(t10.p, 'ince').vol / 100000).toBeGreaterThan(0.9);
+    const t1 = thin(1, 20);
+    expect(t1.err).toMatch(/sadeleştirilemiyor \(maxTris 20: .*maxTris en az ~\d+ verin/);
+    expect(t1.p.parts).toHaveLength(0);
+  }, 60000);
 
   it('maxTris doğrulama: aralık dışı hata, 0 ya da null varsayılan, kesir yuvarlanır', () => {
     const geomOf = (maxTris: unknown) => {
@@ -645,7 +726,9 @@ describe('tekne (endaze) şekli', () => {
       const r = applyOps(p, [hull([0, 5, 10].map((x) => ({ x, keel: 0, sheer: 5, breadth: [3, 3, 3] })))].map((op) => ({ ...op, geom: { ...(op as { geom: object }).geom, maxTris } }) as Op), null);
       return { err: r.errors.join(' '), geom: p.parts[0]?.geom as { maxTris?: number } | undefined };
     };
-    expect(geomOf(50).err).toMatch(/maxTris.*100/);
+    expect(geomOf(10).err).toMatch(/maxTris.*20/);
+    expect(geomOf(20).err).toBe('');
+    expect(geomOf(20).geom?.maxTris).toBe(20);
     expect(geomOf(2e6).err).toMatch(/maxTris/);
     expect(geomOf('çok').err).toMatch(/maxTris/);
     expect(geomOf(0).geom).not.toHaveProperty('maxTris');

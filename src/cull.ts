@@ -539,6 +539,134 @@ function repairPass(meshes: CullMesh[], hidden: Uint8Array[], tol: number): Omit
 }
 
 // ---------------------------------------------------------------------------
+// Bölge gizliliği (`check` z-fighting, Boltrush isteği #26)
+
+/**
+ * Düzlemsel bir bölgenin önü opak bir katının içinde mi: `check`'in z-fighting denetimi, başka bir katının içinde kalan (ekranda
+ * hiç görünmeyen) üst üste yüzeyleri saymamak için kullanır. Örtücü kuralları `hiddenTriangles` ile aynıdır (kapalı, tutarlı
+ * yönlü, `occluder` false değil); BVH'ler ilk sorguda kurulur.
+ */
+export class Occluders {
+  private readonly bodies: Body[];
+  private readonly T = new Float64Array(9);
+
+  constructor(meshes: CullMesh[]) {
+    this.bodies = meshes.map(prepare);
+  }
+
+  /**
+   * Kutusu [min, max] bölgesine (itme ve ε payıyla) değen örtücülerin indisleri, `skip` hariç: `classify`'ın aday listesi (bölge
+   * başına bir kez; her alt üçgende tüm ağları taramamak için).
+   */
+  near(min: ArrayLike<number>, max: ArrayLike<number>, push: number, skip?: ReadonlySet<number>): number[] {
+    let scale = 0;
+    for (let m = 0; m < 3; m++) scale = Math.max(scale, Math.abs(min[m]), Math.abs(max[m]), max[m] - min[m]);
+    const out: number[] = [];
+    for (let j = 0; j < this.bodies.length; j++) {
+      const B = this.bodies[j];
+      if (!B.covers || skip?.has(j)) continue;
+      const pad = 2 * Math.max(push, epsOf(Math.max(scale, B.scale)));
+      let apart = false;
+      for (let m = 0; m < 3; m++) if (max[m] + pad < B.min[m] || min[m] - pad > B.max[m]) apart = true;
+      if (!apart) out.push(j);
+    }
+    return out;
+  }
+
+  /**
+   * Üçgen bölge `tri` (dünya mm, 9 değer; `n` birim normal = bölgenin önü) kenarlarından ε içeri küçültülür ve `n` boyunca
+   * max(ε, `push`) itilir (T′; itme testindeki gibi). 1: T′ bir örtücünün tamamen içinde (ağırlık merkezi içeride ve o örtücünün
+   * hiçbir üçgeni T′'ye değmiyor) — bölge gizli. 0: hiçbir örtücü T′'ye değmiyor ve hiçbiri onu içermiyor — bölge görünür.
+   * −1: bir örtücünün yüzeyi T′'yü kesiyor ya da ona değiyor (kısmen örtülü; bölünürse ayrışır). Alanı sıfır bölge 0'dır.
+   * `cands`: denenecek ağların indisleri (`near`; bölgeyi taşıyan parçalar hariç). `resolve` (en küçük bölme): karışık bölge, T′'nün iç
+   * örnek noktalarının hepsi değen örtücülerden birinin içindeyse 1 (yan yana duran iki duvar bloğunun birleşim çizgisi: her
+   * nokta bir bloğun içinde, hiçbir blok T′'yü tek başına içermez), değilse −1.
+   */
+  classify(tri: ArrayLike<number>, n: readonly [number, number, number], push: number, cands: readonly number[], resolve = false): -1 | 0 | 1 {
+    const ax = tri[0];
+    const ay = tri[1];
+    const az = tri[2];
+    const bx = tri[3];
+    const by = tri[4];
+    const bz = tri[5];
+    const cx = tri[6];
+    const cy = tri[7];
+    const cz = tri[8];
+    const la = Math.hypot(cx - bx, cy - by, cz - bz);
+    const lb = Math.hypot(ax - cx, ay - cy, az - cz);
+    const lc = Math.hypot(bx - ax, by - ay, bz - az);
+    const per = la + lb + lc;
+    const n2 = Math.hypot(
+      (by - ay) * (cz - az) - (bz - az) * (cy - ay),
+      (bz - az) * (cx - ax) - (bx - ax) * (cz - az),
+      (bx - ax) * (cy - ay) - (by - ay) * (cx - ax),
+    );
+    if (!(n2 > 1e-12 * per * per)) return 0;
+    const r = n2 / per;
+    const ix = (la * ax + lb * bx + lc * cx) / per;
+    const iy = (la * ay + lb * by + lc * cy) / per;
+    const iz = (la * az + lb * bz + lc * cz) / per;
+    // Bölgenin ölçeği (ε için): kutu boyu ve koordinat büyüklüğü.
+    let scale = 0;
+    for (let q = 0; q < 9; q++) scale = Math.max(scale, Math.abs(tri[q]));
+    scale = Math.max(scale, Math.abs(ax - bx), Math.abs(ay - by), Math.abs(az - bz), Math.abs(ax - cx), Math.abs(ay - cy), Math.abs(az - cz));
+    const T = this.T;
+    const touching: Body[] = [];
+    for (const j of cands) {
+      const B = this.bodies[j];
+      if (!B.covers) continue;
+      const eps = epsOf(Math.max(scale, B.scale));
+      const h = Math.max(eps, push);
+      const k = 1 - Math.min(eps, r / 2) / r;
+      let inBox = true;
+      let apart = false;
+      for (let q = 0; q < 9; q += 3) {
+        T[q] = ix + (tri[q] - ix) * k + h * n[0];
+        T[q + 1] = iy + (tri[q + 1] - iy) * k + h * n[1];
+        T[q + 2] = iz + (tri[q + 2] - iz) * k + h * n[2];
+      }
+      for (let m = 0; m < 3; m++) {
+        const lo = Math.min(T[m], T[m + 3], T[m + 6]);
+        const hi = Math.max(T[m], T[m + 3], T[m + 6]);
+        if (hi < B.min[m] || lo > B.max[m]) apart = true;
+        if (lo <= B.min[m] || hi >= B.max[m]) inBox = false;
+      }
+      if (apart) continue;
+      B.bvh ??= new TriBvh(B.mesh);
+      if (B.bvh.touches(T)) {
+        touching.push(B);
+        continue;
+      }
+      // Değmiyor: T′ ya tamamen içeride ya tamamen dışarıda (bağlı düzlemsel bölge).
+      if (inBox && B.bvh.inside((T[0] + T[3] + T[6]) / 3, (T[1] + T[4] + T[7]) / 3, (T[2] + T[5] + T[8]) / 3)) return 1;
+    }
+    if (!touching.length) return 0;
+    if (!resolve) return -1;
+    // Örnek noktası değmeyen bir örtücünün içinde olamaz (olsaydı o örtücü T′'yü tümüyle içerirdi; yukarıda 1 dönerdi).
+    const h = Math.max(epsOf(Math.max(scale, ...touching.map((B) => B.scale))), push);
+    for (const [wa, wb, wc] of SAMPLES) {
+      const x = wa * ax + wb * bx + wc * cx + h * n[0];
+      const y = wa * ay + wb * by + wc * cy + h * n[1];
+      const z = wa * az + wb * bz + wc * cz + h * n[2];
+      const inAny = touching.some((B) => x > B.min[0] && x < B.max[0] && y > B.min[1] && y < B.max[1] && z > B.min[2] && z < B.max[2] && B.bvh!.inside(x, y, z));
+      if (!inAny) return -1;
+    }
+    return 1;
+  }
+}
+
+/**
+ * `Occluders.classify` örnek noktaları (ağırlık merkezi koordinatları): köşelere yakın üç nokta ve merkeze yakın bir nokta.
+ * Ağırlıklar yuvarlak değil: ızgaraya oturan modellerde nokta birleşim çizgisinin tam üstüne düşmesin (orada parite belirsiz).
+ */
+const SAMPLES: [number, number, number][] = [
+  [0.7213, 0.1694, 0.1093],
+  [0.1093, 0.7213, 0.1694],
+  [0.1694, 0.1093, 0.7213],
+  [0.3271, 0.3412, 0.3317],
+];
+
+// ---------------------------------------------------------------------------
 // Üçgen BVH: ışın paritesi ve üçgen–üçgen kesişim sorgusu
 
 class TriBvh {

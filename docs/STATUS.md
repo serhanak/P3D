@@ -1,6 +1,7 @@
 # Proje durumu
 
-> Son güncelleme: **2026-11-23** — BoltRush #25: `check` z-fighting iletisi gerçek örtüşme alanını yazar, kıl payı şeritte ortak nokta
+> Son güncelleme: **2026-11-23** — BoltRush #26 / #27: `check` başka opak katının içinde kalan örtüşmeyi z-fighting saymaz; `hull`
+> `maxTris` alt sınırı 100 → 20. Önceki: **2026-11-23** — BoltRush #25: `check` z-fighting iletisi gerçek örtüşme alanını yazar, kıl payı şeritte ortak nokta
 > ipucu. Önceki: **2026-11-23** — BoltRush #24: gizli yüz ayıklamada değme kuralı (ince kamada, eksende buluşan dilimlerde tam
 > çakışan ortak yüz kalınlıktan bağımsız atılır). Önceki: **2026-11-23** — BoltRush #23: yumuşak loft eşiği (çözünürlük < 36 yumuşatmaz) rehberde, etkisiz ya da yarım
 > yumuşatmada işlem iletisi uyarır (ağ değişmedi). Önceki: **2026-11-18** — GLB okuma (arayüzde Aç…/İçe aktar…, `p3d import`, `--file x.glb`), tel kafes / X-ışını
@@ -23,7 +24,7 @@
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (414 test, ~60 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
+1. `npm install` · `npm run typecheck` · `npm test` (415 test, ~60 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
    (README → Kurulum; `p3d status` kurulu skill eskiyse uyarır).
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
@@ -82,7 +83,7 @@
   (hacim 10,69 cm³ aynı, kutu farkı 0,04 mm). Üretilemeyen geometri: geom veren `create`/`update` hata döndürür (çekirdek
   hazırsa), `check` yer tutucuya düşen parçayı hata sayar.
 - **`hull` üçgen bütçesi `geom.maxTris` (2026-11-07, BoltRush isteği #7):** varsayılan ağ çözünürlükten bağımsız ~30–60 bin
-  üçgendi (2,2 m'lik gövde çözünürlük 12'de 34 bin, kesim çizgisinde iğne üçgenler). `maxTris` (100–1 000 000) verilince ağ
+  üçgendi (2,2 m'lik gövde çözünürlük 12'de 34 bin, kesim çizgisinde iğne üçgenler). `maxTris` (20–1 000 000; alt sınır #27'de 100'den indi) verilince ağ
   bütçeyi aşmaz: gövde bütçenin iki katına sadeleştirilip profille kesilir, son ağ `RegularizeLight` ile bütçeye iner; ızgara
   da küçülür (`maxTris × 250` nokta, en az 250 bin → 2,2 m gövde 1000 üçgende 0,35 sn, 3,5 yerine). Muz gövdesi (BoltRush)
   1000 üçgende hacim farkı −%0,1, 200 üçgende −%1; Benchy teknesi 1000 üçgende −%0,2. Claude şeması/talimatı (0 = varsayılan),
@@ -208,6 +209,25 @@
     orto; `camera`'da `--target` yalnızca yön verir, çerçeve görünür kutuya oturur); `eye` perspektiftir, `ortho` + eye/
     `--eye-height`/`--fov` tarayıcı açılmadan, köprüye doğrudan gelirse 400 hata; verilmezse görüntü bayt bayt aynı. `p3d-reviewer`
     incelemesi (kritik/yüksek yok; 3 orta, 4 düşük) düzeltildi.
+- **`check` gizli örtüşme (2026-11-23, BoltRush isteği #26):** iki parçanın aynı düzlemde aynı yöne bakan yüzleri başka bir kapalı opak
+  katının içinde örtüşse de (duvara gömülü söve/kepenk/denizlik arka yüzleri; hiç görünmez, `--cull-hidden` yazmaz) "ekranda titreşir"
+  hatası veriliyordu. Şimdi örtüşme çokgeninin görünür kesri sayılır (`src/cull.ts` → `Occluders.classify`, `check.ts` →
+  `visibleFraction`): yelpaze üçgeni ε küçültülüp normal boyunca 0,05 mm itilir (kova dilimi 0,02 mm'den derin: aynı kovadaki eş
+  düzlemli yüzler örtmez); bir örtücünün içindeyse ve onun hiçbir üçgeni değmiyorsa gizli, hiçbirine değmiyor/hiçbirinde değilse
+  görünür, karışıksa en çok 4 kez dörde bölünür; en küçük bölmede iç örnek noktalarının hepsi örtücülerdeyse gizli (iki duvar bloğunun
+  birleşim çizgisi). Örtücüler ayıklamadakiyle aynı (kaplama değil, görünen saydamlığı 1, kapalı); çiftin iki parçası örtmez.
+  Profil ve `cullHidden`'dan bağımsız (opak katının arkasındaki yüz ayıklanmasa da görünmez). Görünür alan `est`/`real`'ı çarpar
+  (eşik ve kıl payı oranı aynı); örtücü yakında değilse çıktı bayt bayt aynı. İsteğin yeniden üretiminde arka yüzler (y = 30)
+  artık sayılmıyor; kalan not ön yüzlerin (y = −20, duvar dışında, gerçekten titreşen) 6000 mm²'si (eski 12 000 = ikisinin toplamı).
+- **`hull` `maxTris` alt sınırı 20 (2026-11-23, BoltRush isteği #27):** küçük dolgu nesneleri (bitki öbeği, saksı) için 100 → 20.
+  `p3d-reviewer` incelemesi bütçe sadeleştirmesinin (sınırsız sapma) ince/uzun gövdeyi kendi üstüne çökerttiğini buldu: 2 × 5 × 1000 mm
+  gövde 20–60 üçgende **boş ağ**, eski alt sınır 100'de bile hacmin %1'i, hatasız (parça sessizce görünmez). Şimdi `csg.hullSolid`
+  sonucu kesimsiz ham gövdenin hacmiyle karşılaştırır: hacmin %90'ından azını tutuyorsa ön sadeleştirme hedefi 2/4/8/16 × bütçeyle
+  denenir, en yakını seçilir; en iyisi %30'un altındaysa `HullBudgetError` (bütçe ikiye katlanarak hacmin yarısını tutan ilk değer
+  önerilir; hata önbelleğe alınır, her çizimde yeniden üretilmez). İlk deneme yeterliyse ağ eskisiyle aynıdır (muz 100+ üçgen, Benchy).
+  Sonuç: 20 × 5 × 1000 mm gövde 20 üçgende hacmin %93'ü (eskiden boş), muz 20'de −%34 (eskiden −%46), çalı 30'da −%11 (−%15); çalı
+  20/40/60'ta −%32/8/2, düz aynalı saksı −%4/2/1, kutu tablosu 12 üçgende tam. 20–200 üçgende ağ kapalı, bütçe içinde, bozuk
+  üçgensiz (5 tablo × 6 bütçe, rastgele 36 tablo × 20/24/32). Rehber (modeling/game), Claude talimatı, şema yorumu.
 - **`check` örtüşme alanı (2026-11-23, BoltRush isteği #25):** z-fighting iletisindeki alan, örtüşen her üçgen çiftinin küçüğünün
   alanının toplamıydı (kıl payı örtüşmede ~217 000 mm²: üçgenin kendi alanı). Şimdi üçgen ∩ üçgen kesişim çokgeninin düzlemdeki
   alanı (izdüşüm |n|'ye bölünür; döndürülmüş çiftte aynı) — "örtüşme ≈X mm²". Tespit kararı değişmedi (eşik eski ölçüyle: aynı
@@ -285,6 +305,8 @@
 | Birleşim çizgisi onarımı (#21) | ✅ `tests/cull.test.ts` (5 sahne: iki kutu, ters, yan yana, çerçeve + levha, köşegen; dünya, GLB düz/yumuşak, iskelet; çatlak yapan T-kavşağı 0, bit eşliği, normaller, net kayıp kuralı, hiçbir sahnede toplam > seçeneksiz). Elle: iki kutu seçeneksizle bayt bayt aynı, 4 prizma 112 → 76 (eklenen 0), Benchy 3 629 / 5. Boltrush `glbcmp` (Godot, 626 görünüş): onarımdan önce iki kutu 17, ters 13, yan yana 7 iç delik → onarımla iç delik 0 (kalan 1–8 piksel siluet kenarında alt piksel yuvarlama; net kayıp kuralıyla bu üç sahne artık hiç ayıklanmıyor). **BoltRush doğruladı (0d7376a):** seçeneksiz 172 pist nesnesi + 432 parça dosyası bayt bayt aynı; ayıklamayla pist nesneleri 49 687 → 42 690 (−%14,1), parçalar 298 446 → 267 709 (−%10,3), LOD1 68 076 → 59 443 üçgen, `check` temiz; `glbcmp` (176 yön) iki kütüphanede iç delik 0 (yalnız 2 siluet pikseli), önceki 19 sorunlu varlık temiz; 12 RC3'te GPU kare süresi p50 4,26 → 4,11 ms |
 | `sweep` | ✅ `tests/sweep.test.ts` (29 test; 9'u inceleme düzeltmelerinin kırılan testleri) + `game.test.ts` (3 sweep parçası × 2 dönüş × 3 düzlem birebir ayna) + `cli.test.ts`: düz yol = extrude hacmi; gönyeli L/Z yol = alan × orta çizgi (1e-6); kapalı daire yol Pappus (kiriş düzeltmeli); 3B rmf/up/kemer kapalı manifold; hata mesajları (sığmayan yarıçap "en fazla", katlanma, 150° gönye, biçim); dikiş indisi 6–24 segment; uç uca dikişsiz; çözünürlük 8 → 76, 32 → 700 üçgen; GLB, `check --profile game`, dosya gidiş-dönüşü, Claude şeması null/0 doldurmaları. Elle: `apply --new` + `scene` + `check` + `measure` + STL/GLB/3MF; görünmez Chrome görüntülerinde pahlı tampon halkası, içi boş 3B boru, düşey kemer, gönyeli çerçeve, Retro tamponu doğru. `p3d-reviewer` (~1500 rastgele süpürme; 1 yüksek: kapak T-kavşağı, 3 orta, 5 düşük) düzeltildi; Ø6/Ø3 boru, delikle kesilmiş yaylı boru ve iki boşluklu profil `check` (print/game) temiz. Gerçek Claude ile, kullanıcının sekmesinde panelden ve Unreal'de **denenmedi**. **BoltRush doğruladı (568f464):** sweep kullanan 4 pist nesnesinin GLB'leri bayt bayt aynı, 215 parça + 172 pist nesnesi yeniden üretildi (geometri aynı, `check --profile game` temiz), Retro boru tamponları tek sweep'e geçti (4 parçada 2572 → 2004 üçgen, 0,4 mm çap hilesi kalktı) |
 | Parça saydamlığı / çözünürlüğü | ✅ `tests/part-look.test.ts` + ayrıştırıcı/CLI/köprü testleri (toplam 33 yeni): Op'lar, aralık ve tip hataları, grup, `normalizeLlmOp`, rol varsayılanı ve opak referans, dosya gidiş-dönüşü ve onarım uyarıları, GLB alfa/BLEND (iskelet dahil), 3MF/MTL alfa, opacity 0'da dışa aktarım/hacim/check/delik aynı; analitik üçgen sayıları, 6 segmentte kapalılık, önbellek ayrımı, delikte etkin seg, yuvarlak olmayan şekilde uyarı, `update` atomikliği. Alan yokken STL/GLB/OBJ çıktısı HEAD ile bayt bayt aynı (9 dosya). `p3d-reviewer` incelemesi (kritik yok; 6 bulgu düzeltildi). Görünmez Chrome görüntüsünde cam yarı saydam, 8/96 segment küre, 6 segment torus doğru. Panel alanları ve saydam parçada tıklama gerçek tarayıcıda elle, yeni alanlar gerçek Claude ile ve Unreal'de **denenmedi** |
+| `check` gizli örtüşme (#26) | ✅ 1 test (`tests/geom.test.ts`: istekteki duvar + iki kutu, üç profil/`cullHidden` birebir aynı; yalnız arka yüzler çakışıkken duvarla 0 not, duvarsız 6000 mm²; istekteki b ile ön yüzler kalır 12 000 → 6000; saydam duvar örtmez; arka yüzler duvar yüzeyinde gizli; iki blok birleşimi gizli; yarım duvar 3000 mm² (+%1'den az); aynı düzlemdeki üçüncü parça örtmez; 37° + 23° döndürülmüş sahnede aynı sonuç). Elle: BoltRush kitleri (Ege, Akdeniz, ralli, köy, arazi, panayır: 63 nesne, önizleme betiğiyle scratchpad'e üretildi) + `examples/` + konsept-01/02/03 = 67 dosyada `check --profile game` HEAD ile birebir aynı (hepsinde 0 z-fighting; süre aynı); 450 parçalı kötü durum sahnesi (233 örtüşme) 1,11 → 0,99 sn, düşen 133 notun hepsi gizli (100 gömülü çift + 33 bitişik iki duvar bloğu arasındaki iç yüz). `p3d-reviewer` (kritik/yüksek yok; dönmüş sahne, kaplama çifti, 1e5–2e6 mm koordinat, referans/saydam örtücü elle doğru): 1 orta (#27, aşağıda) ve performans bulgusu düzeltildi (aday süzme: kısmi örtülü 192 segmentlik iki disk + 400/1600 dolgu HEAD 1,6 / 15,2 sn → 2,2 / 17,0 sn; ilk sürümde 3,1 / 19,6); sığ gömülme (< 0,05 mm), kapalı oyuk ve dar boşlukta alan fazlalığı bilinen sorunlarda |
+| `hull` `maxTris` ≥ 20 (#27) | ✅ `tests/geom.test.ts`: çalı öbeği 20 ve 60 üçgende kapalı, bütçe içinde (> %80'i), hacim kaybı < %40 / %5, `check --profile game` temiz; 20 × 5 × 1000 mm gövde 20 üçgende kapalı, hacim > %90; 2 × 5 × 1000 mm gövde bütçe önerili işlem hatası (parça oluşmaz); doğrulama 10 hata, 20 kabul. İnce gövdede boş ağ `p3d-reviewer` bulgusuydu (eski sınır 100'de de hacmin %1'i). Elle: 5 tablo × 6 bütçe (20–200) ve rastgele 36 tablo × 3 bütçe (20/24/32): açık kenar 0, bozuk üçgen 0, bütçe aşımı yok |
 | `check` örtüşme alanı (#25) | ✅ 1 test (`tests/geom.test.ts`: iki kutu 10 mm bindirme 2200 mm² ve kaydırma önerisi; 30/45/60° döndürülmüş çift ≈2200; iki süpürme kemer tam birleşimde temiz, 0,05 mm kayıkta 1–20 mm² + kıl payı ipucu ~0,01x mm) + kaplama testi yeni biçimle. Elle: 22,5° kırık birleşimli kemer 8 951 mm² gerçek kama (57 mm genişlik → kıl payı sayılmaz) |
 | Ayıklamada değme kuralı (#24) | ✅ 3 test (`tests/cull.test.ts`: 12 ve 48 dilimde GLB 10·N üçgen, 20·N atılan, her dilim 20; kalanların hiçbiri yan yüz düzleminde değil; saydam dilim örtmez (komşuların ona bakan 10'ar yüzü kalır), kendi yüzleri atılır; iki kutu birlikte tabanın üstünü örter, biri eksikse kalır; yönü karışık kabuklu örtücü aynı yöne bakan üst yüzü örtmez, tümüyle ters çevrilmiş komşu örter). Önceki 21 ayıklama testi değişmeden geçiyor. `p3d-reviewer` incelemesi (kritik/yüksek yok; 1 orta — ağ başına yön —, 2 düşük — iğne üçgen eşiği, ayırma maliyeti — düzeltildi). Elle: BoltRush betiği (0,1 mm) 296 → 216; Benchy ayıklanmış GLB bayt bayt aynı. Godot `glbcmp` ile görsel karşılaştırma **yapılmadı** |
 | Yumuşak loft eşiği (#23) | ✅ 1 test (`tests/part-look.test.ts`: 6–192 için eşikler formülle tutarlı; BoltRush sekizgen 6 kesit — s 6/16/35 ağı köşeli loft'la aynı (92 üçgen), 36 → 188, 48 → 348; uyarılar parça/proje ayarı/yarım/iki kesit/yeterli; update'te renk değişikliği uyarmaz). Elle: `p3d apply --new` iletisi + `check --profile game` temiz |
@@ -318,7 +340,11 @@
 - Ekranda ve panelde toplam hacim parçaların toplamıdır (örtüşmeler iki kez sayılır); gerçek hacim için
   `p3d measure` → birleşik hacim.
 - `check` çakışma testi düzlem kovasıyla yaklaşıktır (normal 0,005, düzlem 0,02 mm'lik dilim; komşu dilime düşen çift kaçabilir);
-  iletideki örtüşme alanı kesindir. Çok büyük ağlarda çift başına 200 bin üçgen karşılaştırmasıyla sınırlıdır.
+  iletideki örtüşme alanı kesindir. Çok büyük ağlarda çift başına 200 bin üçgen karşılaştırmasıyla sınırlıdır. Başka opak katının
+  içinde kalan kısım çıkarılırken kısmen örtülen bölge 4 kez bölünür: düz bir örtücü kenarında görünen alan ~%1–2 fazla, iki
+  örtücü arasındaki dar boşlukta (< bölme boyu) 3 kata kadar fazla çıkar (karar doğru: titreşim kaçmaz). Örtücünün yüzeyinden
+  0,05 mm'den sığ gömülen ya da 0,05 mm'den ince örtücünün arkasındaki örtüşme, kapalı katının içindeki boşlukta (oyuk) kalan
+  örtüşme ve açık (kapalı olmayan) ağın örttüğü örtüşme yine bildirilir (hep "görünür" yönünde).
 - Kapalı olmayan (manifold olmayan) içe aktarılmış ağlar deliklerle kesilemez (uyarı verilir, ağ olduğu gibi kalır).
 - Loft kesitlerinde nokta karşılığı kullanıcıya/yapay zekâya bağlı; farklı sayıda noktada otomatik hizalama basittir
   (alttaki nokta), bükülme olabilir. `smooth` olmadan yüzey kesitler arasında doğrusaldır. Çakışık nokta yalnızca tam eşitse
@@ -345,7 +371,11 @@
   (aslını düzenleyip yeniden aynalayın). Dosyadan yüklenen projede parça ile grup aynı adı taşıyorsa onarılmaz.
 - `hull` varsayılan ağı çözünürlükle sadeleşmez (< 34 segmentte ızgara kenarı 1 mm'de kalır); oyun bütçesi için `geom.maxTris`
   verin. Çok küçük bütçede (≲ 300) sivri uçlar birkaç mm kısalabilir (2,2 m gövde 500 üçgende baş ucu ~10 mm), yumuşak
-  kırılımlar (küpeşte altındaki dikey bant) yuvarlanır.
+  kırılımlar (küpeşte altındaki dikey bant) yuvarlanır. ≲ 60 üçgende köşeler yüzeyde kaldığından sivri uçlu gövde içe doğru küçülür
+  (çalı öbeği 20 üçgende hacmin ~%32'si, muz gövdesi ~%34'ü gider); hacmi koruyan (dışa itilen) sadeleştirme yok. Çok ince/uzun
+  gövde (kesiti boyunun ≲ 1/150'si) küçük bütçede sadeleşemez: işlem hatası + bütçe önerisi (2 × 5 × 1000 mm gövde ~320, 6 × 5 × 1000
+  ~120–160 üçgen ister).
+  Bütçeli tekne üretimi ~+0,13 sn (referans hacim), zayıf sonuçta birkaç ön hedef denenir (~+0,3 sn), hata yolunda ~3–5 sn.
 - Otomatik yerleşim tabla doluysa parçayı tablanın dışına (sağa) koyar.
 - Saydam parçalar `depthWrite` kapalı çizilir: içbükey tek bir saydam ağda yüz sıralama kusurları görülebilir (three.js'te olağan).
 - Deliksiz yuvarlak parçada panel hacmi analitiktir (çözünürlükten bağımsız); düşük çözünürlükte (ör. 6 segment küre) dışa
