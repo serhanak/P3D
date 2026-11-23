@@ -475,6 +475,36 @@ describe('çerçeve, yüzeye yerleştirme, birleştirme, denetim', () => {
     applyOps(p, [{ op: 'move', part: 'levha', dx: 0, dy: 0, dz: 2 }], null); // üstüne otursun: yüzeyler zıt yönlü
     expect(checkProject(p).filter((i) => i.level === 'hata')).toEqual([]);
   });
+
+  it('check: iletide gerçek örtüşme alanı (üçgen alanı değil); kıl payı şeritte ortak nokta ipucu (BoltRush #25)', () => {
+    const zf = (p: Project) => checkProject(p).filter((i) => /z-fighting/.test(i.message));
+    // İki kutu 10 mm bindiriyor: üst + alt 10 × 100, ön + arka 10 × 10 → 2200 mm²; geniş örtüşme, kaydırma önerisi.
+    const box = (name: string, x: number) =>
+      ({ op: 'create', shape: 'box', name, params: [{ name: 'width', value: 100 }, { name: 'depth', value: 100 }, { name: 'height', value: 10 }], position: { x, y: 0, z: 5 } }) as Op;
+    const q = zf(project([box('a', 0), box('b', 90)]));
+    expect(q).toHaveLength(1);
+    expect(q[0].message).toMatch(/örtüşme ≈2200\.00 mm²\): ekranda titreşir \(z-fighting\)\. Birini 0,05–0,2 mm kaydırın/);
+    // Eğik düzlemde de (izdüşüm düzeltmesi): döndürülmüş aynı çift aynı alanı verir (float32 köşe gürültüsü kadar fark).
+    for (const degrees of [30, 45, 60]) {
+      const r = project([box('a', 0), box('b', 90), { op: 'group', parts: ['a', 'b'], name: 'g' } as Op, { op: 'rotate', part: 'g', axis: 'y', degrees }]);
+      expect(Number(/örtüşme ≈([\d.]+) mm²/.exec(zf(r)[0].message)![1])).toBeCloseTo(2200, 0);
+    }
+
+    // Kemer iki süpürmeden: birleşimde teğet ortak (tam birleşim temiz); birleşim noktası z'de 0,05 mm kayınca teğet ~1e-4 rad
+    // kırılır, yüzler ~0,015 mm'lik şeritte üst üste biner. Eski ileti üçgen alanını (~10⁵ mm²) yazıyordu.
+    const arch = (dz: number) =>
+      project([
+        { op: 'create', shape: 'sweep', name: 'sol', position: { x: 0, y: 0, z: 0 }, geom: { kind: 'sweep', path: [[-2000, 0, 0], [-2000, 0, 1000], [-1000, 0, 2000], [0, 0, 2000 + dz]], profile: [[-150, -100], [150, -100], [150, 100], [-150, 100]], up: [0, 1, 0], bend: 400 } },
+        { op: 'create', shape: 'sweep', name: 'sağ', position: { x: 0, y: 0, z: 0 }, geom: { kind: 'sweep', path: [[0, 0, 2000 + dz], [1000, 0, 2000], [2000, 0, 1000], [2000, 0, 0]], profile: [[-150, -100], [150, -100], [150, 100], [-150, 100]], up: [0, 1, 0], bend: 400 } },
+      ]);
+    expect(zf(arch(0))).toEqual([]);
+    const s = zf(arch(0.05));
+    expect(s).toHaveLength(1);
+    const area = Number(/örtüşme ≈([\d.]+) mm²/.exec(s[0].message)![1]);
+    expect(area).toBeGreaterThan(1);
+    expect(area).toBeLessThan(20);
+    expect(s[0].message).toMatch(/Kıl payı örtüşme \(en fazla ~0,01\d* mm genişlikte şerit, örtüşen üçgenlere oranı %[\d,]+\): .*Ortak noktaları iki parçada da aynı değerlerle verin\.$/);
+  });
 });
 
 describe('örtük yüzey, çoklu kesit, düzgün sadeleştirme', () => {

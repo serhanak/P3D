@@ -381,7 +381,7 @@ describe('kaplama: check ve gizli yüz ayıklaması', () => {
     const z = checkProject(p).filter((i) => /z-fighting/.test(i.message));
     expect(z).toHaveLength(1);
     expect(z[0].level).toBe('hata');
-    expect(z[0].message).toMatch(/^'(a' ile 'b|b' ile 'a)' aynı düzlemde .*düzlem 10\.50 mm, ≈400\.00 mm²/);
+    expect(z[0].message).toMatch(/^'(a' ile 'b|b' ile 'a)' aynı düzlemde .*düzlem 10\.50 mm, örtüşme ≈400\.00 mm²/);
     // lift'i geri alan konum (mesh tam yüzeyde): gerçek çakışma
     const q = project([box('kutu', 100, 100, 10, at(0, 0, 5)), decal('yapışık', { profile: rect(40, 40) }, { position: at(0, 0, 9.5) })]);
     expect(checkProject(q).filter((i) => /z-fighting/.test(i.message))[0].message).toMatch(/^'kutu' ile 'yapışık'|^'yapışık' ile 'kutu'/);

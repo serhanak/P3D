@@ -56,6 +56,66 @@ function trianglesOverlap(a: V2[], b: V2[]): boolean {
   return true;
 }
 
+/** 2B çokgenin işaretli alanı (saat yönünün tersi pozitif). */
+function signedArea(p: V2[]): number {
+  let s = 0;
+  for (let i = 0; i < p.length; i++) {
+    const [a, b] = [p[i], p[(i + 1) % p.length]];
+    s += a[0] * b[1] - b[0] * a[1];
+  }
+  return s / 2;
+}
+
+/** İki üçgenin 2B kesişim çokgeni (Sutherland–Hodgman; ikisi de dışbükey). Kesişim yoksa boş. */
+function triangleIntersection(a: V2[], b: V2[]): V2[] {
+  const clip = signedArea(b) < 0 ? [b[0], b[2], b[1]] : b;
+  let out: V2[] = signedArea(a) < 0 ? [a[0], a[2], a[1]] : a;
+  for (let i = 0; i < 3 && out.length; i++) {
+    const [p, q] = [clip[i], clip[(i + 1) % 3]];
+    const side = (v: V2) => (q[0] - p[0]) * (v[1] - p[1]) - (q[1] - p[1]) * (v[0] - p[0]);
+    const next: V2[] = [];
+    for (let k = 0; k < out.length; k++) {
+      const [u, w] = [out[k], out[(k + 1) % out.length]];
+      const [su, sw] = [side(u), side(w)];
+      if (su >= 0) next.push(u);
+      if ((su > 0 && sw < 0) || (su < 0 && sw > 0)) {
+        const s = su / (su - sw);
+        next.push([u[0] + s * (w[0] - u[0]), u[1] + s * (w[1] - u[1])]);
+      }
+    }
+    out = next;
+  }
+  return out.length >= 3 ? out : [];
+}
+
+/** Dışbükey 3B düzlem çokgeninin en dar genişliği: kenarlardan birine yaslanan en dar şerit (döner kumpas). */
+function minWidth(p: THREE.Vector3[]): number {
+  let best = Infinity;
+  const dir = new THREE.Vector3();
+  const r = new THREE.Vector3();
+  for (let i = 0; i < p.length; i++) {
+    dir.subVectors(p[(i + 1) % p.length], p[i]);
+    const len = dir.length();
+    if (len < 1e-12) continue;
+    dir.divideScalar(len);
+    let far = 0;
+    for (const v of p) {
+      r.subVectors(v, p[i]);
+      far = Math.max(far, r.addScaledVector(dir, -r.dot(dir)).length());
+    }
+    best = Math.min(best, far);
+  }
+  return Number.isFinite(best) ? best : 0;
+}
+
+/**
+ * Kıl payı örtüşme: gerçek örtüşme alanı, örtüşen üçgen çiftlerinin küçüğünün alanları toplamının bu kesrinden azsa yüzler ince
+ * bir şeritte üst üste biniyordur (değmesi gereken iki parçanın ortak noktaları birebir aynı değil: yuvarlama, teğet kırığı).
+ */
+const SLIVER_FRACTION = 0.05;
+/** …ve örtüşme parçalarının en dar genişliği bundan (mm) küçükse: geniş ama büyük üçgenlere göre küçük kama kıl payı değildir. */
+const SLIVER_WIDTH = 1;
+
 /** İzdüşümde atılacak eksen (0 = x, 1 = y, 2 = z): mutlak değeri en büyük bileşen; eşitlikte z, sonra y. */
 function dropAxis(r: number[]): 0 | 1 | 2 {
   const [x, y, z] = r.map(Math.abs);
@@ -69,6 +129,18 @@ interface PlaneTri {
   area: number;
   /** Düzlemin orijine uzaklığı (mm, yuvarlanmamış). */
   d: number;
+  /** Birim normal (izdüşümü geri almak ve alanı düzeltmek için). */
+  n: [number, number, number];
+  /** İzdüşümde atılan eksen. */
+  drop: 0 | 1 | 2;
+}
+
+/** İzdüşümdeki 2B noktayı üçgenin düzlemine geri kaldırır (atılan koordinat düzlem denkleminden). */
+function unproject(t: PlaneTri, [u, v]: V2): THREE.Vector3 {
+  const [nx, ny, nz] = t.n;
+  if (t.drop === 0) return new THREE.Vector3((t.d - ny * u - nz * v) / nx, u, v);
+  if (t.drop === 1) return new THREE.Vector3(u, (t.d - nx * u - nz * v) / ny, v);
+  return new THREE.Vector3(u, v, (t.d - nx * u - ny * v) / nz);
 }
 
 /**
@@ -108,10 +180,14 @@ function coplanarOverlaps(project: Project, solids: Part[], meshOf: (p: Part) =>
       const to2 = (v: THREE.Vector3): V2 => (drop === 0 ? [v.y, v.z] : drop === 1 ? [v.x, v.z] : [v.x, v.y]);
       let list = buckets.get(key);
       if (!list) buckets.set(key, (list = []));
-      list.push({ part: part.id, pts: [to2(a), to2(b), to2(c)], area, d });
+      list.push({ part: part.id, pts: [to2(a), to2(b), to2(c)], area, d, n: [n.x, n.y, n.z], drop });
     }
   }
-  const pairs = new Map<string, { area: number; normal: string; d: string }>();
+  /**
+   * Çift başına: `est` tespit ölçüsü (örtüşen üçgen çiftlerinin küçüğünün alanı; eşik bununla, davranış değişmesin), `real` gerçek
+   * örtüşme alanı (üçgen ∩ üçgen, düzlemde), `width` örtüşme parçalarının en dar genişliklerinin en büyüğü (kıl payı şeridi).
+   */
+  const pairs = new Map<string, { est: number; real: number; best: number; width: number; normal: string; d: string }>();
   for (const [key, list] of buckets) {
     const owners = new Set(list.map((t) => t.part));
     if (owners.size < 2) continue;
@@ -120,34 +196,55 @@ function coplanarOverlaps(project: Project, solids: Part[], meshOf: (p: Part) =>
     const ids = [...byPart.keys()];
     for (let i = 0; i < ids.length; i++) {
       for (let j = i + 1; j < ids.length; j++) {
-        let overlap = 0;
+        let est = 0;
+        let real = 0;
+        let width = 0;
         let checks = 0;
         const decalPair = decalIds.has(ids[i]) !== decalIds.has(ids[j]);
         outer: for (const ta of byPart.get(ids[i])!) {
           for (const tb of byPart.get(ids[j])!) {
             if (++checks > 200000) break outer;
             if (decalPair && Math.abs(ta.d - tb.d) >= DECAL_COPLANAR) continue;
-            if (trianglesOverlap(ta.pts, tb.pts)) overlap += Math.min(ta.area, tb.area);
+            if (!trianglesOverlap(ta.pts, tb.pts)) continue;
+            est += Math.min(ta.area, tb.area);
+            const poly = triangleIntersection(ta.pts, tb.pts);
+            if (!poly.length) continue;
+            // İzdüşüm alanı / |n·atılan eksen| = düzlemdeki alan.
+            real += Math.abs(signedArea(poly)) / Math.abs(ta.n[ta.drop]);
+            width = Math.max(width, minWidth(poly.map((v) => unproject(ta, v))));
           }
         }
-        if (overlap < 0.01) continue;
+        if (est < 0.01) continue;
         const pk = [ids[i], ids[j]].sort().join('|');
         const [nx, ny, nz, d] = key.split(/[,|]/).map(Number);
+        const where = { normal: `${(nx / 200).toFixed(2)}, ${(ny / 200).toFixed(2)}, ${(nz / 200).toFixed(2)}`, d: (d / 50).toFixed(2) };
         const prev = pairs.get(pk);
-        if (!prev || prev.area < overlap) {
-          pairs.set(pk, { area: (prev?.area ?? 0) + overlap, normal: `${(nx / 200).toFixed(2)}, ${(ny / 200).toFixed(2)}, ${(nz / 200).toFixed(2)}`, d: (d / 50).toFixed(2) });
-        } else prev.area += overlap;
+        if (!prev) pairs.set(pk, { est, real, best: real, width, ...where });
+        else {
+          // İletideki düzlem: gerçek örtüşmesi en büyük kova.
+          if (real > prev.best) Object.assign(prev, { best: real, ...where });
+          prev.est += est;
+          prev.real += real;
+          prev.width = Math.max(prev.width, width);
+        }
       }
     }
   }
   const name = (id: string) => project.parts.find((p) => p.id === id)?.name ?? id;
   return [...pairs].map(([pk, v]) => {
     const [x, y] = pk.split('|');
+    const sliver = v.real < SLIVER_FRACTION * v.est && v.width < SLIVER_WIDTH;
+    const tr = (n: number) => n.toLocaleString('tr-TR', { maximumSignificantDigits: 2 });
     return {
       level: 'hata' as const,
       message:
-        `'${name(x)}' ile '${name(y)}' aynı düzlemde üst üste yüzeylere sahip (normal ${v.normal}, düzlem ${v.d} mm, ≈${v.area.toFixed(2)} mm²): ` +
-        'ekranda titreşir (z-fighting). Birini 0,05–0,2 mm kaydırın, gömün ya da delikle o yüzeyi tek parçaya bırakın.',
+        `'${name(x)}' ile '${name(y)}' aynı düzlemde üst üste yüzeylere sahip (normal ${v.normal}, düzlem ${v.d} mm, ` +
+        `örtüşme ≈${v.real >= 0.01 ? v.real.toFixed(2) : '<0.01'} mm²): ekranda titreşir (z-fighting). ` +
+        (sliver
+          ? `Kıl payı örtüşme (en fazla ~${v.width < 0.001 ? '<0,001' : tr(v.width)} mm genişlikte şerit, örtüşen üçgenlere oranı %${tr((100 * v.real) / v.est)}): ` +
+            'birbirine değmesi gereken iki parçanın ortak noktaları birebir aynı değil (yuvarlama, birleşimde teğet kırığı). ' +
+            'Ortak noktaları iki parçada da aynı değerlerle verin.'
+          : 'Birini 0,05–0,2 mm kaydırın, gömün ya da delikle o yüzeyi tek parçaya bırakın.'),
     };
   });
 }
