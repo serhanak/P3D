@@ -51,8 +51,13 @@ p3d export araba.glb [--file model.p3d.json] [--units m|mm] [--normals flat|smoo
   üçgen kenarlarından biraz içeri küçültülüp normali boyunca biraz dışarı itildiğinde (ε = en az 0,001 mm, büyük sahnede ölçeğin
   milyonda biri) **tamamen** başka bir dışa aktarılan, kapalı ve opak katının içinde kalıyorsa (bir noktası içeride ve o katının
   hiçbir üçgeni onu kesmiyor). Böylece üst üste duran parçaların değen kapakları ve gömülü kısımlar gider (4 yığılı 8 kenarlı
-  prizma: 112 → 76 üçgen). Kalanlar: kısmen örtülen üçgen (bölme yok; ör. küçük bir delikten görünen kapak altı), iki ayrı parçanın
-  birlikte örttüğü üçgen, aynı yerde duran eş parçalar (z-fighting). **Saydam parça örtmez** (görünen opaklığı < 1: cam kabindeki
+  prizma: 112 → 76 üçgen). **Değme kuralı:** ayrıca üçgen, başka opak katıların kendi düzleminde duran ve ona ters bakan
+  yüzleriyle (ortak yüz: aynı köşeler ya da aynı dörtgenin öbür köşegenden bölünmüşü; birden çok parçanın yüzleri birlikte de
+  olur) tamamen kaplanıyorsa atılır — komşunun kalınlığından bağımsız: eksende buluşan loft dilimleri (karpuz, 12 dilim 360 → 120)
+  ve ince kamalar. Ortak yüz düzlemden ε'dan fazla bükülmüşse (ör. noktaları 0,1 mm'ye yuvarlanmış eğik dörtgen; iki parça
+  dörtgeni farklı köşegenden böler, yüzler çakışmaz) bu kurala girmez: ortak yüz noktalarını yuvarlamayın.
+  Kalanlar: kısmen örtülen üçgen (bölme yok; ör. küçük bir delikten görünen kapak altı), iki ayrı parçanın içinde birlikte kalan
+  (değmeyen) üçgen, aynı yerde duran eş parçalar (z-fighting). **Saydam parça örtmez** (görünen opaklığı < 1: cam kabindeki
   koltuk kalır); kendisi opak parçalarca ayıklanabilir. Düğümler, gruplar, pivot ve iskelet aynı kalır; tüm üçgenleri gizli parçanın
   düğümü ağsız yazılır. Kaplamalar ne atılır ne atar. Ayıklanan ağ kapalı değildir: STL/3MF/OBJ'de seçenek hata verir. Çıktı
   satırı atılan, eklenen ve kalan üçgen sayısını söyler.

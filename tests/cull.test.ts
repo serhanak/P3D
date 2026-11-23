@@ -70,6 +70,27 @@ const tire = (i: number, x = 0): Op => ({
   color: i % 2 ? '#222222' : '#e0e0e0',
 });
 const stack = () => [0, 1, 2, 3].map((i) => tire(i));
+/**
+ * Boltrush karpuzu (istek #24): N loft dilimi, y ekseni, R 150, konum (150, 0, 150); kesitler kutuplarda tek nokta, aradaki
+ * 5 halkada [eksen, φ0, φ1] üçgeni.
+ */
+const gores = (N: number, extra: Record<number, Partial<Extract<Op, { op: 'create' }>>> = {}): Op[] =>
+  Array.from({ length: N }, (_, g) => {
+    const [a0, a1] = [(g / N) * 2 * Math.PI, ((g + 1) / N) * 2 * Math.PI];
+    const rings = [30, 60, 90, 120, 150].map((d) => {
+      const th = (d * Math.PI) / 180;
+      const rho = 150 * Math.sin(th);
+      return { at: -150 * Math.cos(th), points: [[0, 0], [rho * Math.cos(a0), rho * Math.sin(a0)], [rho * Math.cos(a1), rho * Math.sin(a1)]] as [number, number][] };
+    });
+    return {
+      op: 'create',
+      shape: 'loft',
+      name: `dilim${g}`,
+      position: at(150, 0, 150),
+      geom: { kind: 'loft', axis: 'y', sections: [{ at: -150, points: [[0, 0]] }, ...rings, { at: 150, points: [[0, 0]] }] },
+      ...extra[g],
+    } as Op;
+  });
 
 /** GLB JSON bölümü ve mesh başına üçgen sayısı (indis erişimcisi / 3). */
 function glbJson(bytes: Uint8Array) {
@@ -208,6 +229,75 @@ describe('gizli iç yüz ayıklama', () => {
   it('büyük koordinat ve ölçek (oyun pisti, 150 m): ε ölçekle büyür, yine yalnız iç kapaklar atılır', () => {
     const p = project([0, 1, 2, 3].map((i) => tire(i, 74_000)));
     expect(hiddenByPart(p)).toEqual({ lastik0: 6, lastik1: 12, lastik2: 12, lastik3: 6 });
+  });
+
+  it('değme kuralı (Boltrush #24): eksende buluşan karpuz dilimlerinin ortak yüzleri kalınlıktan bağımsız atılır', () => {
+    // Boltrush yeniden üretimi: N loft dilimi (y ekseni, R 150, uçlarda tek noktalı kutup, 5 halka); dilim 30° (N 12) ya da 7,5°
+    // (N 48). Dilim başına 30 üçgen: 10 dış kabuk + iki yan yüzde 10'ar (komşu dilimle aynı köşeler, farklı köşegen, ters normal).
+    for (const N of [12, 48]) {
+      const p = project(gores(N));
+      const r = glbBuild(p, { cullHidden: true });
+      expect([r.triangles, r.culled]).toEqual([10 * N, 20 * N]);
+      expect(Object.values(hiddenByPart(p)).every((n) => n === 20)).toBe(true);
+    }
+    // Kalanlar yalnızca dış kabuk: hiçbir kalan üçgen eksenden geçen bir düzlemde (yan yüz) değil.
+    const p = project(gores(12));
+    const hidden = hiddenTriangles(p.parts.map((x) => worldMesh(p, x)));
+    p.parts.forEach((x, k) => {
+      const m = worldMesh(p, x);
+      hidden[k].forEach((h, t) => {
+        const v = [0, 1, 2].map((j) => [0, 1, 2].map((c) => m.pos[m.tris[3 * t + j] * 3 + c] - [150, 0, 150][c]));
+        // Yan yüz eksen (y) üzerinden geçer: normali y'ye dik ve düzlemi eksenden geçer → (v0 × v1) · eksen noktası = 0.
+        const [a, b, c] = v;
+        const n = [(b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]), (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]), (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])];
+        const side = Math.abs(n[1]) < 1e-6 * Math.hypot(...n) && Math.abs(n[0] * a[0] + n[2] * a[2]) < 1e-3 * Math.hypot(...n);
+        expect(h, `${x.name} üçgen ${t}`).toBe(side ? 1 : 0);
+      });
+    });
+  });
+
+  it('değme kuralı: saydam dilim örtmez (komşuların ona bakan yüzü kalır), kendi yüzleri atılır; iki örtücü birlikte örter', () => {
+    const p = project(gores(12, { 0: { opacity: 0.5 } }));
+    const h = hiddenByPart(p);
+    expect([h.dilim0, h.dilim1, h.dilim11, h.dilim5]).toEqual([20, 10, 10, 20]);
+    // Tabanın üstünü yan yana iki kutu birlikte, tam kaplar (köşegen ikisinin sınırını keser): taban üstü de atılır.
+    const q = project([box('taban', 20, 10, 5, at(0, 0, 2.5)), box('sol', 10, 10, 5, at(-5, 0, 7.5)), box('sağ', 10, 10, 5, at(5, 0, 7.5))]);
+    expect(hiddenByPart(q)).toEqual({ taban: 2, sol: 4, sağ: 4 });
+    // Bir kutu eksik: taban üstü yarı açık → kalır.
+    const r = project([box('taban', 20, 10, 5, at(0, 0, 2.5)), box('sol', 10, 10, 5, at(-5, 0, 7.5))]);
+    expect(hiddenByPart(r)).toEqual({ taban: 0, sol: 2 });
+  });
+
+  it('değme kuralı: örtücünün içi yüz başına bulunur (yönü karışık kabuklu ağ aynı yöne bakan yüzü örtmez; ters çevrilmiş ağ örter)', () => {
+    // Eksene hizalı kutu ağı (12 üçgen, normaller dışa; `flip` ters sarım).
+    const boxMesh = (lo: number[], hi: number[], flip = false, base = 0) => {
+      const pos = [0, 1, 2, 3, 4, 5, 6, 7].flatMap((k) => [k & 1 ? hi[0] : lo[0], k & 2 ? hi[1] : lo[1], k & 4 ? hi[2] : lo[2]]);
+      const quads = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+      const tris = quads.flatMap(([a, b, c, d]) => (flip ? [a, c, b, a, d, c] : [a, b, c, a, c, d]).map((v) => v + base));
+      return { pos, tris };
+    };
+    const join = (...m: { pos: number[]; tris: number[] }[]) => {
+      let n = 0;
+      const out = { pos: [] as number[], tris: [] as number[] };
+      for (const x of m) {
+        out.pos.push(...x.pos);
+        out.tris.push(...x.tris.map((v) => v + n));
+        n += x.pos.length / 3;
+      }
+      return out;
+    };
+    const A = boxMesh([0, 0, 0], [10, 10, 20]);
+    // B: A'nın üst yarısında dışa bakan kabuk + uzakta içe bakan büyük kabuk (net hacim negatif). B'nin üst yüzü A'nınkiyle aynı
+    // yöne bakar: A'nın üstü görünür kalmalı. B'nin altı A'nın içinde (itme testi atar).
+    const B = join(boxMesh([0, 0, 10], [10, 10, 20]), boxMesh([100, 100, 100], [200, 200, 200], true));
+    const [hA, hB] = hiddenTriangles([A, B]);
+    const top = (m: { pos: number[]; tris: number[] }, h: Uint8Array) =>
+      [...h].filter((_, t) => [0, 1, 2].every((j) => m.pos[m.tris[3 * t + j] * 3 + 2] === 20)).reduce((s, v) => s + v, 0);
+    expect(top(A, hA)).toBe(0);
+    expect(top(B, hB)).toBe(0);
+    // Tümüyle ters çevrilmiş komşu (normaller içe): ortak yüzde içi yine A'nın üst yüzünün önünde → atılır.
+    const C = boxMesh([0, 0, 20], [10, 10, 30], true);
+    expect(top(A, hiddenTriangles([A, C])[0])).toBe(2);
   });
 
   it('gruplu ve iskeletli GLB: düğümler, gruplar, pivot, eklemler aynı; yalnızca üçgenler azalır', () => {

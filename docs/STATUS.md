@@ -1,6 +1,7 @@
 # Proje durumu
 
-> Son güncelleme: **2026-11-23** — BoltRush #23: yumuşak loft eşiği (çözünürlük < 36 yumuşatmaz) rehberde, etkisiz ya da yarım
+> Son güncelleme: **2026-11-23** — BoltRush #24: gizli yüz ayıklamada değme kuralı (ince kamada, eksende buluşan dilimlerde tam
+> çakışan ortak yüz kalınlıktan bağımsız atılır). Önceki: **2026-11-23** — BoltRush #23: yumuşak loft eşiği (çözünürlük < 36 yumuşatmaz) rehberde, etkisiz ya da yarım
 > yumuşatmada işlem iletisi uyarır (ağ değişmedi). Önceki: **2026-11-18** — GLB okuma (arayüzde Aç…/İçe aktar…, `p3d import`, `--file x.glb`), tel kafes / X-ışını
 > görünümü (araç çubuğu + W, `snapshot --style wire|xray`), ortografik kamera (Orto düğmesi + O / Num 5, `snapshot --projection ortho`). Önceki: **2026-11-16** — BoltRush #22: `p3d <komut> --help` sunucu/sekme denetiminden önce yanıtlanır (komut başına
 > yardım; `--views side` hatası left/right önerir). Önceki: **2026-11-15** — BoltRush #21: `--cull-hidden` birleşim çizgisi T-kavşağı onarımı (su geçirmez görünen yüzey) ve
@@ -21,7 +22,7 @@
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (410 test, ~60 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
+1. `npm install` · `npm run typecheck` · `npm test` (413 test, ~60 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
    (README → Kurulum; `p3d status` kurulu skill eskiyse uyarır).
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
@@ -206,6 +207,16 @@
     orto; `camera`'da `--target` yalnızca yön verir, çerçeve görünür kutuya oturur); `eye` perspektiftir, `ortho` + eye/
     `--eye-height`/`--fov` tarayıcı açılmadan, köprüye doğrudan gelirse 400 hata; verilmezse görüntü bayt bayt aynı. `p3d-reviewer`
     incelemesi (kritik/yüksek yok; 3 orta, 4 düşük) düzeltildi.
+- **Ayıklamada değme kuralı (2026-11-23, BoltRush isteği #24):** itme testi (üçgen ε küçültülüp ε itilir) komşu katı bir kenarda
+  sıfır kalınlığa inince başarısızdı: eksende buluşan 12 karpuz dilimi (30°) 360 → 264 (beklenen 120), 48 dilimde (7,5°) hiçbir şey
+  atılmıyordu; eksene değen köşede T′ 45°'lik açıya düşüp komşu dilimin öbür yüzünden çıkıyordu. `src/cull.ts` → `contactCovered`:
+  itmeyle gizlenmeyen üçgen için opak örtücülerin T düzleminde (ε) duran, T'ye paralel ve içi T'nin önünde kalan (yüz başına ışın
+  paritesi: yüzün ağırlık merkezinden T'nin önüne 2ε; ağın toplam yönüne güvenilmez, yönü karışık kabuklu ağda aynı yöne bakan yüz
+  ters sayılıyordu — `p3d-reviewer` bulgusu) üçgenleri BVH'den alınır ve T'den 2B'de sırayla çıkarılır; kalan alan
+  min(çevre²·1e-12, alan·1e-6)'dan küçükse gizli. Farklı köşegenden
+  bölünmüş ortak dörtgen ve birden çok örtücünün birlikte kaplaması da sayılır (iki kutunun tam kapladığı taban üstü). Sonuç: 12
+  dilim 360 → 120, 48 dilim 1440 → 480 (yalnız dış kabuk, bölme 0); BoltRush'ın 0,1 mm yuvarlanmış dilimleri 296 → 216 (kalanlar
+  bükük ortak yüzler: çakışmadıkları için kurala girmez). Benchy ayıklanmış GLB bayt bayt aynı, süre +~%3 (~1,33 → ~1,36 sn).
 - **Yumuşak loft eşiği (2026-11-23, BoltRush isteği #23):** yumuşak loft alt bölümü çevrede `round(s/24)`, kesit aralığı başına
   `round(s/32)` (s = etkin çözünürlük); s < 36 iken ikisi de 1 ve ağ `smooth: false` ile aynıydı, işlem iletisi yine "yumuşak"
   diyordu (oyun projelerinin 8/16 değerlerinde sessizce köşeli). Formül `geom.loftSubdiv` + `SMOOTH_LOFT_PERIM_SEG` (36) /
@@ -267,6 +278,7 @@
 | Birleşim çizgisi onarımı (#21) | ✅ `tests/cull.test.ts` (5 sahne: iki kutu, ters, yan yana, çerçeve + levha, köşegen; dünya, GLB düz/yumuşak, iskelet; çatlak yapan T-kavşağı 0, bit eşliği, normaller, net kayıp kuralı, hiçbir sahnede toplam > seçeneksiz). Elle: iki kutu seçeneksizle bayt bayt aynı, 4 prizma 112 → 76 (eklenen 0), Benchy 3 629 / 5. Boltrush `glbcmp` (Godot, 626 görünüş): onarımdan önce iki kutu 17, ters 13, yan yana 7 iç delik → onarımla iç delik 0 (kalan 1–8 piksel siluet kenarında alt piksel yuvarlama; net kayıp kuralıyla bu üç sahne artık hiç ayıklanmıyor). **BoltRush doğruladı (0d7376a):** seçeneksiz 172 pist nesnesi + 432 parça dosyası bayt bayt aynı; ayıklamayla pist nesneleri 49 687 → 42 690 (−%14,1), parçalar 298 446 → 267 709 (−%10,3), LOD1 68 076 → 59 443 üçgen, `check` temiz; `glbcmp` (176 yön) iki kütüphanede iç delik 0 (yalnız 2 siluet pikseli), önceki 19 sorunlu varlık temiz; 12 RC3'te GPU kare süresi p50 4,26 → 4,11 ms |
 | `sweep` | ✅ `tests/sweep.test.ts` (29 test; 9'u inceleme düzeltmelerinin kırılan testleri) + `game.test.ts` (3 sweep parçası × 2 dönüş × 3 düzlem birebir ayna) + `cli.test.ts`: düz yol = extrude hacmi; gönyeli L/Z yol = alan × orta çizgi (1e-6); kapalı daire yol Pappus (kiriş düzeltmeli); 3B rmf/up/kemer kapalı manifold; hata mesajları (sığmayan yarıçap "en fazla", katlanma, 150° gönye, biçim); dikiş indisi 6–24 segment; uç uca dikişsiz; çözünürlük 8 → 76, 32 → 700 üçgen; GLB, `check --profile game`, dosya gidiş-dönüşü, Claude şeması null/0 doldurmaları. Elle: `apply --new` + `scene` + `check` + `measure` + STL/GLB/3MF; görünmez Chrome görüntülerinde pahlı tampon halkası, içi boş 3B boru, düşey kemer, gönyeli çerçeve, Retro tamponu doğru. `p3d-reviewer` (~1500 rastgele süpürme; 1 yüksek: kapak T-kavşağı, 3 orta, 5 düşük) düzeltildi; Ø6/Ø3 boru, delikle kesilmiş yaylı boru ve iki boşluklu profil `check` (print/game) temiz. Gerçek Claude ile, kullanıcının sekmesinde panelden ve Unreal'de **denenmedi**. **BoltRush doğruladı (568f464):** sweep kullanan 4 pist nesnesinin GLB'leri bayt bayt aynı, 215 parça + 172 pist nesnesi yeniden üretildi (geometri aynı, `check --profile game` temiz), Retro boru tamponları tek sweep'e geçti (4 parçada 2572 → 2004 üçgen, 0,4 mm çap hilesi kalktı) |
 | Parça saydamlığı / çözünürlüğü | ✅ `tests/part-look.test.ts` + ayrıştırıcı/CLI/köprü testleri (toplam 33 yeni): Op'lar, aralık ve tip hataları, grup, `normalizeLlmOp`, rol varsayılanı ve opak referans, dosya gidiş-dönüşü ve onarım uyarıları, GLB alfa/BLEND (iskelet dahil), 3MF/MTL alfa, opacity 0'da dışa aktarım/hacim/check/delik aynı; analitik üçgen sayıları, 6 segmentte kapalılık, önbellek ayrımı, delikte etkin seg, yuvarlak olmayan şekilde uyarı, `update` atomikliği. Alan yokken STL/GLB/OBJ çıktısı HEAD ile bayt bayt aynı (9 dosya). `p3d-reviewer` incelemesi (kritik yok; 6 bulgu düzeltildi). Görünmez Chrome görüntüsünde cam yarı saydam, 8/96 segment küre, 6 segment torus doğru. Panel alanları ve saydam parçada tıklama gerçek tarayıcıda elle, yeni alanlar gerçek Claude ile ve Unreal'de **denenmedi** |
+| Ayıklamada değme kuralı (#24) | ✅ 3 test (`tests/cull.test.ts`: 12 ve 48 dilimde GLB 10·N üçgen, 20·N atılan, her dilim 20; kalanların hiçbiri yan yüz düzleminde değil; saydam dilim örtmez (komşuların ona bakan 10'ar yüzü kalır), kendi yüzleri atılır; iki kutu birlikte tabanın üstünü örter, biri eksikse kalır; yönü karışık kabuklu örtücü aynı yöne bakan üst yüzü örtmez, tümüyle ters çevrilmiş komşu örter). Önceki 21 ayıklama testi değişmeden geçiyor. `p3d-reviewer` incelemesi (kritik/yüksek yok; 1 orta — ağ başına yön —, 2 düşük — iğne üçgen eşiği, ayırma maliyeti — düzeltildi). Elle: BoltRush betiği (0,1 mm) 296 → 216; Benchy ayıklanmış GLB bayt bayt aynı. Godot `glbcmp` ile görsel karşılaştırma **yapılmadı** |
 | Yumuşak loft eşiği (#23) | ✅ 1 test (`tests/part-look.test.ts`: 6–192 için eşikler formülle tutarlı; BoltRush sekizgen 6 kesit — s 6/16/35 ağı köşeli loft'la aynı (92 üçgen), 36 → 188, 48 → 348; uyarılar parça/proje ayarı/yarım/iki kesit/yeterli; update'te renk değişikliği uyarmaz). Elle: `p3d apply --new` iletisi + `check --profile game` temiz |
 | Kesimli kutu / snapshot boyutu / prizma fazı | ✅ 5 test (`tests/geom.test.ts`: BoltRush örneği `partsBox` 50 / `solidPartsBox` 0 = `worldMesh`, döndürülmüş + taşınmış parça (önbellek), deliksiz = `partBox`, tümüyle kesilen = boş; prizma n = 3–16 için rehberdeki üç kural ve BoltRush ölçümleri; `tests/bridge.test.ts`: `fitSnapshotSize` ve köprünün sekmeye ilettiği boyut; `tests/cli.test.ts`: geçersiz `--size` / görünüm). Elle: `p3d run` ile BoltRush yeniden üretimi, `measure --file` kesimli kutu, görünmez Chrome'da 4096x800 ve 6000x6000 → 4096x4096 PNG (başlık doğrulandı), altıgen prizma `y 90, z 30` önden düz tabanlı. Kullanıcının gerçek sekmesinde (donanım GPU) 4096 görüntü **denenmedi** |
 | Loft çakışık nokta | ✅ 4 test (`tests/geom.test.ts`: BoltRush örneği tam hacim 533,33 cm³ + `check --profile game` temiz + ayna; kapanış tekrarı / kapanışta ve başta dejenere kenar (prizmatoid tam hacmi 750) / eşleşmeyi bozan tekrar / 1024 sınırı; uç kesit, 3 kesitte kısmi çakışma düz ve yumuşak, ayna + `sharp`; yumuşak loft'ta çakışık nokta hacmi değiştirmez), düzeltme olmadan kırılıyorlar. Çakışık noktasız 8 tip loft'un ağı HEAD ile bayt bayt aynı; `p3d-reviewer` 120 rastgele loft'ta fark bulmadı, 3 bulgusu (ayna + sharp, 1024 sınırı, test kapsamı) düzeltildi. Elle: `p3d apply --new` + `measure` + `check` (düz ve yumuşak, 3 kesit), görünmez Chrome görüntüsünde çıkıntı ön kesitte kenardan doğuyor |
@@ -342,7 +354,8 @@
   diğer şekillerde yok.
 - GLB tüketicisi köşe konumlarını nicemlememeli (Godot `GLTFDocument.append_from_file` varsayılanı 16 bit; bayrak 64 kapatır):
   ayrı düğümlerin çakışan köşeleri ayrışır, ayıklanmış birleşim çizgileri çatlar (`p3d guide game`).
-- `--cull-hidden`: iki ayrı katının birlikte örttüğü üçgen ve kısmen örtülen üçgen kalır (bölme yok); statik pozdur (iskelette hareket eden parçalar arasındaki yüz
+- `--cull-hidden`: iki ayrı katının içinde birlikte kalan (değmeyen) üçgen ve kısmen örtülen üçgen kalır (bölme yok); bükük (düzlemden
+  ε'dan fazla sapan) ortak yüz değme kuralına girmez; statik pozdur (iskelette hareket eden parçalar arasındaki yüz
   hareketle görünür olabilir). Arayüzün GLB menüsünde seçenek yok (CLI/API). `check` 800 parçada ~7,5 sn (çakışık düzlem taraması).
 - Kaplama (`decal`) açık ağdır: baskı biçimlerine girmez; `lift` 0 verilemez (varsayılana döner).
 - `extrude`: boşluğun profil içinde/ayrık olduğu denetlenmez (kenara değen boşluk bozuk ağ verir); var olan dosyalar yüklenmez hâle

@@ -14,6 +14,16 @@
 // hassasiyetinin ~16 katı). İç teğet yarıçapı 2ε'dan küçük üçgen yarıçapının yarısı kadar küçültülür. Alanı sıfır üçgen kalır.
 // Örtücü: kapalı (her yönlü kenarın tam bir karşılığı var) ve `occluder` false olmayan ağ (saydam parça örtmez).
 //
+// Değme kuralı (Boltrush isteği #24): itme testi, komşu katı T'nin bir kenarında sıfır kalınlığa iniyorsa (eksende buluşan
+// dilimler, ince kama) başarısız olur: T′'nün kenarı komşunun öbür yüzünden dışarı taşar. Bu yüzden itmeyle gizlenmeyen T için
+// ikinci, kalınlıktan bağımsız bir test: örtücülerin T düzleminde (köşeleri ε içinde, normali T'ye paralel) duran ve içi T'nin
+// önünde kalan üçgenleri T'yi 2B'de tamamen kaplıyorsa T gizlidir — T'nin her iç noktasının hemen önü bir örtücünün malzemesidir.
+// "İçi önünde" yüz başına ışın paritesiyle bulunur (yüzün ağırlık merkezinden T'nin önüne 2ε), ağın toplam yönüyle değil: yönü
+// karışık kabuklu ağda aynı yöne bakan yüz ters sayılmasın. Kaplama kesin çıkarmayla denetlenir (T'den örtücü üçgenler sırayla
+// çıkarılır, kalan alan float gürültüsü kadar olmalı); farklı köşegenden bölünmüş ortak dörtgen ve birden çok örtücünün yüzleri
+// birlikte kaplayabilir. Aynı yöne bakan çakışık yüz (aynı yerde duran eş parçalar) örtmez: önü örtücünün dışıdır. Düzlem dışına
+// ε'dan fazla eğilen (bükük) ortak yüz bu kurala girmez.
+//
 // T-kavşağı onarımı (`cullAndRepair`, Boltrush isteği #21): parçalar arasındaki birleşim çizgilerinde kenar uçları çoğu zaman
 // eşleşmez (bir parçanın köşesi öbürünün kenarının ortasına düşer). Ayıklamadan önce bu kıl payı açıklığın arkasında gizli yüz
 // vardı; o yüz atılınca çizgide tek piksellik delikler görünür. Onarım: atılan üçgenlerin köşeleri (aday T noktaları) kalan
@@ -188,7 +198,131 @@ export function hiddenTriangles(meshes: CullMesh[]): Uint8Array[] {
         hidden[t] = 1;
         break;
       }
+      if (!hidden[t] && contactCovered(bodies, i, cands[i], src, nx, ny, nz, per, n2 / 2)) hidden[t] = 1;
     }
+  }
+  return out;
+}
+
+/** Değme kuralında kalan alanın sınırı: T çevresinin karesinin bu katı (çıkarmanın float gürültüsü; gerçek boşluk değil). */
+const COVER_TOL = 1e-12;
+/** …ve T alanının bu katı (iğne üçgende alanın tamamı gürültü sayılmasın). */
+const COVER_TOL_AREA = 1e-6;
+/** Değme kuralında çıkarma parçası sınırı: aşılırsa T görünür sayılır (sayısal belirsizlik görünür yönünde). */
+const MAX_PIECES = 64;
+/** Değme kuralında örtücü üçgen T ile (ters ya da aynı yönde) paralel: normaller arası açının |kosinüsü| en az bu kadar. */
+const PARALLEL = 0.999;
+
+/**
+ * Değme kuralı (bkz. dosya başı): örtücülerin T düzleminde duran ve içi T'nin önünde kalan üçgenleri T'yi tamamen kaplıyor mu. `src`
+ * T'nin köşeleri, (nx, ny, nz) birim normali, `per` çevresi, `area` alanı. Önce adaylar toplanır (köşeleri T düzlemine ε'dan yakın,
+ * normali T'ye paralel); örtücünün içi yüz başına ışın paritesiyle bulunur (adayın ağırlık merkezinden T'nin önüne 2ε: içeride mi) —
+ * ağın toplam yönüne güvenilmez (yönü karışık kabuklu ağ). Sonra T kendi düzleminde 2B taban (e1 = AB yönü, e2 = n × e1) ile çokgen
+ * olarak tutulur ve her örtücü üçgen çıkarılır; kalan parça kalmazsa gizlidir.
+ */
+function contactCovered(
+  bodies: Body[],
+  i: number,
+  cands: number[],
+  src: Float64Array,
+  nx: number,
+  ny: number,
+  nz: number,
+  per: number,
+  area: number,
+): boolean {
+  const [ax, ay, az] = [src[0], src[1], src[2]];
+  const tmin = [Math.min(src[0], src[3], src[6]), Math.min(src[1], src[4], src[7]), Math.min(src[2], src[5], src[8])];
+  const tmax = [Math.max(src[0], src[3], src[6]), Math.max(src[1], src[4], src[7]), Math.max(src[2], src[5], src[8])];
+  // Adaylar: (örtücü, ε, aday köşeleri). Sorgu sırasında BVH'nin yığını kullanıldığından parite sonra denetlenir.
+  const found: { B: Body; eps: number; tris: number[] }[] = [];
+  for (const j of cands) {
+    const B = bodies[j];
+    const eps = epsOf(Math.max(bodies[i].scale, B.scale));
+    // Kutu kesişimi (içerme değil): birden çok örtücü T'yi birlikte kaplayabilir.
+    if (tmax[0] < B.min[0] - eps || tmin[0] > B.max[0] + eps || tmax[1] < B.min[1] - eps || tmin[1] > B.max[1] + eps) continue;
+    if (tmax[2] < B.min[2] - eps || tmin[2] > B.max[2] + eps) continue;
+    B.bvh ??= new TriBvh(B.mesh);
+    let tris: number[] | undefined;
+    B.bvh.query([tmin[0] - eps, tmin[1] - eps, tmin[2] - eps], [tmax[0] + eps, tmax[1] + eps, tmax[2] + eps], (Q, o) => {
+      for (let k = 0; k < 9; k += 3) {
+        if (Math.abs((Q[o + k] - ax) * nx + (Q[o + k + 1] - ay) * ny + (Q[o + k + 2] - az) * nz) > eps) return false;
+      }
+      const [e1x, e1y, e1z] = [Q[o + 3] - Q[o], Q[o + 4] - Q[o + 1], Q[o + 5] - Q[o + 2]];
+      const [e2x, e2y, e2z] = [Q[o + 6] - Q[o], Q[o + 7] - Q[o + 1], Q[o + 8] - Q[o + 2]];
+      const [qx, qy, qz] = [e1y * e2z - e1z * e2y, e1z * e2x - e1x * e2z, e1x * e2y - e1y * e2x];
+      const ql = Math.hypot(qx, qy, qz);
+      if (!(ql > 0) || Math.abs(qx * nx + qy * ny + qz * nz) < PARALLEL * ql) return false;
+      (tris ??= []).push(...Array.from({ length: 9 }, (_, k) => Q[o + k]));
+      return false;
+    });
+    if (tris) found.push({ B, eps, tris });
+  }
+  if (!found.length) return false;
+
+  const lc = Math.hypot(src[3] - ax, src[4] - ay, src[5] - az);
+  const [ux, uy, uz] = [(src[3] - ax) / lc, (src[4] - ay) / lc, (src[5] - az) / lc];
+  const [vx, vy, vz] = [ny * uz - nz * uy, nz * ux - nx * uz, nx * uy - ny * ux];
+  const pu = (x: number, y: number, z: number) => (x - ax) * ux + (y - ay) * uy + (z - az) * uz;
+  const pv = (x: number, y: number, z: number) => (x - ax) * vx + (y - ay) * vy + (z - az) * vz;
+  const tiny = Math.min(COVER_TOL * per * per, COVER_TOL_AREA * area);
+  // T 2B'de saat yönünün tersine (normal = AB × AC, e2 = n × e1).
+  let pieces: number[][] | null = [[0, 0, lc, 0, pu(src[6], src[7], src[8]), pv(src[6], src[7], src[8])]];
+  for (const { B, eps, tris } of found) {
+    for (let o = 0; o < tris.length; o += 9) {
+      // Örtücünün içi bu yüzde T'nin önünde mi (ışın paritesi; belirsizse dışarıda → örtmez).
+      const g = [0, 1, 2].map((c) => (tris[o + c] + tris[o + 3 + c] + tris[o + 6 + c]) / 3 + 2 * eps * [nx, ny, nz][c]);
+      if (!B.bvh!.inside(g[0], g[1], g[2])) continue;
+      const q2 = [0, 3, 6].flatMap((k) => [pu(tris[o + k], tris[o + k + 1], tris[o + k + 2]), pv(tris[o + k], tris[o + k + 1], tris[o + k + 2])]);
+      if (polyArea(q2) < 0) q2.splice(0, 6, q2[0], q2[1], q2[4], q2[5], q2[2], q2[3]);
+      pieces = subtractTriangle(pieces, q2, tiny);
+      if (!pieces || !pieces.length) return pieces !== null;
+    }
+  }
+  return false;
+}
+
+/** Düz dizili 2B çokgenin işaretli alanı (saat yönünün tersi pozitif). */
+function polyArea(p: number[]): number {
+  let s = 0;
+  for (let k = 0; k < p.length; k += 2) {
+    const n = (k + 2) % p.length;
+    s += p[k] * p[n + 1] - p[n] * p[k + 1];
+  }
+  return s / 2;
+}
+
+/**
+ * Dışbükey çokgen parçalarından saat yönünün tersindeki `q` üçgenini çıkarır: her parça üçgenin kenar doğrularıyla bölünür, dışta
+ * kalanlar tutulur, içteki (kesişim) atılır. Alanı `tiny`'den küçük parçalar atılır (float gürültüsü); parça sayısı MAX_PIECES'ı
+ * aşarsa null (belirsiz).
+ */
+function subtractTriangle(pieces: number[][], q: number[], tiny: number): number[][] | null {
+  const out: number[][] = [];
+  for (const P of pieces) {
+    let cur: number[] | null = P;
+    for (let e = 0; e < 3 && cur; e++) {
+      const [px, py, qx, qy] = [q[2 * e], q[2 * e + 1], q[(2 * e + 2) % 6], q[(2 * e + 3) % 6]];
+      const inside: number[] = [];
+      const outside: number[] = [];
+      const side = (k: number) => (qx - px) * (cur![k + 1] - py) - (qy - py) * (cur![k] - px);
+      for (let k = 0; k < cur.length; k += 2) {
+        const n = (k + 2) % cur.length;
+        const [dc, dn] = [side(k), side(n)];
+        if (dc >= 0) inside.push(cur[k], cur[k + 1]);
+        if (dc <= 0) outside.push(cur[k], cur[k + 1]);
+        if ((dc > 0 && dn < 0) || (dc < 0 && dn > 0)) {
+          const s = dc / (dc - dn);
+          const x = cur[k] + s * (cur[n] - cur[k]);
+          const y = cur[k + 1] + s * (cur[n + 1] - cur[k + 1]);
+          inside.push(x, y);
+          outside.push(x, y);
+        }
+      }
+      if (outside.length >= 6 && polyArea(outside) > tiny) out.push(outside);
+      cur = inside.length >= 6 && polyArea(inside) > tiny ? inside : null;
+    }
+    if (out.length > MAX_PIECES) return null;
   }
   return out;
 }
@@ -488,6 +622,26 @@ class TriBvh {
       if (c >= 0) return (c & 1) === 1;
     }
     return false;
+  }
+
+  /** Kutusu [qmin, qmax] ile kesişen yapraklardaki üçgenleri (köşeler `tri[o…o+8]`) ziyaret eder; `visit` true dönerse durur. */
+  query(qmin: number[], qmax: number[], visit: (tri: Float64Array, o: number) => boolean): void {
+    const B = this.box;
+    const stack = this.stack;
+    let sp = 0;
+    stack[sp++] = 0;
+    while (sp > 0) {
+      const id = stack[--sp];
+      const o = 6 * id;
+      if (B[o] > qmax[0] || B[o + 1] > qmax[1] || B[o + 2] > qmax[2] || B[o + 3] < qmin[0] || B[o + 4] < qmin[1] || B[o + 5] < qmin[2]) continue;
+      if (this.left[id] >= 0) {
+        stack[sp++] = this.left[id];
+        stack[sp++] = this.right[id];
+        continue;
+      }
+      const end = this.start[id] + this.count[id];
+      for (let r = this.start[id]; r < end; r++) if (visit(this.tri, 9 * r)) return;
+    }
   }
 
   /** Yüzeyin bir üçgeni `q` üçgenini (9 değer) kesiyor ya da ona değiyor mu. */
