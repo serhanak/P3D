@@ -563,6 +563,41 @@ describe('çerçeve, yüzeye yerleştirme, birleştirme, denetim', () => {
     expect(s[0].message).toMatch(/Kıl payı örtüşme \(en fazla ~0,01\d* mm genişlikte şerit, örtüşen üçgenlere oranı %[\d,]+\): .*Ortak noktaları iki parçada da aynı değerlerle verin\.$/);
   });
 
+  it('girişim: katılar arası hacim örtüşmesi, dokunma ve delikle oyulan bölge sayılmaz, grup modu (BoltRush #10)', async () => {
+    const { interferences } = await import('../src/interference');
+    const box = (name: string, w: number, d: number, h: number, [x, y, z]: number[], extra: Partial<Op> = {}) =>
+      ({ op: 'create', shape: 'box', name, params: [{ name: 'width', value: w }, { name: 'depth', value: d }, { name: 'height', value: h }], position: { x, y, z }, ...extra }) as Op;
+    const p = project([
+      box('a', 20, 20, 20, [0, 0, 10]),
+      box('b', 20, 20, 20, [15, 0, 10]), // a ile x 5…10 bindirir: 2000 mm³ …
+      box('oyuk', 6, 30, 30, [8, 0, 10], { role: 'hole', cuts: ['b'] }), // … ama b'nin o bölgesi oyuldu
+      box('değen', 10, 20, 20, [-15, 0, 10]), // a'ya yalnızca değer
+      box('g1', 10, 10, 10, [100, 0, 5]),
+      box('g2', 10, 10, 10, [105, 0, 5]),
+      { op: 'group', parts: ['g1', 'g2'], name: 'montaj' } as Op,
+      box('pim', 4, 4, 30, [108, 0, 15]),
+    ]);
+    const r = interferences(p);
+    expect(r.skipped).toEqual([]);
+    expect(r.pairs.map((i) => [i.a, i.b].sort().join('+'))).toEqual(['g1+g2', 'g2+pim']);
+    expect(r.pairs[0].volume).toBeCloseTo(500, 3);
+    expect(r.pairs[0].fractionA).toBeCloseTo(0.5, 6);
+    expect(r.pairs[1].volume).toBeCloseTo(4 * 4 * 10, 3);
+    expect(r.pairs[1].box).toEqual({ min: { x: 106, y: -2, z: 0 }, max: { x: 110, y: 2, z: 10 } });
+    // Grup modu: grubun içindeki örtüşme sayılmaz, grup tek gövde.
+    const g = interferences(p, { byGroup: true });
+    expect(g.pairs.map((i) => [i.a, i.b].sort().join('+'))).toEqual(['montaj+pim']);
+    expect(g.pairs[0].fractionA + g.pairs[0].fractionB).toBeGreaterThan(0);
+    // Seçim: yalnızca seçimi içeren çiftler; bilinmeyen ad hata.
+    expect(interferences(p, { parts: ['g1'] }).pairs.map((i) => i.b)).toEqual(['g2']);
+    expect(() => interferences(p, { parts: ['yok'] })).toThrow(/'yok' adında parça ya da grup bulunamadı/);
+    // checkProject: yalnızca istenince, uyarı olarak (çıkış kodunu etkilemez).
+    expect(checkProject(p).some((i) => /Girişim/.test(i.message))).toBe(false);
+    const issues = checkProject(p, { interference: true }).filter((i) => /Girişim/.test(i.message));
+    expect(issues.map((i) => i.level)).toEqual(['uyarı', 'uyarı']);
+    expect(issues[0].message).toMatch(/^Girişim: 'g[12]' ile 'g[12]' iç içe — 500 mm³ \(hacim oranı: 'g1' %50, 'g2' %50\); kesişim kutusu 100, -5, 0 → 105, 5, 10\.$/);
+  });
+
   it('check: başka opak katının içinde kalan örtüşme z-fighting sayılmaz (BoltRush #26)', () => {
     const box = (name: string, w: number, d: number, h: number, [x, y, z]: number[], extra: Partial<Op> = {}) =>
       ({ op: 'create', shape: 'box', name, params: [{ name: 'width', value: w }, { name: 'depth', value: d }, { name: 'height', value: h }], position: { x, y, z }, ...extra }) as Op;

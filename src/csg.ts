@@ -235,6 +235,57 @@ export function unionGeometries(geoms: THREE.BufferGeometry[]): THREE.BufferGeom
   }
 }
 
+/** Kesişim çiftinin sonucu: hacim (mm³) ve kesişimin kutusu; gövdelerden biri kapalı değilse null. */
+export type PairIntersection = { volume: number; min: [number, number, number]; max: [number, number, number] } | null;
+
+/**
+ * Gövde çiftlerinin kesişim hacimleri (girişim denetimi, BoltRush #10). Her gövde bir ya da birkaç kapalı ağın (dünya
+ * koordinatı) birleşimidir; yalnızca bir çiftte kullanılan gövdeler manifold'a çevrilir (bir kez). Kapalı olmayan ağlı gövdenin
+ * çiftleri null. `bodyVolumes`: gövde hacmi (çevrilemeyende null). Manifold nesneleri her durumda silinir.
+ */
+export function pairIntersections(
+  bodies: THREE.BufferGeometry[][],
+  pairs: [number, number][],
+): { results: PairIntersection[]; bodyVolumes: (number | null)[] } {
+  if (!wasm) throw new CsgError('Boolean çekirdeği yüklenmedi.');
+  const cache = new Map<number, Manifold | null>();
+  const keep: { delete(): void }[] = [];
+  const body = (i: number): Manifold | null => {
+    if (cache.has(i)) return cache.get(i)!;
+    let m: Manifold | null = null;
+    const parts: Manifold[] = [];
+    try {
+      for (const g of bodies[i]) parts.push(toManifold(g));
+      m = parts.length === 1 ? parts[0] : wasm!.Manifold.union(parts);
+      if (parts.length > 1) for (const p of parts) p.delete();
+      keep.push(m);
+    } catch {
+      for (const p of parts) p.delete();
+      m = null;
+    }
+    cache.set(i, m);
+    return m;
+  };
+  try {
+    const results = pairs.map(([i, j]): PairIntersection => {
+      const [a, b] = [body(i), body(j)];
+      if (!a || !b) return null;
+      const x = a.intersect(b);
+      try {
+        const v = x.volume();
+        const bb = x.boundingBox();
+        return { volume: v, min: [bb.min[0], bb.min[1], bb.min[2]], max: [bb.max[0], bb.max[1], bb.max[2]] };
+      } finally {
+        x.delete();
+      }
+    });
+    const bodyVolumes = bodies.map((_, i) => (cache.has(i) ? (cache.get(i)?.volume() ?? null) : null));
+    return { results, bodyVolumes };
+  } finally {
+    for (const m of keep) m.delete();
+  }
+}
+
 /**
  * Kapalı ağı meshoptimizer (Regularize) ile ~`target` üçgene sadeleştirir; sapma ağ boyutunun `maxError` katı ile sınırlı
  * (1 = sınırsız). Ağ zaten hedefin altındaysa kopyası döner. `light`: daha az düzenleme, şekle daha sadık.

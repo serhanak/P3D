@@ -7,6 +7,7 @@
 // Z-fighting'de başka bir opak katının içinde kalan örtüşme sayılmaz (hiç görünmez; profil ve `cullHidden`'dan bağımsız).
 import * as THREE from 'three';
 import { Occluders, cullAndRepair } from './cull';
+import { interferences, type InterferenceOptions } from './interference';
 import { partBox } from './engine';
 import { worldMesh } from './io';
 import type { WorldMesh } from './meshio';
@@ -29,6 +30,11 @@ export interface CheckOptions {
    * Verilmezse ve bütçe aşılırsa uyarı atılabilecek gizli üçgen sayısını söyler. print profilinde etkisiz.
    */
   cullHidden?: boolean;
+  /**
+   * Girişim (BoltRush #10): farklı parçaların / grupların katıları arasındaki hacim örtüşmesi (dokunma hariç) uyarı olarak
+   * listelenir (bilinçli gömmeler yaygın olduğundan hata sayılmaz). `true` ya da seçenekler (`interferences`).
+   */
+  interference?: boolean | InterferenceOptions;
 }
 
 /** Oyun profilinde varsayılan toplam üçgen bütçesi. */
@@ -425,5 +431,22 @@ export function checkProject(project: Project, opts: CheckOptions = {}): CheckIs
   }
 
   out.push(...coplanarOverlaps(project, solids, meshOf));
+  if (opts.interference) out.push(...interferenceIssues(project, opts.interference === true ? {} : opts.interference));
+  return out;
+}
+
+/** Girişimler uyarı olarak (hacmi büyükten küçüğe); hiç yoksa bilgi satırı da yazılmaz. */
+function interferenceIssues(project: Project, o: InterferenceOptions): CheckIssue[] {
+  const r = interferences(project, o);
+  const n = (v: number, d = 1) => v.toLocaleString('tr-TR', { maximumFractionDigits: d });
+  const pct = (f: number) => (f >= 0.001 ? `%${n(100 * f)}` : '< %0,1');
+  const v3 = (p: { x: number; y: number; z: number }) => `${n(p.x)}, ${n(p.y)}, ${n(p.z)}`;
+  const out: CheckIssue[] = r.pairs.map((i) => ({
+    level: 'uyarı',
+    message:
+      `Girişim: '${i.a}' ile '${i.b}' iç içe — ${n(i.volume, i.volume < 10 ? 3 : 1)} mm³ (hacim oranı: '${i.a}' ${pct(i.fractionA)}, ` +
+      `'${i.b}' ${pct(i.fractionB)}); kesişim kutusu ${v3(i.box.min)} → ${v3(i.box.max)}.`,
+  }));
+  for (const s of r.skipped) out.push({ level: 'uyarı', message: `Girişim denetlenemedi: '${s}' ağı kapalı değil.` });
   return out;
 }

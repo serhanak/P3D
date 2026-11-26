@@ -32,7 +32,8 @@
 // Sekme ya da dosya (--file verilmezse çalışma alanı sekmesinin sahnesi). scene/snapshot/measure/check/section/sketch (listeleme) --file bir ağ dosyası
 // (.stl/.obj/.3mf/.glb) da alır: bellekte tek parçalı proje, parça dosyadaki yerinde; ağ dosyasına hiçbir şey yazılmaz.
 //   p3d scene --file m.p3d.json [--full]   (--full: dosyadaki gibi; src göreli, gömülü ağlar gömülü)
-//   p3d check [--file m.p3d.json] [--profile print|game] [--max-tris N] [--cull-hidden]   z-fighting, boolean, ince parça, tabla /
+//   p3d check [--file m.p3d.json] [--profile print|game] [--max-tris N] [--cull-hidden] [--interference [--by-group] [--parts a,b]]
+//                                      z-fighting, boolean, ince parça, tabla /
 //                                      oyun: üçgen bütçesi, bozuk üçgen; hata varsa çıkış kodu 1
 //   p3d measure [--file m.p3d.json] [--parts a,b]
 //   p3d section --axis x|y|z --at v1,v2,… [--parts a,b] [--file m.p3d.json | ağ.stl|obj|3mf|glb] [--tol 0.1]
@@ -701,7 +702,14 @@ function checkOptions(): CheckOptions {
   // Bütçe gizli üçgenler atıldıktan sonraki sayıyla (export --cull-hidden çıktısı).
   const cull = has('--cull-hidden');
   if (cull && profile !== 'game') throw new Error('--cull-hidden yalnızca --profile game ile kullanılır (bütçe ayıklanmış üçgenlerle sayılır).');
-  const extra = cull ? { cullHidden: true } : {};
+  // Girişim (BoltRush #10): --interference [--by-group] [--parts a,b].
+  const inter = has('--interference');
+  const parts = list('--parts');
+  if (!inter && (has('--by-group') || parts)) throw new Error('--by-group / --parts yalnızca --interference ile (check) geçerli.');
+  const extra = {
+    ...(cull ? { cullHidden: true } : {}),
+    ...(inter ? { interference: { ...(has('--by-group') ? { byGroup: true } : {}), ...(parts?.length ? { parts } : {}) } } : {}),
+  };
   const raw = flag('--max-tris');
   if (raw === undefined) return { profile, ...extra };
   const maxTris = Number(raw);
@@ -1058,6 +1066,7 @@ const USAGE = [
   'Sekme ya da dosya (--file m.p3d.json ile tarayıcısız; scene/snapshot/measure/check/section/sketch ağ dosyası da alır: --file ağ.glb|stl|obj|3mf):',
   '  scene --file m.p3d.json|ağ.glb [--full]',
   '  check [--file m.p3d.json|ağ.glb] [--profile print|game] [--max-tris N] [--cull-hidden]',
+  '        [--interference [--by-group] [--parts a,b]]   girişim: katılar arası hacim örtüşmesi (dokunma hariç), uyarı olarak',
   '  measure [--file m.p3d.json|ağ.glb] [--parts a,b]',
   '  section --axis x|y|z --at v1,v2 [--parts a,b] [--file m.p3d.json | ağ.stl|obj|3mf|glb] [--tol 0.1]',
   '  export <çıktı.stl|3mf|obj|glb> [--file m.p3d.json] [--parts a,b] [--merge] [--skeleton] [--cull-hidden] [--units m|mm] [--normals flat|smooth]',

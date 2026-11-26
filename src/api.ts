@@ -61,3 +61,7 @@ export type { NodeSnapshotOptions, NodeSnapshotResult, NodeSnapshotSessionOption
 // Projeleri tek sahnede birleştirme / ızgaraya dizme (önek + öteleme; varyant aileleri) — BoltRush isteği #1
 export { combineProjects, gridProjects } from './combine';
 export type { CombineEntry, CombineOptions, GridCell, GridEntry, GridOptions } from './combine';
+
+// Girişim denetimi (katılar arası hacim örtüşmesi, dokunma hariç) — BoltRush isteği #10
+export { interferences } from './interference';
+export type { Interference, InterferenceOptions, InterferenceResult } from './interference';
