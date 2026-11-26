@@ -42,7 +42,7 @@ Kör çizmeyin: anlamlı her adımdan sonra görün ve ölçün. Bir model bitti
   projeye, geri-al geçmişine ve otomatik kayda girmez. **Aç…** bir `.glb`'yi yeni proje olarak açar (tek ağ parçası dosyadaki
   yerinde; dosyaya bağlı olmaz, Kaydet yeni bir `.p3d.json` indirir), **İçe aktar…** GLB'yi parça olarak ekler.
 - Hepsi bağlı sekmenin sahnesinde ya da `--file model.p3d.json` ile dosyada çalışır. `measure`, `check`, `section` aynı
-  motorla Node'da hesaplanır; `snapshot --file` WebGL için görünmez Chrome/Edge açar (~8 sn, P3D sunucusu çalışmalı).
+  motorla Node'da hesaplanır; `snapshot --file` WebGL için görünmez Chrome/Edge açar (~3–8 sn; P3D sunucusu çalışmıyorsa geçici sunucu açar). Betikte: `snapshot()`.
 - `check` profili: `print` (varsayılan; ince parça ve tabla teması dahil) ya da `game` (üçgen bütçesi `--max-tris`,
   bozuk üçgen; `p3d guide game`).
 - Görüntüde bakılacaklar: titreşen yüzeyler, yarıklar, havada duran ya da iç içe giren parçalar, ters yön/eksen, eksik

@@ -582,6 +582,47 @@ describe('snapshot --file tarayıcısı (scripts/headless.ts)', () => {
   }, 30_000);
 });
 
+describe('betikten görüntü: snapshot() (BoltRush #2)', () => {
+  it('seçenek doğrulaması: varsayılanlar, boyut, bilinmeyen görünüm, parts + focus', async () => {
+    const { nodeSnapshotRequest } = await import('../src/snapshot-node');
+    expect(nodeSnapshotRequest()).toEqual({ views: ['iso', 'front', 'right', 'top'], width: 1000, height: 750, dims: false });
+    expect(nodeSnapshotRequest({ views: ['front'], size: '6000x6000', parts: ['a'] })).toMatchObject({ width: 4096, height: 4096, parts: ['a'] });
+    expect(() => nodeSnapshotRequest({ views: ['side' as never] })).toThrow(/Bilinmeyen görünüm: side/);
+    expect(() => nodeSnapshotRequest({ size: '100' })).toThrow(/size GENİŞLİKxYÜKSEKLİK/);
+    expect(() => nodeSnapshotRequest({ views: ['camera'] })).toThrow(/camera.eye/);
+    expect(() => nodeSnapshotRequest({ parts: ['a'], focus: ['b'] })).toThrow(/birlikte verilmez/);
+  });
+
+  it.runIf(!!findChrome())('sunucu yokken p3d run içinde geçici sunucuyla PNG yazar, oturum tekrar kullanılır', () => {
+    const script = path.join(dir, 'goruntu.mts');
+    writeFileSync(
+      script,
+      [
+        "import { applyOps, newProject, snapshot, snapshotSession } from 'p3d';",
+        'const p = newProject();',
+        "applyOps(p, [{ op: 'create', shape: 'box', name: 'kutu', params: [{ name: 'width', value: 40 }, { name: 'depth', value: 30 }, { name: 'height', value: 20 }] }], null);",
+        "const r = await snapshot(p, { views: ['iso', 'front'], size: '400x300', out: 'g1' });",
+        "console.log('tek', r.errors.length, r.images.map((i) => i.view + ':' + i.png.length).join(','));",
+        'const s = await snapshotSession();',
+        'try {',
+        "  const a = await s.snapshot(p, { views: ['top'], out: 'g2' });",
+        "  const b = await s.snapshot(p, { views: ['iso'], parts: ['yok'] });",
+        "  console.log('oturum', s.temporary, a.images.length, b.images.length, b.errors.join(' '));",
+        '} finally {',
+        '  await s.close();',
+        '}',
+      ].join('\n'),
+    );
+    const r = p3dRun(['run', 'goruntu.mts'], dir, { env: { P3D_URL: 'http://127.0.0.1:9' } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/tek 0 iso:\d{4,},front:\d{4,}/);
+    expect(r.stdout).toMatch(/oturum true 1 0 .*'yok' adında parça ya da grup bulunamadı/);
+    const png = readFileSync(path.join(dir, 'g1', 'iso.png'));
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([400, 300]);
+    expect(readdirSync(path.join(dir, 'g2'))).toEqual(['top.png']);
+  }, 120_000);
+});
+
 describe('p3d dev --detach / stop (BoltRush #3)', () => {
   it('ayrık başlar, komut döner, sunucu yaşar; stop durdurur; P3D olmayan sunucuya dokunmaz', async () => {
     const port = 5300 + Math.floor(Math.random() * 400);

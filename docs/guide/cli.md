@@ -36,7 +36,7 @@ sıkıştırmalı, nicemlenmiş konumlu, seyrek erişimcili ya da harici tamponl
 | `section --axis x\|y\|z --at v1,v2 [--parts] [--file m.p3d.json \| ağ.stl\|glb] [--tol 0.1]` | Kesit çokgenleri (kaplamalar kalınlıksız: varsayılan kümede yok, `--parts` ile "kesit yok" notu) |
 | `export <çıktı.stl\|3mf\|obj\|glb> [--file] [--parts a,b] [--merge] [--skeleton] [--units m\|mm] [--normals flat\|smooth] [--cull-hidden]` | Dışa aktarım; GLB seçenekleri (`--cull-hidden`: hiç görünmeyen iç yüzleri at) `p3d guide game`. Kaplamalar (`decal`) GLB/OBJ'ye girer, STL/3MF'te uyarıyla atlanır |
 | `sketch [--file] [--json] [--sample 8]` · `sketch --clear [ad] [--file] [--label]` | Kullanıcının ekranda çizdiği eskiz yollarını listeler (tür, nokta, düzlem, kutu, not; `--json` sahne özetindeki gibi, stdout yalnızca JSON) / adı verilen yolu ya da (ad yoksa) tüm eskizi siler; dosyada hata varsa yazmaz (`p3d guide sketch`) |
-| `snapshot --file m.p3d.json\|ağ.glb [--views] [--size] [--style] [--projection] [--out] [--eye …]` | Görünmez Chrome/Edge ile görüntü (sunucu gerekir; tarayıcı yolu `P3D_CHROME`); ~8 sn. Oyun varlığının üçgenleri: `snapshot --file araba.glb --style wire` |
+| `snapshot --file m.p3d.json\|ağ.glb [--views] [--size] [--style] [--projection] [--out] [--eye …]` | Görünmez Chrome/Edge ile görüntü (tarayıcı yolu `P3D_CHROME`); çalışan P3D sunucusu varsa onu kullanır, yoksa komutun süreci içinde geçici sunucu açıp kapatır (`not:` satırı); ~3–8 sn. Betikte aynısı: `snapshot()` (`p3d guide scripts`). Oyun varlığının üçgenleri: `snapshot --file araba.glb --style wire` |
 
 ## Yalnızca dosya
 | Komut | Ne yapar |

@@ -39,7 +39,7 @@
 //   p3d export <çıktı.stl|3mf|obj|glb> [--file m.p3d.json] [--parts a,b] [--merge] [--skeleton] [--cull-hidden] [--units m|mm]
 //              [--normals flat|smooth]   --merge STL/3MF için; --skeleton/--units/--normals GLB için
 //   p3d snapshot --file m.p3d.json|ağ.glb [--views …] [--size …] [--dims] [--style …] [--projection …] [--out klasör]   makinedeki Chrome/Edge'i
-//                                      (P3D_CHROME) görünmez açar, geçici bir ws'de görüntü alır; sunucu açık olmalı
+//                                      (P3D_CHROME) görünmez açar, geçici bir ws'de görüntü alır; sunucu yoksa geçici açar
 //   p3d sketch [--file m.p3d.json] [--json] [--sample 8]   kullanıcının çizdiği eskiz yollarını listeler (dünya mm;
 //                                      --json: sahne özetindeki gibi, --sample eğri kenar başına örnek)
 //   p3d sketch --clear [ad] [--file m.p3d.json] [--label "metin"]   adı verilen yolu / tüm eskizi siler (dosyada:
@@ -836,11 +836,10 @@ function snapshotCameraFlags(): SnapshotCamera {
   return out;
 }
 
-const SNAP_CONNECT_MS = 30_000;
-
 /**
  * `snapshot --file`: makinedeki Chrome/Edge'i görünmez açar, geçici bir çalışma alanında (`_snap-<rastgele>`) projeyi
- * yükler, görüntü alır. Tarayıcı süreç ağacı ve geçici profil her durumda (hata dahil) kapatılır/silinir.
+ * yükler, görüntü alır (`src/snapshot-node.ts`; P3D sunucusu çalışmıyorsa bu süreçte geçici sunucu). Tarayıcı süreç ağacı,
+ * geçici profil ve geçici sunucu her durumda (hata dahil) kapatılır/silinir.
  */
 async function snapshotFile(src: SourceFile): Promise<void> {
   const req = snapshotRequest(); // geçersiz --size/--views/--style tarayıcı açılmadan hata versin
@@ -848,45 +847,22 @@ async function snapshotFile(src: SourceFile): Promise<void> {
   const loaded = await readSource(src, false);
   printLoadNotes(loaded);
   const { project } = loaded;
-  try {
-    await call('GET', '/api/bridge/workspaces');
-  } catch (e) {
-    const err = e as CallError;
-    if (err.status === 0) throw new Error(`P3D sunucusu çalışmıyor (${base}): P3D klasöründe npm run dev`);
-    if (err.status === 404) throw new Error(`${base} erişilebilir ama köprü kapalı; sunucu --bridge ile başlatılmalı (npm run dev'de açıktır).`);
-    throw err;
-  }
-  const { findChrome, launchHeadless } = await import('./headless.ts');
-  const chrome = findChrome();
-  if (!chrome) {
-    throw new Error('Chrome ya da Edge bulunamadı. Tarayıcının çalıştırılabilir dosyasını P3D_CHROME ortam değişkenine yazın (ör. C:/Program Files/Google/Chrome/Application/chrome.exe).');
-  }
-  if (!statOf(chrome)?.isFile()) throw new Error(`Tarayıcı bulunamadı: ${chrome}${process.env.P3D_CHROME ? ' (P3D_CHROME)' : ''}`);
-  const snapWs = `_snap-${Math.random().toString(36).slice(2, 10)}`;
-  const url = base + wsPath(snapWs);
-  const browser = launchHeadless(chrome, url);
-  // Ctrl+C da "her durum"dur: görünmez tarayıcı ve geçici profil geride kalmasın.
-  const interrupted = () => void browser.close().finally(() => process.exit(130));
+  // Çalışan P3D sunucusu (P3D_URL) varsa o, yoksa bu süreçte geçici sunucu (BoltRush #2; eskiden "sunucu çalışmıyor" hatası).
+  const { openSnapshotTab } = await import('../src/snapshot-node.ts');
+  const tab = await openSnapshotTab({ server: 'auto' });
+  if (tab.temporary) console.log(`not: P3D sunucusu çalışmıyor (${base}); görüntü için geçici sunucu açıldı`);
+  // Ctrl+C da "her durum"dur: görünmez tarayıcı, geçici profil ve geçici sunucu geride kalmasın.
+  const interrupted = () => void tab.close().finally(() => process.exit(130));
   process.once('SIGINT', interrupted);
   process.once('SIGTERM', interrupted);
   try {
-    const deadline = Date.now() + SNAP_CONNECT_MS;
-    for (;;) {
-      const spaces = (await call('GET', '/api/bridge/workspaces')) as BridgeWorkspace[];
-      if (spaces.some((s) => s.ws === snapWs && s.tabs > 0)) break;
-      const failed = browser.failure();
-      if (failed) throw new Error(`${failed} (${chrome})`);
-      if (Date.now() > deadline) throw new Error(`Görünmez tarayıcı ${SNAP_CONNECT_MS / 1000} sn içinde sekmeyi bağlayamadı (${url}).`);
-      await new Promise((r) => setTimeout(r, 250));
-    }
-    const { usedAssets } = await import('../src/assets.ts');
-    const load = await post({ action: 'load', project, assets: usedAssets(project), label: `snapshot: ${path.basename(file)}` }, snapWs);
+    const { load, result } = await tab.send({ ...project, name: project.name || path.basename(file) }, req.snapshot);
     for (const m of load.errors) console.log(`✕ ${m}`);
-    writeSnapshots(await post(req, snapWs), req.snapshot);
+    writeSnapshots(result, req.snapshot);
   } finally {
     process.off('SIGINT', interrupted);
     process.off('SIGTERM', interrupted);
-    await browser.close();
+    await tab.close();
   }
 }
 

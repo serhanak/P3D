@@ -53,3 +53,7 @@ export { exportFile, loadProjectFile, readMeshFile, saveProjectFile } from './fi
 export type { ExportFormat, ExportOptions, ExportResult, LoadOptions, SaveOptions, SaveResult } from './files';
 export { loadMeshFileProject } from './files';
 export type { MeshFileProject } from './files';
+
+// Node'da görüntü (görünmez Chrome/Edge; çalışan P3D sunucusu yoksa geçici sunucu) — BoltRush isteği #2
+export { snapshot, snapshotSession } from './snapshot-node';
+export type { NodeSnapshotOptions, NodeSnapshotResult, NodeSnapshotSessionOptions, SnapshotSession } from './snapshot-node';

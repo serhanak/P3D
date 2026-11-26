@@ -29,7 +29,7 @@ console.log(new THREE.Vector3(width, 60, 30).length(), issues);
   `exportableParts`, `printableParts`, `isDecal`, `baseIndexed`, `roleOf`, `solidVolume`, `solidBox`, `solidPartsBox`, `parseMeshFile`,
   `meshAssetFromSoup`, `registerAsset`, `decodedAsset`, `getAsset`, `usedAssets`, `buildStl`, `build3mf`, `buildGlb`, `sceneSummary`,
   `SHAPES`, `THREE`;
-  Node yardımcıları `loadProjectFile`, `saveProjectFile`, `exportFile`, `readMeshFile`; tipler `Project`, `Part`, `Op` …
+  Node yardımcıları `loadProjectFile`, `saveProjectFile`, `exportFile`, `readMeshFile`, `snapshot`, `snapshotSession`; tipler `Project`, `Part`, `Op` …
   P3D'nin iç modüllerini (`…/P3D/src/*.ts`) doğrudan içe aktarmayın — iç yapı değişebilir, bu yüzey değişmez.
 - Kutular: `partBox(part, seg)` / `partsBox(parts, seg)` şeklin **kesimsiz** kutusudur (hızlı, delik uygulanmaz; sahne özetindeki
   `bbox` ile aynı). Delikler çıkarılmış, dışa aktarılan ağın kutusu: `solidBox(project, part)` / `solidPartsBox(project, parts)`
@@ -42,4 +42,24 @@ console.log(new THREE.Vector3(width, 60, 30).length(), issues);
   `resolution`'ı olan parçada o kullanılır (`p3d guide modeling` → "Parça çözünürlüğü").
 - `initCsg()` delik/boolean ve sadeleştirmeden önce beklenmelidir (`loadProjectFile`/`exportFile` kendileri bekler).
 - Betik çıktısını sekmede görmek için: `p3d open --ws <alan> kutu.p3d.json` ya da tarayıcısız `p3d snapshot --file kutu.p3d.json`.
+- **Betikten görüntü** (`snapshot`, `snapshotSession`): projeyi kaydetmeden PNG alır; görüntüyü uygulamanın kendisi çizer (görünmez
+  Chrome/Edge, `P3D_CHROME`). Çalışan P3D sunucusu (`P3D_URL`, varsayılan 5173) varsa o kullanılır, yoksa betiğin sürecinde **geçici**
+  bir sunucu açılır ve iş bitince kapanır (`p3d dev` gerekmez; ilk görüntü ~3–4 sn). Seçenekler `p3d snapshot` ile aynı: `views`,
+  `size` ('1000x750') ya da `width`/`height`, `style`, `projection`, `camera` ({eye, target, fov, eyeHeight}), `dims`, `parts`,
+  `focus`; `out` verilirse `<görünüm>.png` yazılır; `server`: 'auto' (varsayılan) · 'temporary' · adres.
+  ```ts
+  import { snapshot, snapshotSession } from 'p3d';
+  const r = await snapshot(p, { views: ['iso', 'front'], size: '1000x750', out: 'goruntu' });   // r.images[i].png: Buffer, .file
+  if (r.errors.length) throw new Error(r.errors.join('
+'));
+  // Çok görüntü (aile, ızgara): sunucu ve tarayıcı bir kez açılır, her çağrı projeyi aynı sekmeye yükler.
+  const s = await snapshotSession();
+  try {
+    for (const [ad, proje] of aile) await s.snapshot(proje, { views: ['iso'], out: `goruntu/${ad}` });
+  } finally {
+    await s.close();
+  }
+  ```
+  Hatalar (bulunamayan `parts` adı, yüklenemeyen parça) `r.errors`'tadır; geçersiz seçenek (bilinmeyen görünüm, `parts` +
+  `focus`) istisna atar. Oturumu her durumda `close()` ile kapatın (geçici sunucu ve tarayıcı kalmasın).
 - Tek seferlik işlem listeleri için betik yerine `p3d apply --file model.p3d.json --ops ops.json` yeterlidir.
