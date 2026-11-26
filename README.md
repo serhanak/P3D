@@ -32,6 +32,7 @@ p3d status           # sunucu, skill, çalışma alanı durumu
 ```bash
 npm run dev          # http://localhost:5173 (yalnızca yerel ayrıştırıcı; API anahtarı varsa Claude da açık)
 p3d dev              # aynısı, ama her klasörden (sunucu zaten çalışıyorsa söyler)
+p3d dev --detach     # terminalden bağımsız başlatır, hazır olunca döner; durdurmak için: p3d stop
 npm run dev:claude   # serbest komutlar bu bilgisayardaki Claude Code hesabınızla (bkz. Claude modu)
 ```
 

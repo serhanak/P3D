@@ -9,7 +9,9 @@
 //
 // Sekme (geliştirme sunucusu ve ws sekmesi açık olmalı):
 //   p3d status                         sunucu, skill güncel mi, ws ve adresi, bağlı sekme, p3d.json, diğer çalışma alanları
-//   p3d dev [--port N …]               sunucuyu her klasörden P3D deposunda başlatır (npm run dev); çalışıyorsa söyler
+//   p3d dev [--port N …] [--detach]    sunucuyu her klasörden P3D deposunda başlatır (npm run dev); çalışıyorsa söyler.
+//                                      --detach: terminalden bağımsız (ayrık) başlatır, hazır olunca döner; günlük geçici klasörde
+//   p3d stop [--port N]                portta çalışan P3D sunucusunu (nasıl başlatılmış olursa olsun) durdurur
 //   p3d view                           ws adresini varsayılan tarayıcıda açar
 //   p3d scene [--full] [--stale]       sahne özeti (--full: tüm proje JSON'u; --stale: sekme yoksa son bilinen)
 //   p3d ops [--ops ops.json] [--label "metin"]  Op[] JSON'u (ya da {"ops": [...]}) stdin'den ya da --ops dosyasından
@@ -411,6 +413,14 @@ async function status(): Promise<void> {
   try {
     spaces = (await call('GET', '/api/bridge/workspaces')) as BridgeWorkspace[];
     row('Sunucu:', `${base} — erişilebilir, köprü açık`);
+    try {
+      const { detachedInfo, devPort } = await import('./devserver.ts');
+      const port = devPort([], base);
+      const d = detachedInfo(port);
+      if (d) row('', `ayrık başlatıldı (pid ${d.pid}, ${d.started}); günlük: ${d.log}; durdurma: p3d stop${port !== 5173 ? ` --port ${port}` : ''}`);
+    } catch {
+      // bilgi satırı; durum dosyası okunamazsa geç
+    }
   } catch (e) {
     const err = e as CallError;
     row('Sunucu:', err.status === 404 ? `${base} — erişilebilir ama köprü kapalı (sunucu --bridge ile başlatılmalı; npm run dev'de açıktır)` : `${base} — ERİŞİLEMİYOR. Başlatın: p3d dev (arka planda).`);
@@ -1041,7 +1051,8 @@ const USAGE = [
   '',
   'Diğer:',
   '  run <betik.mts|ts|mjs|js> [arg…]   (betikte: import { applyOps, THREE } from \'p3d\')',
-  '  dev [npm run dev bayrakları]   (sunucuyu P3D klasöründe başlatır; çalışıyorsa söyler)',
+  '  dev [npm run dev bayrakları] [--detach]   (sunucuyu P3D klasöründe başlatır; çalışıyorsa söyler; --detach: ayrık, hazır olunca döner)',
+  '  stop [--port N]   (portta çalışan P3D sunucusunu durdurur; ayrık ya da ön planda başlatılmış)',
   '  guide [konu] · skill install   (status, kurulu skill eskiyse uyarır)',
 ].join('\n');
 
@@ -1049,7 +1060,8 @@ const HELP_FLAGS = new Set(['--help', '-h']);
 /** Komut yardımı için rehber konusu (yoksa cli). */
 const HELP_TOPIC: Record<string, string> = {
   snapshot: 'verify', check: 'verify', measure: 'verify', section: 'verify', export: 'game', ops: 'ops', apply: 'ops',
-  run: 'scripts', sketch: 'sketch', status: 'workspaces', view: 'workspaces', open: 'workspaces', save: 'workspaces',
+  run: 'scripts', sketch: 'sketch', status: 'workspaces', view: 'workspaces', open: 'workspaces', save: 'workspaces', dev: 'workspaces',
+  stop: 'workspaces',
 };
 const HELP_NOTES: Record<string, string[]> = {
   snapshot: [
@@ -1058,7 +1070,11 @@ const HELP_NOTES: Record<string, string[]> = {
     'İzdüşüm (--projection): perspective (varsayılan: iso perspektif 30°, dik görünümler orto) · ortho (iso ve camera da dik izdüşüm, kutuyu çerçeveler; eye ve --fov ile kullanılamaz).',
     'Ortoda camera: --eye → --target (yoksa kutu merkezi) yalnızca bakış yönünü verir; çerçeve her zaman görünür kutuya oturur.',
   ],
-  dev: ['Bayraklar: --llm auto|api|claude-cli|off · --bridge / --no-bridge · --port N · --host adres · --model id · --effort düzey · --claude-bin yol'],
+  dev: [
+    'Bayraklar: --llm auto|api|claude-cli|off · --bridge / --no-bridge · --port N · --host adres · --model id · --effort düzey · --claude-bin yol',
+    '--detach: sunucu terminalden bağımsız çalışır (çıktı boruya bağlansa da kapanmaz), /api/status yanıt verince döner; günlük ve PID geçici klasörde (p3d-dev-<port>.log/.json). Durdurma: p3d stop.',
+  ],
+  stop: ["Yalnızca /api/status'ü P3D gibi yanıtlayan sunucu durdurulur (aynı porttaki başka uygulamaya dokunulmaz); süreç ağacıyla (Windows: taskkill /T)."],
 };
 
 /**
@@ -1419,7 +1435,9 @@ async function main(): Promise<void> {
     }
     case 'dev': {
       // Sunucuyu hangi klasörden çağrılırsa çağrılsın P3D deposunda başlatır (npm run dev; bayraklar aynen geçer).
-      if (!rest.some((a) => a.startsWith('--port'))) {
+      const detach = rest.includes('--detach');
+      const flags = rest.filter((a) => a !== '--detach');
+      if (!flags.some((a) => a.startsWith('--port'))) {
         const up = await fetch(base + '/api/status').then(() => true, () => false);
         if (up) {
           console.log(`P3D sunucusu zaten çalışıyor: ${base}`);
@@ -1429,7 +1447,20 @@ async function main(): Promise<void> {
       // Başlatıcı `--port=5198` biçimini ister; `--port 5198` de kabul edilsin.
       const VALUE_FLAGS = ['--port', '--host', '--llm', '--model', '--effort', '--claude-bin'];
       const args: string[] = [];
-      for (let i = 0; i < rest.length; i++) args.push(VALUE_FLAGS.includes(rest[i]) && i + 1 < rest.length ? `${rest[i]}=${rest[++i]}` : rest[i]);
+      for (let i = 0; i < flags.length; i++) args.push(VALUE_FLAGS.includes(flags[i]) && i + 1 < flags.length ? `${flags[i]}=${flags[++i]}` : flags[i]);
+      if (detach) {
+        const { devPort, p3dAt, startDetached } = await import('./devserver.ts');
+        const port = devPort(flags, base);
+        if (await p3dAt(port)) {
+          console.log(`P3D sunucusu zaten çalışıyor: http://localhost:${port}`);
+          return;
+        }
+        console.log(`P3D sunucusu ayrık başlatılıyor (${REPO_ROOT}): npm run dev${args.length ? ' -- ' + args.join(' ') : ''}`);
+        const st = await startDetached(REPO_ROOT, args, port);
+        console.log(`✓ Çalışıyor: ${st.url} (pid ${st.pid}). Günlük: ${st.log}
+  Durdurmak için: p3d stop${port !== 5173 ? ` --port ${port}` : ''}`);
+        return;
+      }
       console.log(`P3D sunucusu başlatılıyor (${REPO_ROOT}): npm run dev${args.length ? ' -- ' + args.join(' ') : ''}`);
       const win = process.platform === 'win32';
       const child = spawn(win ? 'npm.cmd' : 'npm', ['run', 'dev', ...(args.length ? ['--', ...args] : [])], { cwd: REPO_ROOT, stdio: 'inherit', shell: win });
@@ -1437,6 +1468,22 @@ async function main(): Promise<void> {
         process.exitCode = code ?? 0;
         resolve();
       }));
+      return;
+    }
+    case 'stop': {
+      const { devPort, stopServer } = await import('./devserver.ts');
+      const port = devPort(rest, base);
+      const r = await stopServer(port);
+      if (r.stopped) console.log(`✓ P3D sunucusu durduruldu (port ${port}; süreç ${r.pids.join(', ')}).`);
+      else if (r.reason === 'not-running') console.log(`Portta (${port}) çalışan P3D sunucusu yok.`);
+      else {
+        process.exitCode = 1;
+        console.error(
+          r.reason === 'not-p3d-pid'
+            ? `Hata: port ${port}'te P3D yanıt veriyor ama dinleyen süreç bulunamadı; elle durdurun.`
+            : `Hata: süreç ${r.pids.join(', ')} kapatıldı ama port ${port} hâlâ yanıt veriyor.`,
+        );
+      }
       return;
     }
     case 'skill': {

@@ -9,8 +9,8 @@ P3D bu makinede çalışan, Türkçe doğal dille parça modelleme aracıdır (d
 global `p3d` komutuyla kullanılır. **Bu dosya yalnızca giriş kapısıdır; ayrıntılar kurulu sürümle eşleşen rehberdedir.**
 
 ## Başlarken
-1. `p3d status` → sunucu, skill, çalışma alanı, bağlı sekme, `p3d.json`. Sunucu kapalıysa `p3d dev` ile arka planda
-   başlatın (bu oturum kapanınca sunucu da kapanır; kullanıcıya söyleyin). "Skill: GÜNCEL DEĞİL" görürseniz kullanıcıya
+1. `p3d status` → sunucu, skill, çalışma alanı, bağlı sekme, `p3d.json`. Sunucu kapalıysa `p3d dev --detach` ile başlatın
+   (hazır olunca döner; oturumdan bağımsız çalışır, `p3d stop` durdurur; kullanıcıya söyleyin). "Skill: GÜNCEL DEĞİL" görürseniz kullanıcıya
    `p3d skill install` önerin.
 2. **Önce rehberi okuyun:** `p3d guide` (iş akışı ve konu listesi), sonra işe göre `p3d guide <konu>`:
    `cli`, `ops`, `modeling`, `verify`, `ambiguity`, `workspaces`, `scripts`, `game`, `sketch`.

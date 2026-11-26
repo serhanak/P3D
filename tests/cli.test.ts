@@ -580,6 +580,38 @@ describe('snapshot --file tarayıcısı (scripts/headless.ts)', () => {
   }, 30_000);
 });
 
+describe('p3d dev --detach / stop (BoltRush #3)', () => {
+  it('ayrık başlar, komut döner, sunucu yaşar; stop durdurur; P3D olmayan sunucuya dokunmaz', async () => {
+    const port = 5300 + Math.floor(Math.random() * 400);
+    const up = (p: number) => fetch(`http://localhost:${p}/api/status`, { signal: AbortSignal.timeout(1500) }).then((r) => r.ok, () => false);
+    const start = p3dRun(['dev', '--detach', '--port', String(port)], dir);
+    try {
+      expect(start.code, start.stderr).toBe(0);
+      expect(start.stdout).toMatch(new RegExp(`✓ Çalışıyor: http://localhost:${port} \\(pid \\d+\\)`));
+      expect(start.stdout).toContain(`p3d stop --port ${port}`);
+      expect(await up(port)).toBe(true); // CLI çıktıktan sonra da
+      expect(p3dRun(['dev', '--detach', '--port', String(port)], dir).stdout).toContain('zaten çalışıyor');
+    } finally {
+      const stop = p3dRun(['stop', '--port', String(port)], dir);
+      expect(stop.code, stop.stderr).toBe(0);
+      expect(stop.stdout).toContain('durduruldu');
+    }
+    expect(await up(port)).toBe(false);
+    expect(p3dRun(['stop', '--port', String(port)], dir).stdout).toContain('çalışan P3D sunucusu yok');
+    // Aynı porttaki P3D olmayan sunucu durdurulmaz.
+    const { createServer } = await import('node:http');
+    const other = createServer((_, res) => res.end('{"ok":true}'));
+    await new Promise<void>((r) => other.listen(port, 'localhost', () => r()));
+    try {
+      const r = p3dRun(['stop', '--port', String(port)], dir);
+      expect(r.stdout).toContain('çalışan P3D sunucusu yok');
+      expect(await fetch(`http://localhost:${port}/`).then((x) => x.text())).toBe('{"ok":true}');
+    } finally {
+      await new Promise((r) => other.close(r));
+    }
+  }, 90000);
+});
+
 describe('p3d guide / skill install', () => {
   it('guide: konu listesi, konu metni, bilinmeyen konuda çıkış 1', () => {
     const topics = guideTopics();

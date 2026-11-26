@@ -47,7 +47,8 @@ sıkıştırmalı, nicemlenmiş konumlu, seyrek erişimcili ya da harici tamponl
 | Komut | Ne yapar |
 |---|---|
 | `run <betik> [arg…]` | Betiği P3D'nin TypeScript desteğiyle çalıştırır; betikte `import { … } from 'p3d'` kurulumsuz çalışır (`p3d guide scripts`) |
-| `dev [--port N …]` | P3D sunucusunu (`npm run dev`) hangi klasörden çağrılırsa çağrılsın P3D deposunda başlatır; zaten çalışıyorsa söyler. Uzun süre çalışır: Claude Code'da arka planda başlatın |
+| `dev [--port N …] [--detach]` | P3D sunucusunu (`npm run dev`) hangi klasörden çağrılırsa çağrılsın P3D deposunda başlatır; zaten çalışıyorsa söyler. Ön planda uzun süre çalışır (Claude Code'da arka planda başlatın; çıktısı boruya bağlanırsa — `\| head` — boru kapanınca sunucu da kapanır). `--detach`: terminalden bağımsız başlatır, `/api/status` yanıt verince döner (~3 sn); çıktı geçici klasörde `p3d-dev-<port>.log`, PID `p3d-dev-<port>.json`; oturum kapansa da çalışır, `p3d stop` ile durdurun |
+| `stop [--port N]` | Portta (varsayılan `P3D_URL`'nin portu, 5173) çalışan P3D sunucusunu durdurur: ayrık başlatılanın süreç ağacı ve portu dinleyen süreç (ön planda başlatılan, yetim kalan `npm run dev` alt süreci; Windows `taskkill /T`). Yalnızca `/api/status`'ü P3D gibi yanıtlayan sunucu durdurulur; sunucu yoksa söyler (çıkış 0) |
 | `guide [konu]` | Bu rehber; konu yoksa giriş ve konu listesi |
 | `skill install` | Kullanıcı düzeyindeki Claude Code skill'ini (`~/.claude/skills/p3d`) kurar/günceller; içine bu makinedeki P3D yolunu yazar. P3D güncellenip skill kaynağı değişince yeniden çalıştırın (`status` uyarır) |
 
