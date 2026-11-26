@@ -4,7 +4,7 @@ Kör çizmeyin: anlamlı her adımdan sonra görün ve ölçün. Bir model bitti
 
 | Komut | Ne verir | Ne zaman |
 |---|---|---|
-| `p3d snapshot [--views iso,front,back,left,right,top,bottom] [--size 1000x750] [--style shaded\|wire\|xray] [--projection perspective\|ortho] [--out klasör]` | PNG yolları; dosyaları Read ile açıp bakın. Kenar 200–4096 piksel (aşan boyut orantılı küçültülür, uyarılır) | Her anlamlı adımdan sonra |
+| `p3d snapshot [--views iso,front,back,left,right,top,bottom] [--size 1000x750] [--style shaded\|wire\|xray] [--projection perspective\|ortho] [--parts a,b \| --focus a,b] [--out klasör]` | PNG yolları; dosyaları Read ile açıp bakın. Kenar 200–4096 piksel (aşan boyut orantılı küçültülür, uyarılır) | Her anlamlı adımdan sonra |
 | `p3d measure [--parts a,b]` | Parça başına **delikler uygulanmış** kutu ve hacim; toplam **birleşik** (union) hacim ve PLA tahmini | Ölçü/hacim hedefi varken, orijinalle karşılaştırırken (birleşik hacmi kullanın) |
 | `p3d check [--profile print\|game]` | Z-fighting (aynı düzlemde üst üste yüzeyler; başka bir opak katının içinde kalan örtüşme sayılmaz — hiç görünmez, saydam parça örtmez; ileti görünen örtüşme alanını yazar, ince şeritte "kıl payı" der: değmesi gereken iki parçanın ortak noktaları birebir aynı değil — yuvarlama, teğet kırığı; ortak noktaları aynı değerlerle verin), boolean hataları, hiçbir şeyi kesmeyen delikler, ince parçalar, tabla teması; game: üçgen bütçesi, bozuk üçgen, görünmeyen (başka katının içinde kalan) üçgen sayısı (`export --cull-hidden` atar); hata varsa çıkış kodu 1 | Her bitmiş modelde |
 | `p3d section --axis x\|y\|z --at a,b [--parts …] [--file ref.stl] [--tol 0.1]` | Kesit çokgenleri ([y,z] / [x,z] / [x,y]); alan negatifse iç boşluk | Referanstan ölçerken, iç yapıyı kontrol ederken |
@@ -17,6 +17,10 @@ Kör çizmeyin: anlamlı her adımdan sonra görün ve ölçün. Bir model bitti
   kameradır (`camera.png`): `--target` (yoksa kutu merkezi) ve `--fov` (dikey derece, 10–120, varsayılan 50). Oyun nesnelerini
   oyuncunun gözünden görmek için: ör. kart `--eye-height 700`, yaya `--eye-height 1700`; nesneye 5–10 m uzaktan
   `--eye 0,-8000,1000 --target 0,0,800`. `--eye` / `--eye-height` verilip `--views` verilmezse yalnızca o görüntü çekilir.
+- **Odaklı görüntü:** büyük sahnede küçük parça birkaç piksel kalır. `--parts a,b` yalnızca bu parçaları (ya da grupların
+  görünür üyelerini) çizer ve kadraja alır (diğerleri, delikler ve eskiz o görüntüde gizli; montajın içindeki parçayı görmek için);
+  `--focus a,b` kadrajı bunlara daraltır, diğer parçalar bağlam olarak çizilir (önde kalan parça örtebilir). Ör.
+  `p3d snapshot --file araba.p3d.json --focus teker_on_sol --views iso,front`. Bulunamayan ad hata verir.
 - **Tel kafes (`--style wire`) ve X-ışını (`--style xray`):** gölgeli görüntü kırılım çizgilerini gösterir, üçgenleri göstermez.
   Üçgen topolojisine bakmak gerektiğinde tel kafes alın: düşük poligonlu oyun varlığı (yuvarlakların segment sayısı, `maxTris`
   bütçesiyle sadeleşmiş gövde, iğne üçgen, delik kesiminin bıraktığı uzun üçgen yelpazeleri), `export --cull-hidden` ile ayıklanmış

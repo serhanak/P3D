@@ -25,6 +25,7 @@
 //   p3d snapshot [--views iso,front,right,top] [--size 1000x750] [--dims] [--out klasör] [--style shaded|wire|xray]
 //                [--projection perspective|ortho]   ortho: iso ve camera da dik izdüşüm (eye perspektif kalır)
 //                [--eye x,y,z] [--target x,y,z] [--fov 50] [--eye-height 1000]   perspektif (camera / eye görünümü)
+//                [--parts a,b | --focus a,b]   yalnızca bu parçalar (kadraj dahil) / kadraj bunlara, diğerleri bağlam
 //   p3d import <dosya.stl|obj|3mf|glb> [--name ad] [--role solid|hole|reference] [--color #hex]
 //              [--max-tris N] [--keep-position]   (parçaya kaynak yolu src olarak yazılır; sınır GLB'de 1 000 000, diğerlerinde 60 000)
 //
@@ -94,6 +95,7 @@ import {
 } from '../shared/ops.ts';
 import type { CheckOptions } from '../src/check.ts';
 import type { Project } from '../src/types.ts';
+import { fold } from '../src/text.ts';
 import { resolveWorkspace, rootGuardError, samePath, type WorkspaceChoice } from './config.ts';
 
 const base = (process.env.P3D_URL || 'http://localhost:5173').replace(/\/$/, '');
@@ -150,7 +152,7 @@ const has = (name: string) => rest.includes(name);
 const list = (name: string) => flag(name)?.split(',').map((s) => s.trim()).filter(Boolean);
 
 const VALUE_FLAGS = new Set([
-  '--label', '--views', '--size', '--out', '--name', '--role', '--color', '--max-tris', '--parts', '--axis', '--at', '--file',
+  '--label', '--views', '--size', '--out', '--name', '--role', '--color', '--max-tris', '--parts', '--focus', '--axis', '--at', '--file',
   '--tol', '--ops', '--profile', '--units', '--normals', '--sample', '--eye', '--target', '--fov', '--eye-height', '--style',
   '--projection',
 ]);
@@ -721,14 +723,17 @@ function writeSnapshots(r: BridgeResult, req: SnapshotOptions): void {
   }
   for (const m of r.errors) console.log(`✕ ${m}`);
   if (r.errors.length || !r.images?.length) process.exitCode = 1;
-  const box = r.scene.parts.filter((p) => p.visible && p.role !== 'hole').reduce(
+  // Kadraj kutusu: seçim (--parts / --focus) varsa yalnızca o parçalar (ad ya da grup adı; sekmedeki kuralla aynı).
+  const sel = (req.parts ?? req.focus)?.map((n) => fold(n).trim());
+  const picked = (p: SceneSummaryPart) => !sel || sel.includes(fold(p.name).trim()) || (p.group !== undefined && sel.includes(fold(p.group).trim()));
+  const box = r.scene.parts.filter((p) => p.visible && p.role !== 'hole' && picked(p)).reduce(
     (b, p) => ({
       min: { x: Math.min(b.min.x, p.bbox.min.x), y: Math.min(b.min.y, p.bbox.min.y), z: Math.min(b.min.z, p.bbox.min.z) },
       max: { x: Math.max(b.max.x, p.bbox.max.x), y: Math.max(b.max.y, p.bbox.max.y), z: Math.max(b.max.z, p.bbox.max.z) },
     }),
     { min: { x: Infinity, y: Infinity, z: Infinity }, max: { x: -Infinity, y: -Infinity, z: -Infinity } },
   );
-  if (Number.isFinite(box.min.x)) console.log(`görünür kutu: ${vec(box.min)} → ${vec(box.max)} (dik görünümler bu kutuya %6 payla sığdırılır)`);
+  if (Number.isFinite(box.min.x)) console.log(`${sel ? 'seçimin kutusu' : 'görünür kutu'}: ${vec(box.min)} → ${vec(box.max)} (dik görünümler bu kutuya %6 payla sığdırılır)`);
 }
 
 /**
@@ -780,6 +785,10 @@ function snapshotRequest(): { action: 'snapshot'; snapshot: SnapshotOptions } {
   if (style !== undefined && !(VIEW_STYLES as readonly string[]).includes(style)) {
     throw new Error(`Bilinmeyen --style: ${style} (olanlar: ${VIEW_STYLES.join(', ')}; tel kafes: wire, arkadakiler dahil: xray).`);
   }
+  // Seçim (BoltRush #4): --parts yalnızca bu parçaları çizer ve kadraja alır, --focus kadrajı bunlara daraltır (diğerleri bağlam).
+  const parts = list('--parts');
+  const focus = list('--focus');
+  if (parts?.length && focus?.length) throw new Error('--parts (yalnızca bu parçalar) ile --focus (bu parçalara sığdır) birlikte verilmez.');
   return {
     action: 'snapshot',
     snapshot: {
@@ -789,6 +798,8 @@ function snapshotRequest(): { action: 'snapshot'; snapshot: SnapshotOptions } {
       ...(hasCamera ? { camera } : {}),
       ...(style ? { style: style as ViewStyle } : {}),
       ...(projection ? { projection: projection as SnapshotProjection } : {}),
+      ...(parts?.length ? { parts } : {}),
+      ...(focus?.length ? { focus } : {}),
     },
   };
 }
@@ -1033,6 +1044,7 @@ const USAGE = [
   '           [--style shaded|wire|xray]   biçim: gölgeli (varsayılan) / tel kafes / X-ışını',
   '           [--projection perspective|ortho]   ortho: iso ve camera da dik izdüşüm (eye perspektif kalır)',
   '           [--eye x,y,z] [--target x,y,z] [--fov 50] [--eye-height 1000]   perspektif: camera (göz konumu) / eye (göz hizası)',
+  '           [--parts a,b | --focus a,b]   odak: yalnızca bu parçalar / kadraj bunlara (diğerleri bağlam); ad ya da grup adı',
   '  import <dosya.stl|obj|3mf|glb> [--name ad] [--role solid|hole|reference] [--color #hex] [--max-tris N] [--keep-position]',
   '         (--max-tris varsayılanı GLB 1 000 000, diğerleri 60 000)',
   '',
@@ -1069,6 +1081,7 @@ const HELP_NOTES: Record<string, string[]> = {
     'Biçimler (--style): shaded (gölgeli, varsayılan) · wire (tel kafes: her üçgen kenarı, arkadakiler gizli) · xray (X-ışını: arkadakiler dahil tüm kenarlar, parça renginde).',
     'İzdüşüm (--projection): perspective (varsayılan: iso perspektif 30°, dik görünümler orto) · ortho (iso ve camera da dik izdüşüm, kutuyu çerçeveler; eye ve --fov ile kullanılamaz).',
     'Ortoda camera: --eye → --target (yoksa kutu merkezi) yalnızca bakış yönünü verir; çerçeve her zaman görünür kutuya oturur.',
+    'Odak: --parts a,b yalnızca bu parçaları çizer ve kadraja alır (diğerleri, delikler, eskiz gizli); --focus a,b kadrajı bunlara daraltır, diğerleri bağlam. Ad: parça ya da grup adı.',
   ],
   dev: [
     'Bayraklar: --llm auto|api|claude-cli|off · --bridge / --no-bridge · --port N · --host adres · --model id · --effort düzey · --claude-bin yol',

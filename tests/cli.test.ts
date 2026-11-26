@@ -132,6 +132,8 @@ describe('p3d run', () => {
     expect(err('--projection', 'ortho', '--eye-height', '700')).toContain('--projection ortho ile kullanılamaz');
     expect(err('--projection', 'ortho', '--eye', '0,-500,200', '--fov', '40')).toContain('Ortoda --fov anlamsız');
     expect(err('--projection', 'ortografik', '--file', 'alt/kup.obj')).toContain('Bilinmeyen --projection: ortografik');
+    // Seçim (BoltRush #4): --parts ile --focus birlikte verilmez.
+    expect(err('--parts', 'a', '--focus', 'b')).toContain('--parts (yalnızca bu parçalar) ile --focus (bu parçalara sığdır) birlikte verilmez');
   }, 60_000);
 
   it('--help sunucu ve sekme denetiminden önce yanıtlanır (BoltRush isteği #22)', () => {

@@ -717,6 +717,13 @@ export interface SnapshotOptions {
   style?: ViewStyle;
   /** İzdüşüm; yoksa `perspective`. Arayüzdeki kamera tipinden bağımsızdır. */
   projection?: SnapshotProjection;
+  /**
+   * Yalnızca bu parçalar (ad ya da grup adı; büyük/küçük harf ve aksan duyarsız) çizilir ve kadraja alınır; diğerleri ve eskiz
+   * görüntüde gizlenir (BoltRush #4). `focus` ile birlikte verilmez.
+   */
+  parts?: string[];
+  /** Kamera yalnızca bu parçalara (ad ya da grup adı) sığar; diğer parçalar bağlam olarak çizilir. */
+  focus?: string[];
 }
 
 /** Sunucudan tarayıcıya giden komut. */

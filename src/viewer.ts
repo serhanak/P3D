@@ -13,7 +13,7 @@ import {
   type ViewStyle,
 } from '../shared/ops';
 import { orthoDepth, orthoFrameCamera, perspDistanceFor, toOrthoHeight, toPerspDistance, viewLimits, type OrthoDepth } from './camera-math';
-import { partBox, partsBox } from './engine';
+import { findGroup, findPartExact, partBox, partsBox } from './engine';
 import { isScanLike } from './geom';
 import { displayOpacity, roleOf, solidGeometry, solidKey } from './model';
 import { SHAPE_DEFS, bboxDims } from './shapes';
@@ -63,6 +63,28 @@ const XRAY_OPACITY = 0.8;
 const WIRE_WARN_TRIS = 500_000;
 
 /** X-ışını çizgi rengi: parça rengi, koyu tabla/arka planda okunsun diye açıklığı en az 0,6 (seçiliyse 0,78). */
+/**
+ * Görüntü seçimi (`SnapshotOptions.parts` / `focus`): her ad bir parçanın tam adı ya da bir grubun adı (büyük/küçük harf ve
+ * aksan duyarsız; `export --parts` ile aynı kural). Yalnızca görünür, delik olmayan parçalar; bulunamayan ad hatadır.
+ */
+function snapshotSelection(project: Project, visible: Part[], names: string[]): Part[] {
+  const keep = new Set<Part>();
+  for (const ref of names) {
+    const p = findPartExact(project, ref, { selectedId: null, lastPartId: null });
+    if (p) {
+      if (!visible.includes(p)) throw new Error(`'${p.name}' görünür bir parça değil (gizli ya da delik); görüntüye alınamaz.`);
+      keep.add(p);
+      continue;
+    }
+    const g = findGroup(project, ref);
+    if (!g) throw new Error(`'${ref}' adında parça ya da grup bulunamadı.`);
+    const members = visible.filter((v) => v.group === g.name);
+    if (!members.length) throw new Error(`'${g.name}' grubunun görünür parçası yok.`);
+    for (const m of members) keep.add(m);
+  }
+  return visible.filter((p) => keep.has(p));
+}
+
 function xrayColor(color: string | number, selected: boolean): THREE.Color {
   const c = new THREE.Color(color);
   const hsl = c.getHSL({ h: 0, s: 0, l: 0 }, THREE.SRGBColorSpace);
@@ -804,16 +826,24 @@ export class Viewer {
    * Görünür parçaların dik izdüşüm (ön/arka/sol/sağ/üst/alt) ve izometrik görüntüleri, PNG data URL.
    * Kullanıcının kamerası değişmez; yalnızca tuval boyutu bir anlığına değişir. CSS etiketleri (isimler,
    * ölçü yazıları) görüntüye girmez. Görünür eskiz (yollar, oklar, işaretler, WebGL adları) görüntüye girer ve kadraja
-   * katılır; kalem yardımcıları (ızgara, kılavuz, taslak, seçim vurgusu, tutamaçlar) gizlenir.
+   * katılır; kalem yardımcıları (ızgara, kılavuz, taslak, seçim vurgusu, tutamaçlar) gizlenir. `parts`: yalnızca bu parçalar
+   * çizilir ve kadraja alınır (eskiz dahil diğerleri gizli); `focus`: kadraj yalnızca bunlara, diğerleri bağlam (BoltRush #4).
    */
   snapshot(project: Project, opts: SnapshotOptions): { view: SnapshotView; png: string }[] {
     const visible = project.parts.filter((p) => p.visible && roleOf(p) !== 'hole');
-    // Tek nokta / düz çizgi kutusu sıfır boyutlu olmasın (dik izdüşüm kadrajı).
-    const sk = this.sketch.visibleBox()?.expandByScalar(1) ?? null;
-    const box = visible.length
-      ? partsBox(visible, project.settings.resolution)
+    const only = opts.parts?.length ? snapshotSelection(project, visible, opts.parts) : null;
+    const focus = only ?? (opts.focus?.length ? snapshotSelection(project, visible, opts.focus) : null);
+    // Tek nokta / düz çizgi kutusu sıfır boyutlu olmasın (dik izdüşüm kadrajı). Seçimde eskiz kadraja katılmaz.
+    const sk = focus ? null : (this.sketch.visibleBox()?.expandByScalar(1) ?? null);
+    const framed = focus ?? visible;
+    const box = framed.length
+      ? partsBox(framed, project.settings.resolution)
       : (sk?.clone() ?? new THREE.Box3(new THREE.Vector3(-50, -50, 0), new THREE.Vector3(50, 50, 10)));
-    if (visible.length && sk) box.union(sk);
+    if (framed.length && sk) box.union(sk);
+    // `parts`: seçilmeyen parçalar (delikler dahil) ve eskiz yalnızca görüntü süresince gizlenir.
+    const keep = only ? new Set(only.map((p) => p.id)) : null;
+    const hidden = keep ? [...this.entries].filter(([id, e]) => !keep.has(id) && e.group.visible).map(([, e]) => e) : [];
+    const prevSketch = this.sketch.root.visible;
     const prevSize = this.renderer.getSize(new THREE.Vector2());
     const prevRatio = this.renderer.getPixelRatio();
     const prevSel = this.selBox.visible;
@@ -830,6 +860,8 @@ export class Viewer {
       this.renderer.setPixelRatio(1);
       this.renderer.setSize(opts.width, opts.height, false);
       this.sketch.setSnapshotMode(true);
+      for (const e of hidden) e.group.visible = false;
+      if (keep) this.sketch.root.visible = false;
       for (const view of opts.views) {
         this.renderer.render(this.scene, this.snapshotCamera(view, box, opts.width / opts.height, opts.camera, opts.projection));
         out.push({ view, png: this.renderer.domElement.toDataURL('image/png') });
@@ -840,6 +872,8 @@ export class Viewer {
       this.selBox.visible = prevSel;
       [...this.entries.values()].forEach((e, i) => (e.dims.visible = prevDims[i]));
       this.sketch.setSnapshotMode(false);
+      for (const e of hidden) e.group.visible = true;
+      this.sketch.root.visible = prevSketch;
       if (restyle) for (const e of this.entries.values()) this.applyLook(e, this.viewStyle);
     }
     return out;

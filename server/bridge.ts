@@ -158,6 +158,11 @@ function snapshotOptions(raw: unknown): SnapshotOptions {
     if (o.views.includes('eye')) throw new BridgeError(400, 'eye görünümü göz hizasından perspektiftir; projection "ortho" ile kullanılamaz.');
     if (o.views.includes('camera') && !camera?.eye) throw new BridgeError(400, 'camera görünümü göz konumu (camera.eye) ister; ortoda da.');
   }
+  // Seçim: ad listesi (boş adlar atılır); parts ile focus birlikte anlamsız.
+  const names = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '') : []);
+  const parts = names(o.parts);
+  const focus = names(o.focus);
+  if (parts.length && focus.length) throw new BridgeError(400, 'parts (yalnızca bu parçalar) ile focus (bu parçalara sığdır) birlikte verilmez.');
   return {
     views: views.length ? views : ['iso', 'front', 'right', 'top'],
     width,
@@ -166,6 +171,8 @@ function snapshotOptions(raw: unknown): SnapshotOptions {
     ...(camera ? { camera } : {}),
     ...(style ? { style } : {}),
     ...(projection ? { projection } : {}),
+    ...(parts.length ? { parts } : {}),
+    ...(focus.length ? { focus } : {}),
   };
 }
 

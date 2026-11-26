@@ -352,6 +352,16 @@ describe('köprü: çalışma alanları', () => {
     expect(t.commands.length).toBe(sent);
     // Göz konumlu camera ortoda geçer.
     expect(await snap({ views: ['camera'], projection: 'ortho', camera: { eye: { x: 1, y: -1, z: 1 } } })).toMatchObject({ views: ['camera'], projection: 'ortho' });
+    // Seçim (BoltRush #4): parts / focus ad listesi iletilir (boş ve dize olmayan atılır); ikisi birlikte 400.
+    expect(await snap({ views: ['iso'], parts: ['vida', '', 3] })).toMatchObject({ parts: ['vida'] });
+    expect(await snap({ views: ['iso'], focus: ['bağlantı'] })).toMatchObject({ focus: ['bağlantı'] });
+    const plain = await snap({ views: ['iso'], parts: [] });
+    expect('parts' in plain || 'focus' in plain).toBe(false);
+    const before = t.commands.length;
+    const both = await api('POST', '/api/bridge/ops', { ws: 'snap-izdusum', action: 'snapshot', snapshot: { views: ['iso'], parts: ['a'], focus: ['b'] } });
+    expect(both.status).toBe(400);
+    expect((both.data as { error: string }).error).toContain('birlikte verilmez');
+    expect(t.commands.length).toBe(before);
   });
 
   it('/workspaces bağlı sekmeleri ve son sahneyi listeler', async () => {
