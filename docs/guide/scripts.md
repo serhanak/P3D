@@ -63,10 +63,10 @@ console.log(new THREE.Vector3(width, 60, 30).length(), issues);
   Hatalar (bulunamayan `parts` adı, yüklenemeyen parça) `r.errors`'tadır; geçersiz seçenek (bilinmeyen görünüm, `parts` +
   `focus`) istisna atar. Oturumu her durumda `close()` ile kapatın (geçici sunucu ve tarayıcı kalmasın).
 - **Aileyi tek sahnede görmek** (`gridProjects`, `combineProjects`): her varyantı kendi projesinde kurun, sonra birleştirin — işlem
-  listelerini kopyalayıp ad öneki eklemek ve konum kaydırmak gerekmez. Birleşik sahnede parça ve grup adları `önek/ad`, kimlikler yeni,
-  konumlar ve grup pivotları ötelenmiş; `cuts`'ı olmayan deliklere kaynakta kestikleri katılar `cuts` olarak yazılır (komşu
-  varyantı kesmez, her varyantın sonucu aynen kalır); proje çözünürlüğü farklı kaynağın yuvarlak parçalarına kaynağınki parça
-  `resolution`'ı olarak yazılır; tabla sahneyi alacak kadar büyür; eskiz alınmaz. Aynı önek (ad çakışması) hatadır.
+  listelerini kopyalayıp ad öneki eklemek ve konum kaydırmak gerekmez. Birleşik sahnede parça, grup ve üst grup (`parent`) adları
+  `önek/ad`, kimlikler yeni, konumlar ve grup pivotları ötelenmiş; `cuts`'ı olmayan deliklere kaynakta kestikleri katılar `cuts`
+  olarak yazılır (komşu varyantı kesmez, her varyantın sonucu aynen kalır); proje çözünürlüğü farklı kaynağın yuvarlak parçalarına
+  kaynağınki parça `resolution`'ı olarak yazılır; tabla sahneyi alacak kadar büyür; eskiz alınmaz. Aynı önek (ad çakışması) hatadır.
   ```ts
   import { gridProjects, combineProjects, snapshot } from 'p3d';
   const aile = [40, 60, 80].map(kur);   // her biri applyOps ile kurulmuş Project (adı önek olur: proje adı)

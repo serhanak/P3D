@@ -157,7 +157,9 @@ tests/               parser.test.ts (ayrıştırıcı+motor), io.test.ts (OBJ ma
                      cull.test.ts (gizli üçgen ayıklama), decal.test.ts (kaplama şekli: ağ, yerleşim, dışa aktarım, check),
                      glb-read.test.ts (GLB okuma: P3D GLB gidiş-dönüşü — m/mm, iskelet, ayıklama; el yapımı GLB: strip/fan,
                      byteStride, düğüm ağacı, ayna, skin, instancing; hata durumları; ağ dosyasından tek parçalı proje),
-                     camera-math.test.ts (perspektif ↔ orto ölçeği ve sınırları, ortoda derinlik/yakın düzlem, snapshot orto çerçevesi)
+                     camera-math.test.ts (perspektif ↔ orto ölçeği ve sınırları, ortoda derinlik/yakın düzlem, snapshot orto çerçevesi),
+                     nested-groups.test.ts (iç içe gruplar: group/ungroup, döngü, alt ağaç işlemleri, budama, dosya onarımı,
+                     GLB düğüm/eklem hiyerarşisi, birleştirme öneki, girişim gövdesi)
 examples/            Örnek .p3d.json projeleri (Aç… ile yüklenir); io.test.ts hepsinin onarımsız yüklendiğini doğrular
 examples/tools/      Örnek üreteçleri (tsx ile çalışır, tsconfig dışı): build-3dbenchy.ts referans STL'den Benchy'yi kurar
 docs/STATUS.md       Güncel durum, doğrulama durumu, bilinen sorunlar, yol haritası
@@ -246,9 +248,15 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
   (STATUS yol haritası 10).
 
 **Gruplar**
-- Üyelik parçada tutulur (`Part.group`), grup tanımı `Project.groups` (`{name, pivot}`); ikisi de opsiyoneldir, yoksa
-  `parseProject` alan eklemez. Boş grup tutulmaz (`pruneGroups`). Parça ve grup adları tek ad alanıdır (çakışamaz).
+- Üyelik parçada tutulur (`Part.group`, **doğrudan** grup), grup tanımı `Project.groups` (`{name, pivot, parent?}`); hepsi
+  opsiyoneldir, yoksa `parseProject` alan eklemez. Parça ve grup adları tek ad alanıdır (çakışamaz).
   Grup adı move/rotate/duplicate/mirror/delete/update(renk, görünürlük, saydamlık) işlemlerinde parça yerine geçer.
+- **İç içe gruplar:** `parent` üst grubun adıdır (yoksa en üst düzey); döngü olmaz. Bir grubun "parçaları" alt ağacındır
+  (kendisinin ve tüm alt gruplarının parçaları: `engine.groupParts`, alt gruplar `subgroups`); grup adıyla çalışan her yer
+  (işlemler, `export --parts` → `gltf.selectParts`, `snapshot --parts/--focus`, girişim `--parts`) alt ağacı kullanır. Alt
+  ağacında parça kalmayan grup tutulmaz; var olmayan gruba işaret eden `parent` bir üste bağlanır ya da kalkar, döngü kırılır
+  (`pruneGroups`; `parseProject` da uyarıyla onarır). GLB'de alt grup düğümü/eklemi üst grubunkinin çocuğudur (çevirisi
+  pivot farkı); iç içe olmayan projede GLB çıktısı değişmez. Girişimde `byGroup` gövdesi parçanın doğrudan grubudur.
 
 **Parça görünüşü: saydamlık ve çözünürlük**
 - `Part.opacity` (0–1, yalnızca < 1 iken saklanır) **yalnızca görseldir**: dışa aktarımı, hacmi, `check`'i ve deliği etkilemez

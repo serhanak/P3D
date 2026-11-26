@@ -308,6 +308,19 @@ describe('tarayıcısız komutlar (--file)', () => {
     expect(out).not.toMatch(/govde .*grup=/);
   }, 60_000);
 
+  it('scene --file: iç içe gruplar ağaç olarak (girinti, üst grup, alt ağaç parça sayısı)', () => {
+    const ops = [
+      ...OPS,
+      { op: 'create', shape: 'box', name: 'amortisor', params: [{ name: 'width', value: 2 }, { name: 'depth', value: 2 }, { name: 'height', value: 8 }], position: { x: -12, y: -12, z: 14 } },
+      { op: 'group', name: 'kose', parts: ['teker', 'amortisor'], pivot: { x: -12, y: -12, z: 10 } },
+    ];
+    writeFileSync(path.join(dir, 'ic-ice-ops.json'), JSON.stringify(ops));
+    expect(p3dRun(['apply', '--file', 'ic-ice.p3d.json', '--ops', 'ic-ice-ops.json', '--new'], dir).code).toBe(0);
+    const out = p3d(['scene', '--file', 'ic-ice.p3d.json'], dir);
+    expect(out).toContain('gruplar (2):\n  kose pivot=-12,-12,10 · 1 parça, 1 alt grup (alt ağaçta 2 parça)\n    teker pivot=-12,-12,6 · 1 parça · üst: kose');
+    expect(out).toMatch(/ teker1 \[cylinder\].* grup=teker \|/);
+  }, 60_000);
+
   it('scene --file: saydamlık ve parça çözünürlüğü yalnızca ayarlıyken satırda; bozuk değer uyarıyla onarılır', () => {
     const ops = [
       { op: 'create', shape: 'box', name: 'cam', opacity: 0.5, position: { x: 0, y: 0, z: 10 } },

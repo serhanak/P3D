@@ -13,7 +13,7 @@ import {
   type ViewStyle,
 } from '../shared/ops';
 import { orthoDepth, orthoFrameCamera, perspDistanceFor, toOrthoHeight, toPerspDistance, viewLimits, type OrthoDepth } from './camera-math';
-import { findGroup, findPartExact, partBox, partsBox } from './engine';
+import { findGroup, findPartExact, partBox, partsBox, subtreeGroupNames } from './engine';
 import { isScanLike } from './geom';
 import { displayOpacity, roleOf, solidGeometry, solidKey } from './model';
 import { SHAPE_DEFS, bboxDims } from './shapes';
@@ -62,10 +62,10 @@ const XRAY_OPACITY = 0.8;
 /** Tel kafes / X-ışını açılırken görünür üçgen sayısı bunu aşarsa bir kez "yavaş olabilir" uyarısı (engellemez). */
 const WIRE_WARN_TRIS = 500_000;
 
-/** X-ışını çizgi rengi: parça rengi, koyu tabla/arka planda okunsun diye açıklığı en az 0,6 (seçiliyse 0,78). */
 /**
  * Görüntü seçimi (`SnapshotOptions.parts` / `focus`): her ad bir parçanın tam adı ya da bir grubun adı (büyük/küçük harf ve
- * aksan duyarsız; `export --parts` ile aynı kural). Yalnızca görünür, delik olmayan parçalar; bulunamayan ad hatadır.
+ * aksan duyarsız; grupta alt grupların parçaları dahil; `export --parts` ile aynı kural). Yalnızca görünür, delik olmayan
+ * parçalar; bulunamayan ad hatadır.
  */
 function snapshotSelection(project: Project, visible: Part[], names: string[]): Part[] {
   const keep = new Set<Part>();
@@ -78,13 +78,16 @@ function snapshotSelection(project: Project, visible: Part[], names: string[]): 
     }
     const g = findGroup(project, ref);
     if (!g) throw new Error(`'${ref}' adında parça ya da grup bulunamadı.`);
-    const members = visible.filter((v) => v.group === g.name);
+    // Alt ağacın tamamı: grubun ve tüm alt gruplarının görünür üyeleri.
+    const names = subtreeGroupNames(project, g.name);
+    const members = visible.filter((v) => v.group !== undefined && names.has(v.group));
     if (!members.length) throw new Error(`'${g.name}' grubunun görünür parçası yok.`);
     for (const m of members) keep.add(m);
   }
   return visible.filter((p) => keep.has(p));
 }
 
+/** X-ışını çizgi rengi: parça rengi, koyu tabla/arka planda okunsun diye açıklığı en az 0,6 (seçiliyse 0,78). */
 function xrayColor(color: string | number, selected: boolean): THREE.Color {
   const c = new THREE.Color(color);
   const hsl = c.getHSL({ h: 0, s: 0, l: 0 }, THREE.SRGBColorSpace);

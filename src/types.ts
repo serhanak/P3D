@@ -20,7 +20,10 @@ export interface Part {
   role?: Role;
   /** Delik parçası için: yalnızca bu parçaları (id) keser. Yoksa kutusu kesişen tüm katıları keser. */
   cuts?: string[];
-  /** Üyesi olduğu grubun adı (`Project.groups`); yoksa gruplanmamış. Bir parça yalnızca bir grupta olabilir. */
+  /**
+   * Doğrudan üyesi olduğu grubun adı (`Project.groups`); yoksa gruplanmamış. Bir parça yalnızca bir grupta olabilir; o grubun
+   * üst grupları (`GroupDef.parent`) parçayı dolaylı olarak içerir.
+   */
   group?: string;
   /**
    * Görsel saydamlık (0–1; 0 = tamamen saydam). Yoksa 1 (opak); yalnızca < 1 iken tutulur. Yalnızca görünüm ve malzemedir
@@ -39,7 +42,7 @@ export interface Project {
   version: 1;
   name: string;
   parts: Part[];
-  /** Parça grupları (ad + pivot). Yoksa grup yok; boş dizi tutulmaz. */
+  /** Parça grupları (ad + pivot + iç içe gruplarda üst grup `parent`). Yoksa grup yok; boş dizi tutulmaz. */
   groups?: GroupDef[];
   /**
    * Kullanıcının çizdiği eskiz yolları (niyet verisi: geometri üretmez, dışa aktarılmaz, check'e girmez; bkz. sketch.ts).

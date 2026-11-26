@@ -1,7 +1,7 @@
 // Projeleri tek sahnede birleştirme (BoltRush isteği #1): parça ailesini / varyantları yan yana görmek için. Her kaynak kendi
-// projesinde kurulur (applyOps), sonra bitmiş projeler birleştirilir: parça ve grup adlarına önek (`önek/ad`), konumlara ve grup
-// pivotlarına öteleme, yeni kimlikler. İşlem listelerini yeniden adlandırmaktan sağlamdır ($last, place_on hedefleri, cuts adla
-// değil sonuçla taşınır).
+// projesinde kurulur (applyOps), sonra bitmiş projeler birleştirilir: parça, grup ve üst grup (`parent`) adlarına önek
+// (`önek/ad`), konumlara ve grup pivotlarına öteleme, yeni kimlikler. İşlem listelerini yeniden adlandırmaktan sağlamdır ($last,
+// place_on hedefleri, cuts adla değil sonuçla taşınır).
 //
 // Delikler: `cuts`'ı olmayan delik kutusu kesişen tüm katıları keser; birleşik sahnede komşu kaynağın katısına değerse onu da
 // keserdi. Bu yüzden böyle deliklere kaynak projede kestikleri katılar `cuts` olarak yazılır (her kaynağın sonucu aynen kalır).
@@ -73,7 +73,11 @@ export function combineProjects(entries: CombineEntry[], opts: CombineOptions = 
       out.parts.push(copy);
     }
     for (const g of src.groups ?? []) {
-      (out.groups ??= []).push({ name: take(named(g.name), 'grup'), pivot: { x: g.pivot.x + d.x, y: g.pivot.y + d.y, z: g.pivot.z + d.z } });
+      (out.groups ??= []).push({
+        name: take(named(g.name), 'grup'),
+        pivot: { x: g.pivot.x + d.x, y: g.pivot.y + d.y, z: g.pivot.z + d.z },
+        ...(g.parent !== undefined ? { parent: named(g.parent) } : {}),
+      });
     }
   });
   // Tabla birleşik sahneyi alsın (en çok 20 m).

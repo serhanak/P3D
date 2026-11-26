@@ -3,7 +3,7 @@ import { strToU8, zipSync } from 'fflate';
 import { SHAPES, isGeomShape, type MeshGeom } from '../shared/ops';
 import { getAsset, registerAsset, usedAssets } from './assets';
 import { isHexColor, normalizeHex } from './colors';
-import { applyOps, newId, partMatrix } from './engine';
+import { applyOps, groupsContaining, newId, partMatrix } from './engine';
 import { sanitizeGeom } from './geom';
 import { build3mf, buildStl, type ImportedMesh, type WorldMesh } from './meshio';
 import { unionGeometries } from './csg';
@@ -60,7 +60,8 @@ export function projectFromMesh(name: string, imp: ImportedMesh, source: Pick<Me
  * Okunamayan parçalar atlanır; `dropped` verilirse her biri için "ad: neden" eklenir (sessiz kayıp olmasın).
  * Okunamayan eskiz yolları da atlanır ama parça kaybı sayılmaz (niyet verisidir; yükleme durmasın): "eskiz 'ad' atlandı:
  * neden" `warnings` verilmişse oraya, verilmemişse `console.warn`'a yazılır. Parçanın bozuk saydamlık (`opacity`) ve
- * çözünürlük (`resolution`) değerleri onarılır ve aynı yolla bildirilir ("'ad': saydamlık (opacity) … yapıldı").
+ * çözünürlük (`resolution`) değerleri onarılır ve aynı yolla bildirilir ("'ad': saydamlık (opacity) … yapıldı"). Grubun
+ * geçersiz, bilinmeyen ya da döngü kuran üst grubu (`parent`) da aynı yolla bildirilerek kaldırılır (grup en üst düzey olur).
  */
 export function parseProject(data: unknown, dropped?: string[], warnings?: string[]): Project {
   if (!data || typeof data !== 'object') throw new Error('Geçersiz proje dosyası.');
@@ -95,23 +96,46 @@ export function parseProject(data: unknown, dropped?: string[], warnings?: strin
     const o = (v ?? {}) as Record<string, unknown>;
     return { x: num(o.x, 0, -1e5, 1e5), y: num(o.y, 0, -1e5, 1e5), z: num(o.z, 0, -1e5, 1e5) };
   };
-  // Gruplar: ad (benzersiz) + pivot. Üyesi olmayan grup atılır; alan yalnızca grup varsa eklenir.
+  // Onarılan (ama atlanmayan) alanlar ve eskiz yolları: `warnings` verilmişse oraya, verilmemişse console.warn'a.
+  const warn = (msg: string) => {
+    if (warnings) warnings.push(msg);
+    else console.warn(`[p3d] ${msg}`);
+  };
+
+  // Gruplar: ad (benzersiz) + pivot + üst grup (iç içe). Alt ağacında parça olmayan grup atılır; alan yalnızca grup varsa eklenir.
   const groups: GroupDef[] = [];
+  const rawParent = new Map<GroupDef, unknown>();
   if (Array.isArray(d.groups)) {
     for (const raw of d.groups) {
       const g = (raw ?? {}) as Record<string, unknown>;
       if (typeof g.name !== 'string' || !g.name.trim()) continue;
       const name = g.name.trim();
       if (groups.some((x) => fold(x.name) === fold(name))) continue;
-      groups.push({ name, pivot: vec(g.pivot) });
+      const def: GroupDef = { name, pivot: vec(g.pivot) };
+      groups.push(def);
+      if (g.parent !== undefined && g.parent !== null) rawParent.set(def, g.parent);
     }
   }
-
-  // Onarılan (ama atlanmayan) alanlar ve eskiz yolları: `warnings` verilmişse oraya, verilmemişse console.warn'a.
-  const warn = (msg: string) => {
-    if (warnings) warnings.push(msg);
-    else console.warn(`[p3d] ${msg}`);
-  };
+  // Üst grup: var olan bir grubun adı olmalı; geçersiz, bilinmeyen ya da döngü kuran parent uyarıyla atılır (grup en üst düzey olur).
+  for (const [def, parent] of rawParent) {
+    const name = typeof parent === 'string' ? parent.trim() : '';
+    // Ad motorun kuralıyla (büyük/küçük harf ve aksan duyarsız) eşlenir, grubun kendi yazımı saklanır.
+    const hit = name ? groups.find((x) => fold(x.name) === fold(name)) : undefined;
+    if (!name) warn(`grup '${def.name}': üst grup (parent) geçersiz (${JSON.stringify(parent)}); kaldırıldı.`);
+    else if (!hit) warn(`grup '${def.name}': üst grup (parent) '${name}' bulunamadı; kaldırıldı.`);
+    else def.parent = hit.name;
+  }
+  for (const def of groups) {
+    const seen = new Set<string>();
+    for (let p = def.parent; p !== undefined && !seen.has(p); p = groups.find((x) => x.name === p)?.parent) {
+      if (p === def.name) {
+        warn(`grup '${def.name}': üst grup (parent) '${def.parent}' döngü kuruyor; kaldırıldı.`);
+        delete def.parent;
+        break;
+      }
+      seen.add(p);
+    }
+  }
 
   const ids = new Set<string>();
   const parts = Array.isArray(d.parts) ? d.parts : [];
@@ -167,7 +191,12 @@ export function parseProject(data: unknown, dropped?: string[], warnings?: strin
       ...(resolution !== undefined ? { resolution } : {}),
     });
   });
-  const used = groups.filter((g) => base.parts.some((p) => p.group === g.name));
+  // Kullanılan gruplar: doğrudan üyesi olanlar ve onların üst grupları (alt ağacında parça olanlar).
+  const usedNames = new Set<string>();
+  for (const p of base.parts) {
+    for (let n = p.group; n !== undefined && !usedNames.has(n); n = groups.find((g) => g.name === n)?.parent) usedNames.add(n);
+  }
+  const used = groups.filter((g) => usedNames.has(g.name));
   if (used.length) base.groups = used;
   // Eskiz yolları (niyet verisi): okunamayan yol atlanır ve uyarı olarak bildirilir; alan yalnızca yol varsa eklenir.
   const sketch = sanitizeSketch(d.sketch, warn);
@@ -384,7 +413,7 @@ export function exportModel(kind: ExportKind, project: Project, selectedId: stri
     const skeleton = kind === 'glb-skeleton';
     const file = `${base}${skeleton ? '_iskelet' : ''}.glb`;
     download(file, buildGlb(project, { skeleton }) as BlobPart, 'model/gltf-binary');
-    const bones = (project.groups ?? []).filter((g) => visible.some((p) => p.group === g.name)).length;
+    const bones = groupsContaining(project, visible).size;
     return `${visible.length} parça → ${file}${skeleton ? ` (kök + ${bones} grup kemiği)` : ''}`;
   }
   if (kind === 'all-3mf') {

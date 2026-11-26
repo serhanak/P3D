@@ -4,10 +4,11 @@
 //
 // Gövdeler son (delikler çıkarılmış) dünya ağlarıdır (`worldMesh`); kaplamalar (kalınlıksız) ve görünmeyen/delik/referans parçalar
 // girmez. Yalnızca kutuları gerçekten kesişen çiftlerin kesişimi hesaplanır (manifold). `byGroup`: aynı gruptaki parçalar tek
-// gövdedir (grubun içindeki bilinçli gömmeler sayılmaz; gruplanmamış parça kendi başına). Kapalı olmayan ağlı gövde atlanır
-// (`skipped`).
+// gövdedir (grubun içindeki bilinçli gömmeler sayılmaz; gruplanmamış parça kendi başına). İç içe gruplarda gövde parçanın
+// **doğrudan** grubudur (en ince alt montaj: teker ile onu içeren köşe grubunun kendi parçaları ayrı gövdelerdir). Kapalı olmayan
+// ağlı gövde atlanır (`skipped`).
 import * as THREE from 'three';
-import { findGroup, findPartExact } from './engine';
+import { findGroup, findPartExact, subtreeGroupNames } from './engine';
 import { pairIntersections } from './csg';
 import { worldMesh } from './io';
 import { exportableParts, isDecal, solidBox } from './model';
@@ -15,9 +16,9 @@ import type { Part, Project } from './types';
 import type { Vec3 } from '../shared/ops';
 
 export interface InterferenceOptions {
-  /** Aynı gruptaki parçalar tek gövde (grup adıyla); gruplanmamış parça kendi adıyla. */
+  /** Aynı (doğrudan) gruptaki parçalar tek gövde (grup adıyla); gruplanmamış parça kendi adıyla. */
   byGroup?: boolean;
-  /** Yalnızca bu parçaları ya da grupları (ad) içeren çiftler. */
+  /** Yalnızca bu parçaları ya da grupları (ad; grupta alt ağacın tüm parçaları) içeren çiftler. */
   parts?: string[];
   /** Mutlak hacim eşiği (mm³; varsayılan 0,001). Ayrıca küçük gövdenin hacminin 1e-6'sı (float gürültüsü). */
   minVolume?: number;
@@ -74,7 +75,9 @@ export function interferences(project: Project, opts: InterferenceOptions = {}):
       const p = findPartExact(project, ref, ctx);
       const g = p ? undefined : findGroup(project, ref);
       if (!p && !g) throw new Error(`'${ref}' adında parça ya da grup bulunamadı.`);
-      const hit = bodies.filter((b) => b.parts.some((q) => (p ? q === p : q.group === g!.name)));
+      // Grup adı: alt ağacın tamamı (alt grupların parçaları dahil).
+      const names = g ? subtreeGroupNames(project, g.name) : null;
+      const hit = bodies.filter((b) => b.parts.some((q) => (p ? q === p : q.group !== undefined && names!.has(q.group))));
       if (!hit.length) throw new Error(`'${p?.name ?? g!.name}' görünür bir katı değil; girişim denetimine girmez.`);
       for (const b of hit) picked.add(b);
     }

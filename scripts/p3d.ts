@@ -527,12 +527,51 @@ function partLine(p: SceneSummaryPart, selected: string | null): string {
   );
 }
 
+/** Grubun ve üst gruplarının adları (sahne özetinden; döngüde durur). */
+function groupChain(s: SceneSummary, name: string | undefined): string[] {
+  const out: string[] = [];
+  for (let n = name; n !== undefined && !out.includes(n); n = s.groups?.find((g) => g.name === n)?.parent) out.push(n);
+  return out;
+}
+
+/** Grup başına alt ağaç parça sayısı (alt grupların parçaları dahil): her parçanın üst zinciri bir kez gezilir. */
+function subtreePartCounts(s: SceneSummary): Map<string, number> {
+  const parent = new Map((s.groups ?? []).map((g) => [g.name, g.parent]));
+  const counts = new Map<string, number>();
+  for (const p of s.parts) {
+    const seen = new Set<string>();
+    for (let n = p.group; n !== undefined && !seen.has(n); n = parent.get(n)) {
+      seen.add(n);
+      counts.set(n, (counts.get(n) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
 function printScene(s: SceneSummary): void {
   console.log(`tabla ${s.bed.x}×${s.bed.y} mm · ${s.parts.length} parça · seçili: ${s.selected ?? '-'}`);
   for (const p of s.parts) console.log(partLine(p, s.selected));
   if (s.groups?.length) {
-    console.log(`gruplar (${s.groups.length}):`);
-    for (const g of s.groups) console.log(`  ${g.name} pivot=${vec(g.pivot)} · ${s.parts.filter((p) => p.group === g.name).length} parça`);
+    // İç içe gruplar ağaç olarak: alt grup üstünün altında girintili, "üst: …" notuyla; parça sayısı doğrudan üyeler.
+    const groups = s.groups;
+    console.log(`gruplar (${groups.length}):`);
+    const known = new Set(groups.map((g) => g.name));
+    const printed = new Set<string>();
+    const totals = subtreePartCounts(s);
+    const directs = new Map<string, number>();
+    for (const p of s.parts) if (p.group !== undefined) directs.set(p.group, (directs.get(p.group) ?? 0) + 1);
+    const printGroup = (g: (typeof groups)[number], depth: number) => {
+      printed.add(g.name);
+      const subs = groups.filter((c) => c.parent === g.name && !printed.has(c.name));
+      const direct = directs.get(g.name) ?? 0;
+      const total = totals.get(g.name) ?? 0;
+      const extra = subs.length ? `, ${subs.length} alt grup (alt ağaçta ${total} parça)` : '';
+      const up = g.parent !== undefined ? ` · üst: ${g.parent}` : '';
+      console.log(`${'  '.repeat(depth + 1)}${g.name} pivot=${vec(g.pivot)} · ${direct} parça${extra}${up}`);
+      for (const c of subs) printGroup(c, depth + 1);
+    };
+    for (const g of groups) if (g.parent === undefined || !known.has(g.parent)) printGroup(g, 0);
+    for (const g of groups) if (!printed.has(g.name)) printGroup(g, 0); // bozuk (döngülü) veri: yine de listelensin
   }
   // Kullanıcının çizdiği eskiz yolları (niyet verisi; ayrıntı: p3d sketch).
   if (s.sketch?.length) {
@@ -736,9 +775,12 @@ function writeSnapshots(r: BridgeResult, req: SnapshotOptions): void {
   }
   for (const m of r.errors) console.log(`✕ ${m}`);
   if (r.errors.length || !r.images?.length) process.exitCode = 1;
-  // Kadraj kutusu: seçim (--parts / --focus) varsa yalnızca o parçalar (ad ya da grup adı; sekmedeki kuralla aynı).
+  // Kadraj kutusu: seçim (--parts / --focus) varsa yalnızca o parçalar (ad ya da grup adı — grupta alt grupların parçaları da;
+  // sekmedeki kuralla aynı).
   const sel = (req.parts ?? req.focus)?.map((n) => fold(n).trim());
-  const picked = (p: SceneSummaryPart) => !sel || sel.includes(fold(p.name).trim()) || (p.group !== undefined && sel.includes(fold(p.group).trim()));
+  const ids = new Set(req.parts ?? req.focus);
+  const picked = (p: SceneSummaryPart) =>
+    !sel || ids.has(p.id) || sel.includes(fold(p.name).trim()) || groupChain(r.scene, p.group).some((g) => sel.includes(fold(g).trim()));
   const box = r.scene.parts.filter((p) => p.visible && p.role !== 'hole' && picked(p)).reduce(
     (b, p) => ({
       min: { x: Math.min(b.min.x, p.bbox.min.x), y: Math.min(b.min.y, p.bbox.min.y), z: Math.min(b.min.z, p.bbox.min.z) },
@@ -878,9 +920,12 @@ async function snapshotFile(srcs: SourceFile[]): Promise<void> {
   let project = loadedAll[0].project;
   if (srcs.length > 1) {
     const { gridProjects } = await import('../src/combine.ts');
-    const prefix = (f: string) => path.basename(f).replace(/\.p3d\.json$/i, '').replace(/\.(stl|obj|3mf|glb)$/i, '');
+    const base = (f: string) => path.basename(f).replace(/\.p3d\.json$/i, '').replace(/\.(stl|obj|3mf|glb)$/i, '');
+    // Önek dosya adı; aynı adlı dosyalar (farklı klasörlerde) sıra numarasıyla ayrışır.
+    const names = srcs.map((s) => base(s.file));
+    const prefixes = names.map((n, i) => (names.filter((m) => fold(m) === fold(n)).length > 1 ? `${n} ${i + 1}` : n));
     const grid = gridProjects(
-      loadedAll.map((l, i) => ({ project: l.project, prefix: prefix(srcs[i].file) })),
+      loadedAll.map((l, i) => ({ project: l.project, prefix: prefixes[i] })),
       { name: 'ızgara', ...(columns !== undefined ? { columns } : {}), ...(gap !== undefined ? { gap } : {}) },
     );
     project = grid.project;
@@ -1354,7 +1399,9 @@ async function main(): Promise<void> {
     }
     case 'snapshot': {
       // Birden çok dosya (virgülle): ızgaraya dizilmiş tek sahne (BoltRush #1).
-      const many = flag('--file')?.split(',').map((s) => s.trim()).filter(Boolean);
+      // Adında virgül olan tek bir dosya ızgara sayılmaz.
+      const rawFile = flag('--file');
+      const many = rawFile !== undefined && !statOf(fromCaller(rawFile))?.isFile() ? rawFile.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
       if (many && many.length > 1) return snapshotFile(many.map((f) => sourceOf('snapshot', f)));
       const src = fileFlag('snapshot');
       if (src) return snapshotFile([src]);

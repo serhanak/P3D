@@ -33,6 +33,12 @@ biçimler. Bunlar gerekiyorsa GLB'yi Blender'da sürdürün.
 - **Simetri:** bir tarafı kurun, `mirror` ile kopyalayın (`p3d guide ops`).
 - **Birlikte hareket eden parçalar** (teker = lastik + jant + göbek) bir **grup**tur; grubun `pivot`u dönme merkezidir
   (göbek merkezi). Grup adı move/rotate/duplicate/mirror/delete'te parça yerine kullanılabilir.
+- **Gruplar iç içe olabilir** (montaj hiyerarşisi): `group` işleminin `parts` listesine bir grup adı yazılınca o grup alt grup olur.
+  Ör. `{"op":"group","name":"sol ön teker","parts":["lastik","jant","teller"],"pivot":{…göbek…}}`, sonra
+  `{"op":"group","name":"sol ön köşe","parts":["sol ön teker","amortisör"],"pivot":{…bağlantı noktası…}}`. Grup adıyla yapılan
+  işlem alt ağacın tamamına uygulanır: köşe döndürülünce teker de (pivotuyla birlikte) köşenin pivotu çevresinde döner; teker
+  döndürülünce yalnızca teker. `mirror`/`duplicate` alt ağacı kopyalar (kopya aynı üst grupta kalır; sol → sağ adları önekle:
+  `sol` grubunun `sol_teker` alt grubu `sag` adlı aynada `sag_teker` olur). `ungroup` içeriği bir üst gruba bırakır.
 - Sıra halindeki aynı parçalar: `duplicate` + `count` + `offset`.
 
 ## Dışa aktarım
@@ -46,8 +52,11 @@ p3d export araba.glb [--file model.p3d.json] [--units m|mm] [--normals flat|smoo
   (`opacity` < 1): alfa = `baseColorFactor[3]` (= opacity) ve `alphaMode: "BLEND"`, malzeme adı `P3D_rrggbb_aNN`
   (NN = opacity × 100); opak malzemelerde `alphaMode` yazılmaz (glTF varsayılanı OPAQUE). İskelet modunda primitifler de
   malzemeye (renk + saydamlık) göre ayrışır.
-- Düğümler: gruplanmamış parça = düğüm (çevirisi parçanın merkezi); grup = düğüm (çevirisi pivot), üyeleri çocuk.
-  Delikler uygulanmış haldedir; tamamen boşalan parça atlanır.
+- Düğümler: gruplanmamış parça = düğüm (çevirisi parçanın merkezi); grup = düğüm (çevirisi pivot), üyeleri çocuk (çevirisi
+  merkez − pivot). **İç içe gruplarda** alt grup düğümü üst grubun düğümünün çocuğudur, çevirisi kendi pivotu − üstün pivotu (her
+  düğümün dünya konumu yine kendi pivotu). Yalnızca alt ağacında dışa aktarılan parça olan gruplar yazılır; `--parts` ile bir alt
+  grup seçilince üst grupları da (boş kabuk düğüm olarak) yazılır, hiyerarşi korunur. Delikler uygulanmış haldedir; tamamen
+  boşalan parça atlanır.
 - **`--cull-hidden`** (betikte `exportFile(…, { cullHidden: true })` / `buildGlb`): hiç görünmeyen üçgenler atılır. Kural (kesin):
   üçgen kenarlarından biraz içeri küçültülüp normali boyunca biraz dışarı itildiğinde (ε = en az 0,001 mm, büyük sahnede ölçeğin
   milyonda biri) **tamamen** başka bir dışa aktarılan, kapalı ve opak katının içinde kalıyorsa (bir noktası içeride ve o katının
@@ -76,8 +85,11 @@ p3d export araba.glb [--file model.p3d.json] [--units m|mm] [--normals flat|smoo
 - Kaplama (`decal`) parça gibi yazılır; iki yüzlüsünün malzemesi `doubleSided: true`, adı `P3D_rrggbb[_aNN]_ds` (malzemeler renk,
   saydamlık ve iki yüzlülüğe göre ayrışır). OBJ/MTL'de iki yüzlülük yoktur: iki yüzlü kaplama için GLB kullanın.
 - **`--skeleton` (Unreal Chaos Vehicles):** tek bir skinned mesh; kökte `root` eklemi, her grup için pivotunda bir eklem
-  (ağırlık 1 — gerçek rig değil). Kemik adları Unreal için ASCII'ye çevrilir (`sol ön teker` → `sol_on_teker`), özgün ad
-  `extras.name`'de. Teker kemiklerini araç ayarlarında bu adlarla eşleyin.
+  (ağırlık 1 — gerçek rig değil). İç içe gruplarda eklem hiyerarşisi de iç içedir: en üst düzey grubun eklemi `root`'un, alt
+  grubunki üst grubun ekleminin çocuğu (çevirisi pivot farkı; `inverseBindMatrices` her eklemin dünya pivotunun tersi). Parçanın
+  köşeleri **doğrudan** grubunun eklemine bağlıdır (köşe grubunun kendi parçaları köşe eklemine, teker parçaları teker eklemine);
+  eklem sırası önce derinlik (üst, sonra alt grupları). Kemik adları Unreal için ASCII'ye çevrilir (`sol ön teker` →
+  `sol_on_teker`), özgün ad `extras.name`'de. Teker kemiklerini araç ayarlarında bu adlarla eşleyin.
 - Arayüzde: Dışa aktar → "GLB (oyun motoru)" / "GLB + iskelet (Unreal araç)".
 - **Çıktıyı görmek:** `p3d snapshot --file araba.glb --style wire` (üçgen kenarları; `xray` arkadakiler dahil) ve `p3d scene|measure|
   check --file araba.glb` GLB'yi içe aktarmadan okur (P3D'nin kendi GLB'leri iskeletli olanlar dahil yerinde çıkar; ayıklanmış

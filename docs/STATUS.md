@@ -1,6 +1,8 @@
 # Proje durumu
 
-> Son güncelleme: **2026-11-26** — BoltRush #10: girişim denetimi (`check --interference`, `interferences()`).
+> Son güncelleme: **2026-11-26** — BoltRush #5: iç içe gruplar (`GroupDef.parent`, grup adıyla alt ağaç işlemleri, GLB düğüm ve
+> iskelet hiyerarşisi).
+> Önceki: **2026-11-26** — BoltRush #10: girişim denetimi (`check --interference`, `interferences()`).
 > Önceki: **2026-11-26** — BoltRush #1: projeleri birleştirme / ızgara (`combineProjects`, `gridProjects`, `snapshot --file a,b`).
 > Önceki: **2026-11-26** — BoltRush #2: betikten görüntü (`snapshot()` / `snapshotSession()`), sunucu yoksa geçici sunucu.
 > Önceki: **2026-11-26** — BoltRush #4: odaklı görüntü (`snapshot --parts` / `--focus`).
@@ -31,7 +33,7 @@
 
 ## Yeni oturuma başlarken (ajanlar için)
 
-1. `npm install` · `npm run typecheck` · `npm test` (422 test, ~70 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
+1. `npm install` · `npm run typecheck` · `npm test` (444 test, ~80 sn) — hepsi temiz olmalı. Global komut ve skill için bir kez `npm link` + `p3d skill install`
    (README → Kurulum; `p3d status` kurulu skill eskiyse uyarır).
 2. Modelleme/arayüz işi için: `npm run dev` (arka planda; Claude Code hesabıyla serbest komutlar için `npm run dev:claude`),
    kullanıcının tarayıcı sekmesi açık olmalı; `p3d status` / `p3d scene` ile bağlantıyı doğrulayın (409 = alanda bağlı sekme
@@ -216,6 +218,28 @@
     orto; `camera`'da `--target` yalnızca yön verir, çerçeve görünür kutuya oturur); `eye` perspektiftir, `ortho` + eye/
     `--eye-height`/`--fov` tarayıcı açılmadan, köprüye doğrudan gelirse 400 hata; verilmezse görüntü bayt bayt aynı. `p3d-reviewer`
     incelemesi (kritik/yüksek yok; 3 orta, 4 düşük) düzeltildi.
+- **İç içe gruplar (2026-11-26, BoltRush isteği #5):** montaj hiyerarşisi (teker = lastik + jant + teller → teker grubu → köşe
+  grubu) tek düzey grupla kurulamıyordu; iskelet dışa aktarımında da hiyerarşi gerekiyor. Veri: `GroupDef.parent?` (üst grubun adı;
+  yoksa en üst düzey), `Part.group` doğrudan üyelik olarak kaldı. `group` işleminin `parts` listesinde grup adı da olur (alt grup olur;
+  başka üst gruptaki grup/başka gruptaki parça "… grubundan alındı" notuyla taşınır; listede olmayan doğrudan parça gruptan, doğrudan
+  alt grup üst gruptan çıkar — en üst düzeye); kendi içine ya da kendi alt ağacındaki gruba koyma `OpError` (proje değişmez); yeni
+  grubun varsayılan pivotu alt ağaç parçalarının kutu merkezi; `group`'un isteğe bağlı `parent` alanı grubu (yeni ya da var olan)
+  o grubun içine koyar (araya alt montaj sokmak üst grubu yeniden listelemeden; döngü hata; Claude şemasında "" = yok). Ortak üst
+  grubu kendiliğinden kalıtmak denendi ve bırakıldı: düz grup betiklerinde `group B [x]` (x A'dayken) x'i A'dan B'ye taşırken B'yi
+  A'nın içine koyardı (Op anlamı değişirdi). `ungroup` doğrudan parçaları ve alt grupları üst gruba (yoksa serbest)
+  bırakır. Grup adıyla move/rotate/duplicate (count dahil)/mirror/delete/update alt ağacın tamamına: move tüm alt grup pivotlarını da
+  öteler, rotate alt grup pivotlarını grubun pivotu çevresinde döndürür (grubun pivotu yerinde); duplicate/mirror alt grupları da
+  kopyalar (alt grup adları parçalar gibi `memberName` kuralıyla, `parent` bağları kopyada, pivotlar dönüştürülür, alt ağaç içi
+  `cuts` kopyaya), kök kopya kaynağın üst grubunda kardeş; delete alt grupları da siler. `pruneGroups`: alt ağacında parça kalmayan
+  grup silinir, sarkan `parent` bir üste bağlanır ya da kalkar, döngü kırılır. `parseProject` sarkan/geçersiz/döngü kuran `parent`'ı
+  uyarıyla atar; iç içe olmayan dosyalar ve `examples/` onarımsız. Alt ağaç her yerde: `export --parts` (`gltf.selectParts`),
+  `snapshot --parts/--focus` (sekmede ve CLI'nin kadraj kutusu satırında), girişim `--parts`; girişim `byGroup` gövdesi doğrudan grup
+  (en ince alt montaj). GLB: grup düğümleri iç içe (alt grup çevirisi pivot − üstün pivotu), `--skeleton` eklemleri de iç içe
+  (önce derinlik sırası; `inverseBindMatrices` dünya pivotunun tersi; köşeler doğrudan grubun eklemine); `--parts` ile alt grup
+  seçilince üst grupları boş kabuk düğüm/eklem olarak yazılır. Sahne özetinde `groups[].parent`, `p3d scene` grup listesi ağaç
+  (girinti + `üst: …`, alt ağaç parça sayısı). `combineProjects` `parent`'ı da önekler. Panelde grup bilgisinde üst grup zinciri.
+  Motor yardımcıları (`engine.ts`): `groupParts`, `subgroups`, `childGroups`, `subtreeGroupNames`, `groupAncestors`,
+  `groupsContaining` (kararlı yüzeye eklenmedi). Claude şeması değişmedi (talimat güncellendi). Rehber (ops, game, cli, verify, scripts).
 - **Girişim denetimi (2026-11-26, BoltRush isteği #10):** farklı parçaların katıları arasındaki hacim örtüşmesi çift çift
   `measure --parts` ile U(A) + U(B) − U(A ∪ B) hesaplanıyordu (RC2 kitinde 45 çağrı). `src/interference.ts` → `interferences(project,
   {byGroup, parts, minVolume})` (kararlı yüzeyde) ve `csg.pairIntersections`: gövdeler son (delikli) dünya ağları, yalnızca kutuları
@@ -243,7 +267,10 @@
   yüklenir). Seçenekler `p3d snapshot` ile aynı (`parts`/`focus` dahil); `out` verilirse `<görünüm>.png`; sonuç PNG Buffer'ları +
   `errors` + sahne özeti. Oturum sunucuyu ve tarayıcıyı bir kez açar, her çağrı projeyi aynı sekmeye yükler. `p3d snapshot --file`
   aynı katmanı kullanır: sunucu çalışmıyorsa artık hata yerine geçici sunucu açar (`not:` satırı). Tek görüntü ~3,6 sn, oturumda
-  sonrakiler ~1 sn. Rehber (scripts, cli, verify).
+  sonrakiler ~1 sn. Rehber (scripts, cli, verify). `p3d-reviewer` sonrası (98efe21): tarayıcı açılamazsa geçici sunucu kapanır;
+  `P3D_BRIDGE` ve vite.config'in `.env`'den yazdığı anahtarlar son geçici sunucu kapanınca (hata yollarında da, iç içe oturumlarda
+  sayaçla) geri yüklenir; oturumda eşzamanlı `snapshot` çağrıları sıraya girer (A'nın görüntüsü B olmaz); bağlanma beklenirken
+  Ctrl+C tarayıcıyı, profili ve geçici sunucuyu kapatır.
 - **Odaklı görüntü (2026-11-26, BoltRush isteği #4):** büyük sahnede küçük parçalar genel görünümde birkaç piksel kalıyordu.
   `SnapshotOptions.parts` / `focus` (`p3d snapshot --parts a,b` / `--focus a,b`, sekme ve `--file`): `parts` yalnızca bu parçaları
   çizer ve kadraja alır (diğer parçalar, delikler ve eskiz yalnızca görüntü süresince gizlenir, `finally`'de geri gelir); `focus`
@@ -258,6 +285,9 @@
   `p3d stop [--port N]`: yalnızca `/api/status`'ü P3D gibi yanıtlayan sunucuyu durdurur (aynı porttaki başka uygulamaya dokunmaz):
   durum dosyasındaki süreç ağacı + portu dinleyen süreç (Windows `netstat -ano` + `taskkill /T /F`, diğerleri `lsof` + süreç grubu
   SIGTERM); sunucu yoksa söyler (çıkış 0). Rehber (cli), skill (sunucuyu `--detach` ile başlatın), README, AGENTS.
+  `p3d-reviewer` sonrası (98efe21): `stop` durum dosyasındaki PID'i öldürmez (çökme/yeniden başlatma sonrası başka sürece geçmiş
+  olabilir), yalnızca portu dinleyen süreci (POSIX'te `lsof` yoksa `ss`); `--detach` portu başlatıcıya açıkça verir (`P3D_URL`'nin
+  portu), `--host`'a göre bekler, port başka uygulamadaysa hemen hata verir, `spawn` hatasını yakalar.
 - **Kaplama derinlik ötelemesi (2026-11-26, BoltRush isteği #29):** görünümde (ve `snapshot`'ta) kaplama dolgusu `polygonOffset`
   factor −1 ile kendi derinlik eğimi kadar öne çekiliyordu; neredeyse yandan görülen kaplamada eğim × piksel onlarca mm eder,
   opak katının içinde kalan kaplama (gulet güvertesinin küpeşte süpürmesine giren kenarı) önündeki yüzde ince çizgi olarak
@@ -371,6 +401,7 @@
 | Birleşim çizgisi onarımı (#21) | ✅ `tests/cull.test.ts` (5 sahne: iki kutu, ters, yan yana, çerçeve + levha, köşegen; dünya, GLB düz/yumuşak, iskelet; çatlak yapan T-kavşağı 0, bit eşliği, normaller, net kayıp kuralı, hiçbir sahnede toplam > seçeneksiz). Elle: iki kutu seçeneksizle bayt bayt aynı, 4 prizma 112 → 76 (eklenen 0), Benchy 3 629 / 5. Boltrush `glbcmp` (Godot, 626 görünüş): onarımdan önce iki kutu 17, ters 13, yan yana 7 iç delik → onarımla iç delik 0 (kalan 1–8 piksel siluet kenarında alt piksel yuvarlama; net kayıp kuralıyla bu üç sahne artık hiç ayıklanmıyor). **BoltRush doğruladı (0d7376a):** seçeneksiz 172 pist nesnesi + 432 parça dosyası bayt bayt aynı; ayıklamayla pist nesneleri 49 687 → 42 690 (−%14,1), parçalar 298 446 → 267 709 (−%10,3), LOD1 68 076 → 59 443 üçgen, `check` temiz; `glbcmp` (176 yön) iki kütüphanede iç delik 0 (yalnız 2 siluet pikseli), önceki 19 sorunlu varlık temiz; 12 RC3'te GPU kare süresi p50 4,26 → 4,11 ms |
 | `sweep` | ✅ `tests/sweep.test.ts` (29 test; 9'u inceleme düzeltmelerinin kırılan testleri) + `game.test.ts` (3 sweep parçası × 2 dönüş × 3 düzlem birebir ayna) + `cli.test.ts`: düz yol = extrude hacmi; gönyeli L/Z yol = alan × orta çizgi (1e-6); kapalı daire yol Pappus (kiriş düzeltmeli); 3B rmf/up/kemer kapalı manifold; hata mesajları (sığmayan yarıçap "en fazla", katlanma, 150° gönye, biçim); dikiş indisi 6–24 segment; uç uca dikişsiz; çözünürlük 8 → 76, 32 → 700 üçgen; GLB, `check --profile game`, dosya gidiş-dönüşü, Claude şeması null/0 doldurmaları. Elle: `apply --new` + `scene` + `check` + `measure` + STL/GLB/3MF; görünmez Chrome görüntülerinde pahlı tampon halkası, içi boş 3B boru, düşey kemer, gönyeli çerçeve, Retro tamponu doğru. `p3d-reviewer` (~1500 rastgele süpürme; 1 yüksek: kapak T-kavşağı, 3 orta, 5 düşük) düzeltildi; Ø6/Ø3 boru, delikle kesilmiş yaylı boru ve iki boşluklu profil `check` (print/game) temiz. Gerçek Claude ile, kullanıcının sekmesinde panelden ve Unreal'de **denenmedi**. **BoltRush doğruladı (568f464):** sweep kullanan 4 pist nesnesinin GLB'leri bayt bayt aynı, 215 parça + 172 pist nesnesi yeniden üretildi (geometri aynı, `check --profile game` temiz), Retro boru tamponları tek sweep'e geçti (4 parçada 2572 → 2004 üçgen, 0,4 mm çap hilesi kalktı) |
 | Parça saydamlığı / çözünürlüğü | ✅ `tests/part-look.test.ts` + ayrıştırıcı/CLI/köprü testleri (toplam 33 yeni): Op'lar, aralık ve tip hataları, grup, `normalizeLlmOp`, rol varsayılanı ve opak referans, dosya gidiş-dönüşü ve onarım uyarıları, GLB alfa/BLEND (iskelet dahil), 3MF/MTL alfa, opacity 0'da dışa aktarım/hacim/check/delik aynı; analitik üçgen sayıları, 6 segmentte kapalılık, önbellek ayrımı, delikte etkin seg, yuvarlak olmayan şekilde uyarı, `update` atomikliği. Alan yokken STL/GLB/OBJ çıktısı HEAD ile bayt bayt aynı (9 dosya). `p3d-reviewer` incelemesi (kritik yok; 6 bulgu düzeltildi). Görünmez Chrome görüntüsünde cam yarı saydam, 8/96 segment küre, 6 segment torus doğru. Panel alanları ve saydam parçada tıklama gerçek tarayıcıda elle, yeni alanlar gerçek Claude ile ve Unreal'de **denenmedi** |
+| İç içe gruplar (#5) | ✅ 21 test (`tests/nested-groups.test.ts`: `group.parent` (araya alt montaj, döngü hataları, parent'sız düz anlam korunur, listeden çıkanlar iletide) + grup içinde grup + varsayılan pivot + sahne özeti `parent` + dosya gidiş-dönüşü; "… grubundan alındı" notları, listeyle doğrudan üyelik değişimi; döngü reddi (kendisi, alt ağaç, büyük/küçük harf) ve proje değişmez; ungroup üst gruba/serbest; move/rotate alt grup pivotları (analitik + dünya köşeleri); update alt ağaç; duplicate count=2 ve mirror (adlar, parent, pivot, cuts, kardeşlik); delete alt ağaç; budama + bellekte sarkan/döngülü parent; `parseProject` iç içe dosya onarımsız, onarım uyarıları; GLB düğüm hiyerarşisi + çeviriler, three GLTFLoader ile 30° döndürülmüş köşede dünya kutuları P3D ile aynı; iskelet eklem hiyerarşisi, kemik dünya konumları = pivotlar, inverseBind × dünya = birim, köşe eklemleri doğrudan grup; `--parts` alt ağaç ve üst kabuk düğümleri; `combineProjects` parent öneki; girişim doğrudan grup gövdesi ve `--parts` alt ağacı) + `cli.test.ts` (`scene` ağaç çıktısı). **GLB bayt karşılaştırması** (HEAD kopyasıyla, 402 kayıt): Benchy, BoltRush konsept-01/02/03 (salt okunur) ve gruplu sentetik sahne × seçeneksiz / `--skeleton` / `--cull-hidden` / ikisi / `smooth` / `mm` + her grup için `--parts` (iskeletli ve iskeletsiz) GLB'leri, sahne özeti, proje JSON'u, yeniden ayrıştırma, `byGroup` girişim, birleştirme — hepsi bayt bayt aynı. `vite build` temiz. Panel ve Unreal'de iç içe iskelet, gerçek Claude ile iç içe grup **denenmedi** `p3d-reviewer` (kritik/yüksek yok; düz projede GLB seçeneksiz/iskelet/yumuşak/ayıklama HEAD ile bayt bayt aynı): ortak üst grubu kendiliğinden kalıtma düz `group` anlamını değiştirdiği için açık `parent` alanına çevrildi; var olan grubun listesinden çıkanlar iletiye yazıldı; dosyada `parent` adı motorun kuralıyla (fold) eşlenir; `p3d scene` grup sayıları tek geçişte |
 | Girişim denetimi (#10) | ✅ 1 test (`tests/geom.test.ts`: bindiren iki kutu 500 mm³ ve oran %50; 4 × 4 pim 160 mm³ ve kesişim kutusu; delikle oyulan bindirme ve yalnızca değen kutu sayılmaz; grup modunda grup içi düşer; seçim ve bilinmeyen ad; `checkProject` yalnızca istenince ve uyarı düzeyinde, ileti biçimi) + CLI elle (`--by-group`/`--parts` `--interference`'sız hata). Elle: Benchy 17 girişim (~+1,5 sn), konsept-02 229 (+1,8 sn) |
 | Projeleri birleştirme / ızgara (#1) | ✅ 2 test (`tests/api.test.ts`: önek/kimlik/öteleme/grup pivotu, kaynaklar değişmez, 400 mm'lik `cuts`'sız mil komşu varyantın kulağından geçse de yalnızca kendi kulağını keser ve her varyantın katı hacmi kaynakla aynı (1e-6), farklı çözünürlük parçaya yazılır, ad çakışması hatası, dosya gidiş-dönüşü onarımsız; ızgara: 2 sütun yerleşimi, hücre aralığı = en geniş + gap, gap 0'da hacimler aynı, aynı adlı projelere sıra numarası) + CLI hata testleri. Elle: 3 braket `p3d run` ile ızgara + `p3d snapshot --file a,b,c --columns 2` (üstten görüntüde 2 sütun, varyantlar hücrede ortalı) |
 | Betikten görüntü (#2) | ✅ 2 test (`tests/cli.test.ts`: seçenek doğrulaması — varsayılanlar, 6000² → 4096², bilinmeyen görünüm, eksik `camera.eye`, `parts` + `focus`; Chrome varsa `p3d run` içinde `P3D_URL` ölü adreste geçici sunucuyla `snapshot()` 400×300 iso/front PNG yazar, oturumda ikinci görüntü ve bulunamayan `parts` adı `errors`'ta, süreç asılı kalmadan çıkar) + API yüzeyi testi. Elle: sunucusuz betik (tek görüntü 3,6 sn, 3 görüntülü oturum 3,1 sn), `p3d snapshot --file` sunucusuz (`not:` satırı) ve 5173 açıkken (o sunucu kullanıldı); görüntüler doğru. macOS/Linux **denenmedi** |
@@ -440,8 +471,12 @@
 - Sahnede büyük referans ağ (ör. 80 bin üçgen) varken tarayıcının otomatik kayıt kotası (~5 MB) dolabilir; uygulama uyarır.
 - Görünümde sürükleyerek taşıma/döndürme (gizmo) yok; konum komutla ya da panelden girilir.
 - Parçalar birbirine bağlı değil: alttaki parça kalınlaşınca üstteki onunla yükselmez (iç içe girer);
-  "X'i Y'nin üstüne koy" ile yeniden hizalanır. Gruplar yalnızca birlikte taşıma/döndürme/kopyalama/aynalama ve GLB
-  hiyerarşisi içindir (ebeveyn-çocuk izleme yok); arayüzde grup oluşturma düğmesi yok (işlemle).
+  "X'i Y'nin üstüne koy" ile yeniden hizalanır. Gruplar (iç içe olabilir) yalnızca birlikte taşıma/döndürme/kopyalama/aynalama
+  ve GLB hiyerarşisi içindir (ebeveyn-çocuk izleme yok); arayüzde grup oluşturma/iç içe koyma düğmesi yok (işlemle).
+- İç içe gruplar: var olan bir grubu en üst düzeye çıkarmanın doğrudan yolu yok (`parent` yalnızca bir gruba koyar; üst grubu
+  `ungroup` ile çözün ya da üst grubu yeniden listeleyin). Grup döndürmesi pivotları döndürür ama grubun kendi
+  yönelimi yoktur (GLB düğümleri/eklemleri yalnız çeviri taşır). `--parts` ile alt grup dışa aktarılınca üst grupları boş kabuk
+  düğüm olarak gelir. Tek parçanın aynası (grup değil) eskisi gibi gruba girmez; grubun aynası kaynağın üst grubunda kardeş olur.
 - Keyfi kenar yuvarlatma, metin, vida dişi yok (pah profilde çizilebilir).
 - Ayna: `hull` yüzeyi ~0,5 mm'ye kadar simetrik; aynalanmış loft'un geom'u yeniden yazılırsa `mirrored` bayrağı düşer
   (aslını düzenleyip yeniden aynalayın). Dosyadan yüklenen projede parça ile grup aynı adı taşıyorsa onarılmaz.
@@ -547,7 +582,8 @@
    EXTERNAL-USE.md → Kararlar).
 1. **Dışa aktarım ve arayüz doğrulaması:** 3MF/STL'yi Bambu/Prusa/Orca'da açıp renk ve ölçek kontrolü;
    v0.2 arayüz öğelerini tarayıcıda elle deneme.
-2. **Gruplama (devamı) ve ekranda birleşim:** gruplar v0.4'te var; ebeveyn-çocuk izleme, arayüzden grup; grup içi union'ı ekranda da
+2. **Gruplama (devamı) ve ekranda birleşim:** gruplar v0.4'te, iç içe gruplar 2026-11-26'da (#5) var; ebeveyn-çocuk izleme, arayüzden
+   grup (ve ağaç görünümü); grup içi union'ı ekranda da
    gösterme (renkler orijinal parçalara göre: manifold `runOriginalID`); intersect.
 3. **Yuvarlatma:** profil köşelerinde yarıçap (extrude/revolve noktasına `r`); gerekirse OpenCascade (replicad) ile
    gerçek kenar yuvarlatma ve STEP.

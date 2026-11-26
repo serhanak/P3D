@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { SKETCH_KIND_LABELS, type GeomAxis, type Op, type Role, type SketchPath, type SketchPoint } from '../shared/ops';
 import { getAsset } from './assets';
-import { partBox, partsBox } from './engine';
+import { groupAncestors, partBox, partsBox } from './engine';
 import { describeGeom } from './geom';
 import { displayOpacity, exportableParts, roleOf, solidVolume } from './model';
 import { MAX_RESOLUTION, MIN_RESOLUTION, SHAPE_DEFS, fmt, usesResolution } from './shapes';
@@ -14,6 +14,9 @@ const esc = (s: string) =>
 
 /** Sayı girişleri için nokta ondalıklı değer. */
 const num = (n: number) => String(Number(n.toFixed(3)));
+
+/** Grup ve üst grupları, içten dışa: "teker › köşe › araba" (iç içe gruplar). */
+const groupPath = (project: Project, name: string) => [name, ...groupAncestors(project, name).map((g) => g.name)].join(' › ');
 
 const PLA_DENSITY = 1.24; // g/cm³
 
@@ -207,7 +210,7 @@ export function mountPanels(store: Store, apply: (ops: Op[]) => void, hooks: Pan
         <li data-id="${p.id}" class="${p.id === selectedId ? 'selected' : ''} ${p.visible ? '' : 'hidden-part'}">
           <input type="color" value="${p.color}" title="Renk" />
           <span class="pl-name" title="${esc(p.name)}">${esc(p.name)}</span>
-          <span class="pl-shape">${p.group ? `<span class="group-badge" title="Grup: ${esc(p.group)}">${esc(p.group)}</span>` : ''}${p.role ? `<span class="role-badge ${p.role}">${ROLE_LABEL[p.role]}</span>` : ''}${SHAPE_DEFS[p.shape].label}</span>
+          <span class="pl-shape">${p.group ? `<span class="group-badge" title="Grup: ${esc(groupPath(project, p.group))}">${esc(p.group)}</span>` : ''}${p.role ? `<span class="role-badge ${p.role}">${ROLE_LABEL[p.role]}</span>` : ''}${SHAPE_DEFS[p.shape].label}</span>
           <button class="pl-btn" data-act="vis" title="${p.visible ? 'Gizle' : 'Göster'}">${p.visible ? '◉' : '○'}</button>
           <button class="pl-btn" data-act="del" title="Sil">✕</button>
         </li>`,
@@ -277,7 +280,7 @@ function partProps(part: Part, project: Project): string {
   const group = part.group ? project.groups?.find((g) => g.name === part.group) : undefined;
   const groupInfo = group
     ? `<div class="group-info" title="Grup üyeleri birlikte taşınır, döner ve kopyalanır; pivot dönme merkezidir (salt okunur)">
-        <span class="muted">Grup</span> <b>${esc(group.name)}</b><br>
+        <span class="muted">Grup</span> <b>${esc(group.name)}</b>${group.parent !== undefined ? ` <span class="muted small">(üst: ${esc(groupPath(project, group.parent))})</span>` : ''}<br>
         <span class="muted small">pivot ${fmt(group.pivot.x)}, ${fmt(group.pivot.y)}, ${fmt(group.pivot.z)} mm</span></div>`
     : '';
   const note =

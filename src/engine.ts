@@ -229,8 +229,73 @@ export function findGroup(project: Project, ref: string | undefined): GroupDef |
   return project.groups.find((g) => fold(g.name).trim() === f);
 }
 
+/** Grubun doğrudan üyesi olan parçalar (alt grupların parçaları hariç). */
 export function groupMembers(project: Project, name: string): Part[] {
   return project.parts.filter((p) => p.group === name);
+}
+
+/** Grubun doğrudan alt grupları (proje sırasıyla). */
+export function childGroups(project: Project, name: string): GroupDef[] {
+  return (project.groups ?? []).filter((g) => g.parent === name);
+}
+
+/**
+ * Grubun tüm alt grupları (özyineli, kendisi hariç): önce derinlik, üst grup çocuklarından önce, kardeşler proje sırasıyla.
+ * Bozuk (döngülü) veride de sonlanır.
+ */
+export function subgroups(project: Project, name: string): GroupDef[] {
+  const out: GroupDef[] = [];
+  const seen = new Set([name]);
+  const walk = (n: string) => {
+    for (const g of childGroups(project, n)) {
+      if (seen.has(g.name)) continue;
+      seen.add(g.name);
+      out.push(g);
+      walk(g.name);
+    }
+  };
+  walk(name);
+  return out;
+}
+
+/** Grubun alt ağacındaki grup adları (kendisi dahil). */
+export function subtreeGroupNames(project: Project, name: string): Set<string> {
+  return new Set([name, ...subgroups(project, name).map((g) => g.name)]);
+}
+
+/** Grubun alt ağacındaki parçalar: kendisinin ve tüm alt gruplarının üyeleri (proje sırasıyla). */
+export function groupParts(project: Project, name: string): Part[] {
+  const names = subtreeGroupNames(project, name);
+  return project.parts.filter((p) => p.group !== undefined && names.has(p.group));
+}
+
+/** Grubun üst grupları, yakından uzağa (var olmayan üstte ya da döngüde durur). */
+export function groupAncestors(project: Project, name: string): GroupDef[] {
+  const out: GroupDef[] = [];
+  const seen = new Set([name]);
+  let parent = project.groups?.find((g) => g.name === name)?.parent;
+  while (parent !== undefined && !seen.has(parent)) {
+    const g = project.groups?.find((x) => x.name === parent);
+    if (!g) break;
+    seen.add(g.name);
+    out.push(g);
+    parent = g.parent;
+  }
+  return out;
+}
+
+/**
+ * Verilen parçalardan en az birini alt ağacında taşıyan grupların adları (parçanın doğrudan grubu ve onun tüm üst grupları):
+ * dışa aktarımda düğüm/eklem olarak yazılacak gruplar.
+ */
+export function groupsContaining(project: Project, parts: Part[]): Set<string> {
+  const out = new Set<string>();
+  for (const p of parts) {
+    if (p.group === undefined || out.has(p.group) || !project.groups?.some((g) => g.name === p.group)) continue;
+    out.add(p.group);
+    for (const a of groupAncestors(project, p.group)) out.add(a.name);
+  }
+  return out;
 }
 
 /** Ne bir grubun ne de bir parçanın kullandığı ad. */
@@ -240,14 +305,46 @@ function uniqueGroupName(project: Project, base: string): string {
   for (let n = 2; ; n++) if (!nameTaken(project, `${clean} ${n}`)) return `${clean} ${n}`;
 }
 
-/** Üyesi kalmayan grupları ve var olmayan gruba işaret eden üyelikleri temizler; grup kalmazsa alan silinir. */
+/**
+ * Grup tutarlılığı: döngü kuran `parent` kaldırılır (sırada ilk gelen grubunki); alt ağacında parça kalmayan gruplar silinir;
+ * var olmayan gruba işaret eden `parent` silinen grubun üstüne (o da yoksa daha üste) bağlanır, hiçbiri bulunamazsa kaldırılır
+ * (en üst düzey); var olmayan gruba üyelik silinir. Grup kalmazsa alan silinir.
+ */
 function pruneGroups(project: Project): void {
+  const groups = project.groups ?? [];
+  const byName = new Map(groups.map((g) => [g.name, g]));
+  // Döngüler: üst zinciri kendine dönen grubun parent'ı kaldırılır (sonrakiler artık döngüde değildir).
+  for (const g of groups) {
+    const seen = new Set<string>();
+    for (let p = g.parent; p !== undefined && !seen.has(p); p = byName.get(p)?.parent) {
+      if (p === g.name) {
+        delete g.parent;
+        break;
+      }
+      seen.add(p);
+    }
+  }
+  // Alt ağacında parça olan gruplar: doğrudan üyesi olanlar ve tüm üstleri.
+  const kept = new Set<string>();
+  for (const p of project.parts) {
+    for (let n = p.group; n !== undefined && byName.has(n) && !kept.has(n); n = byName.get(n)!.parent) kept.add(n);
+  }
+  for (const g of groups) {
+    if (!kept.has(g.name) || g.parent === undefined) continue;
+    let p: string | undefined = g.parent;
+    const seen = new Set<string>();
+    while (p !== undefined && !kept.has(p) && !seen.has(p)) {
+      seen.add(p);
+      p = byName.get(p)?.parent;
+    }
+    if (p !== undefined && kept.has(p)) g.parent = p;
+    else delete g.parent;
+  }
   if (project.groups) {
-    project.groups = project.groups.filter((g) => project.parts.some((p) => p.group === g.name));
+    project.groups = groups.filter((g) => kept.has(g.name));
     if (!project.groups.length) delete project.groups;
   }
-  const names = new Set(project.groups?.map((g) => g.name));
-  for (const p of project.parts) if (p.group !== undefined && !names.has(p.group)) delete p.group;
+  for (const p of project.parts) if (p.group !== undefined && !kept.has(p.group)) delete p.group;
 }
 
 /** Kopya/ayna grubunda üye adı: yeni grup adı açıkça verildiyse ve üye adı eski grup adıyla başlıyorsa önek değişir. */
@@ -794,14 +891,24 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
     }
     return p;
   };
-  /** Parça ya da (o adda parça yoksa) grup. */
-  const target = (ref: string | undefined): { part: Part; group?: undefined; members?: undefined } | { part?: undefined; group: GroupDef; members: Part[] } => {
+  /** Parça ya da (o tam adda parça yoksa) grup; ikisi de yoksa kısmi parça adı (must). */
+  const resolve = (ref: string | undefined): { part: Part; group?: undefined } | { part?: undefined; group: GroupDef } => {
     const exact = findPartExact(project, ref, ctx);
     if (exact) return { part: exact };
     const g = findGroup(project, ref);
-    if (g) return { group: g, members: groupMembers(project, g.name) };
+    if (g) return { group: g };
     return { part: must(ref) };
   };
+  /** Parça ya da grup; grupta `members` alt ağacın tüm parçaları (alt grupların parçaları dahil), `subs` tüm alt gruplar. */
+  const target = (
+    ref: string | undefined,
+  ): { part: Part; group?: undefined; members?: undefined; subs?: undefined } | { part?: undefined; group: GroupDef; members: Part[]; subs: GroupDef[] } => {
+    const r = resolve(ref);
+    if (r.part) return { part: r.part };
+    return { group: r.group, members: groupParts(project, r.group.name), subs: subgroups(project, r.group.name) };
+  };
+  /** Grup iletisindeki alt grup notu: ", 2 alt grup" (yoksa boş). */
+  const subNote = (subs: GroupDef[]) => (subs.length ? `, ${subs.length} alt grup` : '');
   const touch = (p: Part | undefined) => {
     if (!p) return;
     ctx.lastPartId = p.id;
@@ -822,10 +929,21 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
   };
   const names = (parts: Part[]) => parts.map((p) => `'${p.name}'`).join(', ');
   /**
-   * Grubu yeni adla kopyalar: üyeler klonlanır, `xform` her kopyaya uygulanır (hata verirse proje değişmez), delik
-   * hedefleri (cuts) grup içindeyse kopyalara yönlenir. Dönen: yeni grup.
+   * Grubu alt ağacıyla (alt gruplar ve tüm parçaları) yeni adla kopyalar: parçalar klonlanır, `xform` her kopyaya uygulanır
+   * (hata verirse proje değişmez), pivotlara `pivotOf` uygulanır, delik hedefleri (cuts) alt ağaç içindeyse kopyalara yönlenir.
+   * Kök kopya kaynağın üst grubunda kardeş olur; alt grup ve parça adları üye adı kuralıyla (memberName) türetilir, `parent`
+   * bağları kopyada kurulur. Dönen: yeni kök grup.
    */
-  const cloneGroup = (src: GroupDef, members: Part[], base: string, explicit: boolean, suffix: string, pivot: Vec3, xform: (c: Part) => void): GroupDef => {
+  const cloneGroup = (
+    src: GroupDef,
+    members: Part[],
+    subs: GroupDef[],
+    base: string,
+    explicit: boolean,
+    suffix: string,
+    pivotOf: (v: Vec3) => Vec3,
+    xform: (c: Part) => void,
+  ): GroupDef => {
     const idMap = new Map<string, string>();
     const copies = members.map((m) => {
       const c: Part = structuredClone(m);
@@ -835,12 +953,21 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
       return c;
     });
     const name = uniqueGroupName(project, base);
-    // Grup önce kaydedilir: üye adları yeni grup adıyla da çakışmasın (uniqueName grup adlarını sayar).
-    const g: GroupDef = { name, pivot: roundVec(pivot) };
+    // Gruplar önce kaydedilir: üye adları yeni grup adlarıyla da çakışmasın (uniqueName grup adlarını sayar).
+    const g: GroupDef = { name, pivot: roundVec(pivotOf(src.pivot)), ...(src.parent !== undefined ? { parent: src.parent } : {}) };
     (project.groups ??= []).push(g);
+    const nameMap = new Map([[src.name, name]]);
+    for (const s of subs) {
+      // subs üst grup çocuklarından önce gelir: üstün yeni adı hazırdır.
+      const sub: GroupDef = { name: uniqueGroupName(project, memberName(s.name, src.name, name, explicit, suffix)), pivot: roundVec(pivotOf(s.pivot)) };
+      const parent = s.parent !== undefined ? nameMap.get(s.parent) : undefined;
+      if (parent !== undefined) sub.parent = parent;
+      nameMap.set(s.name, sub.name);
+      project.groups.push(sub);
+    }
     copies.forEach((c, i) => {
       c.name = uniqueName(project, memberName(members[i].name, src.name, name, explicit, suffix));
-      c.group = name;
+      c.group = nameMap.get(members[i].group!) ?? name;
       if (c.cuts) c.cuts = c.cuts.map((id) => idMap.get(id) ?? id);
       project.parts.push(c);
     });
@@ -951,7 +1078,9 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
             if (typeof op.visible === 'boolean') notes.push(op.visible ? 'gösterildi' : 'gizlendi');
             if (opacity !== undefined) notes.push(opacityNote(opacity));
             touch(t.members[t.members.length - 1]);
-            res.messages.push(notes.length ? `'${t.group.name}' grubu (${t.members.length} parça): ${notes.join('; ')}.` : `'${t.group.name}' grubu değişmedi.`);
+            res.messages.push(
+              notes.length ? `'${t.group.name}' grubu (${t.members.length} parça${subNote(t.subs)}): ${notes.join('; ')}.` : `'${t.group.name}' grubu değişmedi.`,
+            );
             break;
           }
           const part = t.part;
@@ -1049,11 +1178,14 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           const t = target(op.part);
           const [dx, dy, dz] = [Number(op.dx) || 0, Number(op.dy) || 0, Number(op.dz) || 0];
           if (t.group) {
+            // Alt ağacın tüm parçaları ve grubun kendisiyle tüm alt gruplarının pivotları birlikte ötelenir.
             for (const m of t.members) translate(m, dx, dy, dz);
-            const pv = t.group.pivot;
-            t.group.pivot = roundVec({ x: pv.x + dx, y: pv.y + dy, z: pv.z + dz });
+            for (const g of [t.group, ...t.subs]) {
+              const pv = g.pivot;
+              g.pivot = roundVec({ x: pv.x + dx, y: pv.y + dy, z: pv.z + dz });
+            }
             touch(t.members[t.members.length - 1]);
-            res.messages.push(`'${t.group.name}' grubu taşındı (${t.members.length} parça; Δx ${fmt(dx)}, Δy ${fmt(dy)}, Δz ${fmt(dz)} mm).`);
+            res.messages.push(`'${t.group.name}' grubu taşındı (${t.members.length} parça${subNote(t.subs)}; Δx ${fmt(dx)}, Δy ${fmt(dy)}, Δz ${fmt(dz)} mm).`);
             break;
           }
           const part = t.part;
@@ -1084,7 +1216,11 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           if (t.group) {
             // Grup pivotu etrafında döner (taban sabitlenmez): teker göbeği gibi.
             const q = new THREE.Quaternion().setFromAxisAngle(AXIS_VEC[axis], deg * DEG);
-            for (const m of t.members) rotateAbout(m, q, t.group.pivot);
+            const center = t.group.pivot;
+            for (const m of t.members) rotateAbout(m, q, center);
+            // Alt grup pivotları da grubun pivotu çevresinde döner (grubun kendi pivotu yerinde kalır).
+            const cv = new THREE.Vector3(center.x, center.y, center.z);
+            for (const s of t.subs) s.pivot = roundVec(new THREE.Vector3(s.pivot.x, s.pivot.y, s.pivot.z).sub(cv).applyQuaternion(q).add(cv));
             touch(t.members[t.members.length - 1]);
             const pv = t.group.pivot;
             res.messages.push(`'${t.group.name}' grubu pivot (${fmt(pv.x)}, ${fmt(pv.y)}, ${fmt(pv.z)}) etrafında ${axis.toUpperCase()} ekseninde ${fmt(deg)}° döndürüldü.`);
@@ -1172,13 +1308,20 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
             const made: string[] = [];
             for (let i = 1; i <= count; i++) {
               const [dx, dy, dz] = [step.x * i, step.y * i, step.z * i];
-              const pv = t.group.pivot;
-              const g = cloneGroup(t.group, t.members, nameFor(`${t.group.name} kopya`, i), !!given, 'kopya', { x: pv.x + dx, y: pv.y + dy, z: pv.z + dz }, (c) =>
-                translate(c, dx, dy, dz),
+              const g = cloneGroup(
+                t.group,
+                t.members,
+                t.subs,
+                nameFor(`${t.group.name} kopya`, i),
+                !!given,
+                'kopya',
+                (pv) => ({ x: pv.x + dx, y: pv.y + dy, z: pv.z + dz }),
+                (c) => translate(c, dx, dy, dz),
               );
               made.push(`'${g.name}'`);
             }
-            res.messages.push(`'${t.group.name}' grubu (${t.members.length} parça) kopyalandı → ${made.join(', ')}.`);
+            const inParent = t.group.parent !== undefined ? ` ('${t.group.parent}' grubunda)` : '';
+            res.messages.push(`'${t.group.name}' grubu (${t.members.length} parça${subNote(t.subs)}) kopyalandı → ${made.join(', ')}${inParent}.`);
             break;
           }
           const part = t.part;
@@ -1210,40 +1353,101 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           if (!g && !refs.length) throw new OpError(`Yeni grup '${name}' için üye parçalar (parts) gerekli.`);
           const gname = g?.name ?? name;
           let members = g ? groupMembers(project, gname) : [];
+          let subs = g ? childGroups(project, gname) : [];
           const notes: string[] = [];
+          const pivot = checkVec(op.pivot, 'pivot');
+          // `parent`: grup (yeni ya da var olan) bu grubun içine konur — araya alt montaj sokmak üst grubun üyelerini yeniden
+          // listelemeden (`group köşe [teker, amortisör] parent araba`). Yoksa yeni grup en üst düzeyde, var olanınki değişmez.
+          const parentRef = typeof op.parent === 'string' ? op.parent.trim() : '';
+          const parent = parentRef ? findGroup(project, parentRef) : undefined;
+          if (parentRef && !parent) throw new OpError(`'${parentRef}' adında üst grup bulunamadı.`);
+          if (parent && g && (parent === g || subtreeGroupNames(project, g.name).has(parent.name))) {
+            throw new OpError(`'${g.name}' grubu ${parent === g ? 'kendi' : `kendi alt grubu '${parent.name}'`} içine konamaz (döngü).`);
+          }
           if (refs.length) {
+            // Önce tüm adlar çözülür ve denetlenir (hatada proje değişmez): ad parça ya da grup adıdır; listelenen grup bu
+            // grubun alt grubu olur.
             const list: Part[] = [];
+            const groupList: GroupDef[] = [];
             for (const r of refs) {
-              const p = must(r);
-              if (!list.includes(p)) list.push(p);
+              const x = resolve(r);
+              if (x.part) {
+                if (!list.includes(x.part)) list.push(x.part);
+                continue;
+              }
+              const sg = x.group;
+              if (sg === g) throw new OpError(`'${sg.name}' grubu kendi içine konamaz.`);
+              // g, sg'nin alt ağacındaysa sg'yi g'nin içine koymak döngü kurar.
+              if (g && subtreeGroupNames(project, sg.name).has(g.name)) {
+                throw new OpError(`'${sg.name}' grubu kendi alt grubu '${g.name}' içine konamaz (döngü).`);
+              }
+              // Üst grup listelenen grubun kendisi ya da alt ağacındaysa döngü.
+              if (parent && subtreeGroupNames(project, sg.name).has(parent.name)) {
+                throw new OpError(`'${sg.name}' grubu '${name}' grubuna alınırken '${parent.name}' üst grup olamaz (döngü).`);
+              }
+              if (!groupList.includes(sg)) groupList.push(sg);
             }
-            for (const p of members) if (!list.includes(p)) delete p.group;
+            for (const p of members) {
+              if (list.includes(p)) continue;
+              delete p.group;
+              notes.push(`'${p.name}' gruptan çıkarıldı`);
+            }
+            for (const s of subs) {
+              if (groupList.includes(s)) continue;
+              delete s.parent;
+              notes.push(`alt grup '${s.name}' en üst düzeye çıktı`);
+            }
+            // Üst grubun kendi doğrudan üyesi bu gruba alınıyorsa not yazılmaz (aynı montajın içinde kalıyor).
+            const stays = (from: string) => from === parent?.name;
             for (const p of list) {
-              if (p.group && p.group !== gname) notes.push(`'${p.name}' '${p.group}' grubundan alındı`);
+              if (p.group && p.group !== gname && !stays(p.group)) notes.push(`'${p.name}' '${p.group}' grubundan alındı`);
               p.group = gname;
             }
+            for (const s of groupList) {
+              if (s.parent !== undefined && s.parent !== gname && !stays(s.parent)) notes.push(`'${s.name}' grubu '${s.parent}' grubundan alındı`);
+              s.parent = gname;
+            }
             members = list;
+            subs = groupList;
           }
-          const pivot = checkVec(op.pivot, 'pivot');
           if (!g) {
-            g = { name, pivot: roundVec(pivot ?? partsBox(members, seg).getCenter(new THREE.Vector3())) };
+            // Varsayılan pivot: alt ağacın tüm parçalarının kutu merkezi (listelenen parçalar + listelenen grupların parçaları).
+            const all = new Set([...members, ...subs.flatMap((s) => groupParts(project, s.name))]);
+            g = { name, pivot: roundVec(pivot ?? partsBox([...all], seg).getCenter(new THREE.Vector3())) };
             (project.groups ??= []).push(g);
           } else if (pivot) g.pivot = roundVec(pivot);
-          touch(members[members.length - 1]);
+          if (parent) g.parent = parent.name;
+          touch(members.length ? members[members.length - 1] : groupParts(project, g.name).pop());
           const pv = g.pivot;
+          const what = [members.length ? names(members) : '', subs.length ? `alt grup ${subs.map((s) => `'${s.name}'`).join(', ')}` : '']
+            .filter(Boolean)
+            .join('; ');
           res.messages.push(
-            `'${g.name}' grubu: ${names(members)}; pivot ${fmt(pv.x)}, ${fmt(pv.y)}, ${fmt(pv.z)}${notes.length ? ` (${notes.join(', ')})` : ''}.`,
+            `'${g.name}' grubu: ${what}; pivot ${fmt(pv.x)}, ${fmt(pv.y)}, ${fmt(pv.z)}${parent ? `; '${parent.name}' grubunun içinde` : ''}` +
+              `${notes.length ? ` (${notes.join(', ')})` : ''}.`,
           );
           break;
         }
         case 'ungroup': {
           const g = findGroup(project, op.name);
           if (!g) throw new OpError(`'${op.name ?? ''}' adında grup bulunamadı.`);
+          // Doğrudan parçalar ve doğrudan alt gruplar grubun üstüne geçer (üst yoksa serbest / en üst düzey).
+          const all = groupParts(project, g.name);
           const members = groupMembers(project, g.name);
-          for (const p of members) delete p.group;
+          const subs = childGroups(project, g.name);
+          const up = g.parent;
+          for (const p of members) {
+            if (up !== undefined) p.group = up;
+            else delete p.group;
+          }
+          for (const s of subs) {
+            if (up !== undefined) s.parent = up;
+            else delete s.parent;
+          }
           project.groups = project.groups!.filter((x) => x !== g);
-          touch(members[members.length - 1]);
-          res.messages.push(`'${g.name}' grubu çözüldü (${members.length} parça serbest).`);
+          touch(all[all.length - 1]);
+          const what = `${members.length} parça${subs.length ? `, ${subs.length} alt grup` : ''}`;
+          res.messages.push(`'${g.name}' grubu çözüldü (${what} ${up !== undefined ? `'${up}' grubuna geçti` : 'serbest'}).`);
           break;
         }
         case 'set_pivot': {
@@ -1252,7 +1456,7 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           const pv = checkVec(op.pivot, 'pivot');
           if (!pv) throw new OpError('Pivot (x, y, z) gerekli.');
           g.pivot = roundVec(pv);
-          touch(groupMembers(project, g.name).pop());
+          touch(groupParts(project, g.name).pop());
           res.messages.push(`'${g.name}' grubunun pivotu: ${fmt(g.pivot.x)}, ${fmt(g.pivot.y)}, ${fmt(g.pivot.z)}.`);
           break;
         }
@@ -1265,14 +1469,24 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
           const where = `${plane.toUpperCase()} = ${fmt(at)} düzlemine göre`;
           const given = op.name?.trim() ?? '';
           if (t.group) {
-            const g = cloneGroup(t.group, t.members, given || `${t.group.name} ayna`, !!given, 'ayna', mirrorVec(t.group.pivot, plane, at), (c) => {
-              try {
-                mirrorPart(c, plane, at);
-              } catch (e) {
-                throw e instanceof OpError ? new OpError(`'${c.name}': ${e.message}`) : e;
-              }
-            });
-            res.messages.push(`'${t.group.name}' grubu ${where} aynalandı → '${g.name}' (${t.members.length} parça).`);
+            const g = cloneGroup(
+              t.group,
+              t.members,
+              t.subs,
+              given || `${t.group.name} ayna`,
+              !!given,
+              'ayna',
+              (pv) => mirrorVec(pv, plane, at),
+              (c) => {
+                try {
+                  mirrorPart(c, plane, at);
+                } catch (e) {
+                  throw e instanceof OpError ? new OpError(`'${c.name}': ${e.message}`) : e;
+                }
+              },
+            );
+            const inParent = t.group.parent !== undefined ? `; '${t.group.parent}' grubunda` : '';
+            res.messages.push(`'${t.group.name}' grubu ${where} aynalandı → '${g.name}' (${t.members.length} parça${subNote(t.subs)}${inParent}).`);
             break;
           }
           const part = t.part;
@@ -1290,15 +1504,21 @@ export function applyOps(project: Project, ops: Op[], selectedId: string | null)
         case 'delete': {
           const t = target(op.part);
           if (t.group) {
+            // Alt ağacın tamamı: tüm alt gruplar ve parçaları.
             const ids = new Set(t.members.map((m) => m.id));
+            const gone = new Set([t.group, ...t.subs]);
             project.parts = project.parts.filter((p) => !ids.has(p.id));
-            project.groups = project.groups!.filter((x) => x !== t.group);
+            project.groups = project.groups!.filter((x) => !gone.has(x));
             if (ctx.selectedId && ids.has(ctx.selectedId)) {
               ctx.selectedId = null;
               res.clearSelection = true;
             }
             if (res.lastPartId && ids.has(res.lastPartId)) res.lastPartId = null;
-            res.messages.push(`'${t.group.name}' grubu ve ${t.members.length} parçası silindi.`);
+            res.messages.push(
+              t.subs.length
+                ? `'${t.group.name}' grubu, ${t.subs.length} alt grubu ve ${t.members.length} parçası silindi.`
+                : `'${t.group.name}' grubu ve ${t.members.length} parçası silindi.`,
+            );
             break;
           }
           const part = t.part;
@@ -1578,7 +1798,9 @@ export function sceneSummary(project: Project, selectedId: string | null): Scene
         ...(p.geom ? { geom: p.geom.kind === 'mesh' ? meshSummary(p.geom) : p.geom } : {}),
       };
     }),
-    ...(project.groups?.length ? { groups: project.groups.map((g) => ({ name: g.name, pivot: v2(g.pivot) })) } : {}),
+    ...(project.groups?.length
+      ? { groups: project.groups.map((g) => ({ name: g.name, pivot: v2(g.pivot), ...(g.parent !== undefined ? { parent: g.parent } : {}) })) }
+      : {}),
     ...(sketch ? { sketch } : {}),
   };
 }

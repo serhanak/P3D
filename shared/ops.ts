@@ -178,10 +178,16 @@ export interface Vec3 {
   z: number;
 }
 
-/** Parça grubu: üyeler birlikte taşınır/döner/kopyalanır; `pivot` dönme merkezi (dünya, mm). Üyelik `Part.group`'tadır. */
+/**
+ * Parça grubu: üyeler birlikte taşınır/döner/kopyalanır; `pivot` dönme merkezi (dünya, mm). Doğrudan üyelik `Part.group`'tadır.
+ * Gruplar iç içe olabilir: `parent` üst grubun adıdır (yoksa en üst düzey). Grup adıyla yapılan işlemler alt ağacın tamamına
+ * (alt grupların parçaları dahil) uygulanır.
+ */
 export interface GroupDef {
   name: string;
   pivot: Vec3;
+  /** Üst grubun adı (iç içe gruplar, ör. teker → köşe); yoksa en üst düzey. */
+  parent?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,8 +295,11 @@ export type Op =
   /** `count` > 1: `offset` her kopyada birikerek uygulanır (1×, 2×, … count×); `part` bir grup adı olabilir. */
   | { op: 'duplicate'; part: string; new_name?: string; offset?: Vec3 | null; count?: number }
   | { op: 'delete'; part: string }
-  /** Grup oluşturur ya da günceller; `parts` boş/yok = üyeler değişmez; `pivot` yok = yeni grupta üyelerin kutu merkezi. */
-  | { op: 'group'; name: string; parts?: string[] | null; pivot?: Vec3 | null }
+  /**
+   * Grup oluşturur ya da günceller; `parts` parça ya da grup adları (listelenen grup alt grup olur; doğrudan üyelik listeyle
+   * değişir), boş/yok = üyeler değişmez; `pivot` yok = yeni grupta alt ağaç parçalarının kutu merkezi.
+   */
+  | { op: 'group'; name: string; parts?: string[] | null; pivot?: Vec3 | null; parent?: string | null }
   | { op: 'ungroup'; name: string }
   | { op: 'set_pivot'; group: string; pivot: Vec3 }
   /** Parçanın (ya da grubun) `plane` eksenine dik, `at` konumundaki düzleme göre aynalanmış kopyasını oluşturur. */
@@ -478,7 +487,7 @@ export const RESPONSE_SCHEMA = {
           opSchema('place_on_surface', { part: str, target: str, near: vec3, offset: num }),
           opSchema('duplicate', { part: str, new_name: str, offset: nullableVec3, count: num }),
           opSchema('delete', { part: str }),
-          opSchema('group', { name: str, parts: { type: 'array', items: str }, pivot: nullableVec3 }),
+          opSchema('group', { name: str, parts: { type: 'array', items: str }, pivot: nullableVec3, parent: str }),
           opSchema('ungroup', { name: str }),
           opSchema('set_pivot', { group: str, pivot: vec3 }),
           opSchema('mirror', { part: str, plane: axisEnum, at: { anyOf: [num, { type: 'null' }] }, name: str }),
@@ -527,7 +536,7 @@ export interface SceneSummaryPart {
   role: Role;
   /** Delik hedefleri (parça adları); yoksa kesiştiği tüm katılar. */
   cuts?: string[];
-  /** Üyesi olduğu grubun adı. */
+  /** Doğrudan üyesi olduğu grubun adı (üst gruplar `SceneSummary.groups` → `parent` zincirinde). */
   group?: string;
   /** Görsel saydamlık (yalnızca < 1 iken). */
   opacity?: number;
@@ -564,7 +573,7 @@ export interface SceneSummary {
   bed: { x: number; y: number };
   selected: string | null;
   parts: SceneSummaryPart[];
-  /** Gruplar ve pivotları (varsa). */
+  /** Gruplar, pivotları ve (iç içe gruplarda) üst grup adı `parent` (varsa). */
   groups?: GroupDef[];
   /** Kullanıcının çizdiği eskiz yolları (varsa): niyet verisi, parça değil. */
   sketch?: SceneSummarySketch[];

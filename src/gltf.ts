@@ -6,7 +6,7 @@
 // Bu öz (det +1) bir dönüşümdür; üçgen sarımı değişmez. Unreal'in içe aktarıcısı glTF'yi kendi Z yukarı / cm düzenine çevirir.
 import * as THREE from 'three';
 import { cullAndRepair } from './cull';
-import { findGroup, findPartExact, partMatrix } from './engine';
+import { findGroup, findPartExact, groupsContaining, partMatrix, subtreeGroupNames } from './engine';
 import { MESH_CREASE } from './geom';
 import { displayOpacity, exportGeometry, exportableParts, isDecal } from './model';
 import { toAscii } from './text';
@@ -20,8 +20,9 @@ export interface GlbOptions {
   /** 'flat' (varsayılan): üçgen başına köşe ve yüz normali — düşük poligon görünümü. 'smooth': 50° kırılımlı normaller. */
   normals?: 'flat' | 'smooth';
   /**
-   * true: tüm parçalar tek bir skinned mesh olur (Unreal Chaos Vehicles). Kökte `root` eklemi; her grup için pivotunda,
-   * root'un çocuğu olan bir eklem. Grup üyelerinin köşeleri o eklemin, gruplanmamışlar root'un (ağırlık 1).
+   * true: tüm parçalar tek bir skinned mesh olur (Unreal Chaos Vehicles). Kökte `root` eklemi; her grup için pivotunda bir
+   * eklem: en üst düzey grubunki root'un, alt grubunki (iç içe gruplar) üst grubun ekleminin çocuğu. Parçanın köşeleri doğrudan
+   * grubunun ekleminin, gruplanmamışlar root'un (ağırlık 1).
    * Eklem ve düğüm adları Unreal için güvenlidir (bkz. unrealName; "Sağ Teker" → "Sag_Teker", çakışmada `_2`);
    * özgün ad düğümün `extras.name` alanındadır. İskeletsiz modda adlar olduğu gibi kalır.
    */
@@ -366,8 +367,8 @@ function nameAllocator(): (raw: string, fallback: string) => string {
 // ---------------------------------------------------------------------------
 
 /**
- * Dışa aktarılacak parçalar: görünür katılar; `refs` verilirse yalnızca o parçalar / grupların üyeleri (proje sırasıyla).
- * Diğer biçimler de kullanır (files.ts → exportFile).
+ * Dışa aktarılacak parçalar: görünür katılar; `refs` verilirse yalnızca o parçalar / grupların alt ağaçlarındaki üyeler (alt
+ * grupların parçaları dahil; proje sırasıyla). Diğer biçimler de kullanır (files.ts → exportFile).
  */
 export function selectParts(project: Project, refs?: string[]): Part[] {
   const solids = exportableParts(project.parts);
@@ -383,14 +384,17 @@ export function selectParts(project: Project, refs?: string[]): Part[] {
     }
     const g = findGroup(project, r);
     if (!g) throw new Error(`'${r}' adında parça ya da grup bulunamadı.`);
-    for (const s of solids) if (s.group === g.name) keep.add(s);
+    // Alt ağacın tamamı: grubun ve tüm alt gruplarının üyeleri.
+    const names = subtreeGroupNames(project, g.name);
+    for (const s of solids) if (s.group !== undefined && names.has(s.group)) keep.add(s);
   }
   return solids.filter((p) => keep.has(p));
 }
 
 /**
  * Projeyi GLB (glTF 2.0 ikili) olarak yazar. Parça başına düğüm + mesh (düğüm çevirisi parçanın merkezi, döndürme
- * köşelere gömülü); grup bir düğümdür (çevirisi pivot, üyeleri çocuk düğüm). Renk → lineer `baseColorFactor`
+ * köşelere gömülü); grup bir düğümdür (çevirisi pivot, üyeleri çocuk düğüm; alt grup üst grubun düğümünün çocuğu, çevirisi
+ * pivot − üstün pivotu; yalnızca alt ağacında dışa aktarılan parça olan gruplar yazılır). Renk → lineer `baseColorFactor`
  * (metallic 0, roughness 0,9), saydamlık (`Part.opacity`) → alfa + `alphaMode: BLEND`; aynı renk ve saydamlık tek malzeme.
  * `skeleton` için bkz. GlbOptions.
  * Delikler tarafından tamamen yenen (üçgensiz) parçalar atlanır: glTF boş erişimciye izin vermez. Kaplama (decal) da bir
@@ -413,7 +417,8 @@ export function glbBuild(project: Project, opts: GlbOptions = {}): GlbBuild {
   const parts = items.map((it) => it.part);
   const smooth = opts.normals === 'smooth';
   const shade = (m: TriMesh, origin: V3) => (smooth ? smoothShaded(m, origin, MESH_CREASE) : flatShaded(m, origin));
-  const groupOf = (p: Part): GroupDef | undefined => (p.group ? project.groups?.find((g) => g.name === p.group) : undefined);
+  const groupNamed = (name: string | undefined): GroupDef | undefined => (name !== undefined ? project.groups?.find((g) => g.name === name) : undefined);
+  const groupOf = (p: Part): GroupDef | undefined => groupNamed(p.group);
 
   const bin = new BinBuilder();
   const materials: object[] = [];
@@ -447,23 +452,42 @@ export function glbBuild(project: Project, opts: GlbOptions = {}): GlbBuild {
   };
 
   if (opts.skeleton) {
-    // Eklemler: root (orijinde) + dışa aktarılan üyesi olan her grup (pivotunda, root'un çocuğu).
-    // Düğüm adları Unreal için güvenli ve benzersiz (grup adları önce: tekerlek kemikleri adlarını korusun);
-    // özgün ad düğümün extras.name alanında.
-    const groups = (project.groups ?? []).filter((g) => parts.some((p) => p.group === g.name));
+    // Eklemler: root (orijinde) + alt ağacında dışa aktarılan parça olan her grup (pivotunda). En üst düzey grubun eklemi root'un,
+    // alt grubunki üst grubun ekleminin çocuğudur (çevirisi üstün pivotuna göre). Sıra: önce derinlik, üst grup çocuklarından önce,
+    // kardeşler proje sırasıyla (iç içe olmayan projede proje sırası). Düğüm adları Unreal için güvenli ve benzersiz (grup adları
+    // önce: tekerlek kemikleri adlarını korusun); özgün ad düğümün extras.name alanında.
+    const inSkin = groupsContaining(project, parts);
+    const candidates = (project.groups ?? []).filter((g) => inSkin.has(g.name));
+    const groups: GroupDef[] = [];
+    const visit = (g: GroupDef) => {
+      groups.push(g);
+      for (const c of candidates) if (c.parent === g.name && !groups.includes(c)) visit(c);
+    };
+    for (const g of candidates) if (g.parent === undefined || !inSkin.has(g.parent)) visit(g);
     const nameOf = nameAllocator();
     const jointNames = groups.map((g) => nameOf(g.name, 'grup'));
     nodes.push({ name: nameOf('root', 'root') });
     const jointOf = new Map<string, number>(); // grup adı → skin.joints indisi
-    const children: number[] = [];
+    const jointNodes: number[] = []; // skin.joints[1…] düğüm indisleri
+    const nodeOf = new Map<string, number>(); // grup adı → eklem düğümü
+    const children: number[] = []; // root'un çocukları
     const ibm = new Float32Array(16 * (groups.length + 1));
     ibm.set([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], 0);
     groups.forEach((g, i) => {
       const t = toGl(g.pivot, s);
-      children.push(nodes.length);
-      nodes.push({ name: jointNames[i], translation: t, extras: { name: g.name } });
+      const up = g.parent !== undefined ? nodeOf.get(g.parent) : undefined;
+      const node = nodes.length;
+      if (up === undefined) {
+        children.push(node);
+        nodes.push({ name: jointNames[i], translation: t, extras: { name: g.name } });
+      } else {
+        ((nodes[up].children ??= []) as number[]).push(node);
+        nodes.push({ name: jointNames[i], translation: sub(t, toGl(groupNamed(g.parent)!.pivot, s)), extras: { name: g.name } });
+      }
+      nodeOf.set(g.name, node);
+      jointNodes.push(node);
       jointOf.set(g.name, i + 1);
-      // Bağlama pozunda eklemin dünya dönüşümü T(pivot); tersi T(−pivot) (sütun öncelikli).
+      // Bağlama pozunda eklemin dünya dönüşümü T(pivot) (üstlerin çevirileri toplamı); tersi T(−pivot) (sütun öncelikli).
       ibm.set([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -t[0] + 0, -t[1] + 0, -t[2] + 0, 1], 16 * (i + 1));
     });
     if (children.length) nodes[0].children = children;
@@ -494,13 +518,33 @@ export function glbBuild(project: Project, opts: GlbOptions = {}): GlbBuild {
     json.skins = [
       {
         name: `${meshName}_iskelet`,
-        joints: [0, ...children],
+        joints: [0, ...jointNodes],
         skeleton: 0,
         inverseBindMatrices: bin.accessor(ibm, 'MAT4'),
       },
     ];
   } else {
     const groupNode = new Map<string, number>();
+    const visiting = new Set<string>();
+    /**
+     * Grubun düğümü (ilk gerektiğinde, önce üst grupları): en üst düzey grup kökte (çevirisi pivot), alt grup üst grubun
+     * düğümünün çocuğu (çevirisi pivot − üstün pivotu).
+     */
+    const groupNodeOf = (g: GroupDef): number => {
+      const known = groupNode.get(g.name);
+      if (known !== undefined) return known;
+      visiting.add(g.name);
+      const parent = groupNamed(g.parent);
+      const up = parent && !visiting.has(parent.name) ? groupNodeOf(parent) : undefined;
+      visiting.delete(g.name);
+      const pivot = toGl(g.pivot, s);
+      const gi = nodes.length;
+      groupNode.set(g.name, gi);
+      if (up === undefined) roots.push(gi);
+      else (nodes[up].children as number[]).push(gi);
+      nodes.push({ name: g.name, translation: up === undefined ? pivot : sub(pivot, toGl(parent!.pivot, s)), children: [] });
+      return gi;
+    };
     for (const { part: p, mesh: m } of items) {
       // Ayıklamada tüm üçgenleri gizli kalan parça: düğüm (ad, çeviri, grup) yerinde, ağsız.
       const meshRef: { mesh?: number } = {};
@@ -514,16 +558,9 @@ export function glbBuild(project: Project, opts: GlbOptions = {}): GlbBuild {
         nodes.push({ name: p.name, ...meshRef, translation: m.center });
         continue;
       }
-      const pivot = toGl(g.pivot, s);
-      let gi = groupNode.get(g.name);
-      if (gi === undefined) {
-        gi = nodes.length;
-        groupNode.set(g.name, gi);
-        roots.push(gi);
-        nodes.push({ name: g.name, translation: pivot, children: [] });
-      }
+      const gi = groupNodeOf(g);
       (nodes[gi].children as number[]).push(nodes.length);
-      nodes.push({ name: p.name, ...meshRef, translation: sub(m.center, pivot) });
+      nodes.push({ name: p.name, ...meshRef, translation: sub(m.center, toGl(g.pivot, s)) });
     }
   }
 

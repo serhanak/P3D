@@ -18,7 +18,7 @@ Kör çizmeyin: anlamlı her adımdan sonra görün ve ölçün. Bir model bitti
   oyuncunun gözünden görmek için: ör. kart `--eye-height 700`, yaya `--eye-height 1700`; nesneye 5–10 m uzaktan
   `--eye 0,-8000,1000 --target 0,0,800`. `--eye` / `--eye-height` verilip `--views` verilmezse yalnızca o görüntü çekilir.
 - **Odaklı görüntü:** büyük sahnede küçük parça birkaç piksel kalır. `--parts a,b` yalnızca bu parçaları (ya da grupların
-  görünür üyelerini) çizer ve kadraja alır (diğerleri, delikler ve eskiz o görüntüde gizli; montajın içindeki parçayı görmek için);
+  — alt grupları dahil — görünür üyelerini) çizer ve kadraja alır (diğerleri, delikler ve eskiz o görüntüde gizli; montajın içindeki parçayı görmek için);
   `--focus a,b` kadrajı bunlara daraltır, diğer parçalar bağlam olarak çizilir (önde kalan parça örtebilir). Ör.
   `p3d snapshot --file araba.p3d.json --focus teker_on_sol --views iso,front`. Bulunamayan ad hata verir.
 - **Tel kafes (`--style wire`) ve X-ışını (`--style xray`):** gölgeli görüntü kırılım çizgilerini gösterir, üçgenleri göstermez.
