@@ -610,15 +610,23 @@ describe('betikten görüntü: snapshot() (BoltRush #2)', () => {
         "  const a = await s.snapshot(p, { views: ['top'], out: 'g2' });",
         "  const b = await s.snapshot(p, { views: ['iso'], parts: ['yok'] });",
         "  console.log('oturum', s.temporary, a.images.length, b.images.length, b.errors.join(' '));",
+        "  // Eşzamanlı çağrılar sıraya girer: her sonuç kendi projesinin sahnesi.",
+        "  const q = newProject();",
+        "  applyOps(q, [{ op: 'create', shape: 'sphere', name: 'küre', params: [{ name: 'diameter', value: 20 }] }], null);",
+        "  const [x, y] = await Promise.all([s.snapshot(p, { views: ['iso'] }), s.snapshot(q, { views: ['iso'] })]);",
+        "  console.log('sıra', x.scene.parts.map((t) => t.name).join(), y.scene.parts.map((t) => t.name).join());",
         '} finally {',
         '  await s.close();',
         '}',
+        "console.log('köprü ortamı', String(process.env.P3D_BRIDGE));",
       ].join('\n'),
     );
     const r = p3dRun(['run', 'goruntu.mts'], dir, { env: { P3D_URL: 'http://127.0.0.1:9' } });
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/tek 0 iso:\d{4,},front:\d{4,}/);
     expect(r.stdout).toMatch(/oturum true 1 0 .*'yok' adında parça ya da grup bulunamadı/);
+    expect(r.stdout).toContain('sıra kutu küre');
+    expect(r.stdout).toContain('köprü ortamı undefined'); // geçici sunucu kapanınca geri yüklendi
     const png = readFileSync(path.join(dir, 'g1', 'iso.png'));
     expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([400, 300]);
     expect(readdirSync(path.join(dir, 'g2'))).toEqual(['top.png']);
@@ -651,6 +659,10 @@ describe('p3d dev --detach / stop (BoltRush #3)', () => {
       const r = p3dRun(['stop', '--port', String(port)], dir);
       expect(r.stdout).toContain('çalışan P3D sunucusu yok');
       expect(await fetch(`http://localhost:${port}/`).then((x) => x.text())).toBe('{"ok":true}');
+      // Port başka uygulamadayken ayrık başlatma beklemeden açık hata verir (Vite başka porta kayıp zaman aşımına düşmesin).
+      const busy = p3dRun(['dev', '--detach', '--port', String(port)], dir);
+      expect(busy.code).toBe(1);
+      expect(busy.stderr).toContain(`Port ${port} başka bir uygulamada`);
     } finally {
       await new Promise((r) => other.close(r));
     }

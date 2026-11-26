@@ -51,8 +51,7 @@ console.log(new THREE.Vector3(width, 60, 30).length(), issues);
   ```ts
   import { snapshot, snapshotSession } from 'p3d';
   const r = await snapshot(p, { views: ['iso', 'front'], size: '1000x750', out: 'goruntu' });   // r.images[i].png: Buffer, .file
-  if (r.errors.length) throw new Error(r.errors.join('
-'));
+  if (r.errors.length) throw new Error(r.errors.join('\n'));
   // Çok görüntü (aile, ızgara): sunucu ve tarayıcı bir kez açılır, her çağrı projeyi aynı sekmeye yükler.
   const s = await snapshotSession();
   try {

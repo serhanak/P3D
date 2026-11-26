@@ -3,9 +3,10 @@
 // sunucu da kapanıyordu; Windows'ta arka plan görevini durdurmak alt node sürecini açık bırakıp portu meşgul tutuyordu.
 //
 // Ayrık süreç: `npm run dev -- …` kendi süreç grubunda, girdi kapalı, çıktısı geçici klasördeki günlüğe (port başına
-// `p3d-dev-<port>.log`). PID ve adres `p3d-dev-<port>.json` durum dosyasına yazılır. `stop` yalnızca `/api/status`'ü P3D gibi
-// yanıtlayan bir sunucuyu durdurur (aynı porttaki başka uygulamaya dokunmaz): durum dosyasındaki süreç ağacını ve portu
-// dinleyen süreci kapatır (Windows `taskkill /T /F`, diğerlerinde süreç grubu SIGTERM).
+// `p3d-dev-<port>.log`). PID ve adres `p3d-dev-<port>.json` durum dosyasına yazılır (yalnızca bilgi: `status`). `stop` yalnızca
+// `/api/status`'ü P3D gibi yanıtlayan bir sunucuyu durdurur (aynı porttaki başka uygulamaya dokunmaz) ve yalnızca **portu dinleyen**
+// süreci (alt süreçleriyle) kapatır — durum dosyasındaki PID'e güvenilmez: sunucu çöktükten ya da makine yeniden başladıktan sonra
+// o PID başka bir sürece geçmiş olabilir. Dinleyen node süreci kapanınca `npm` / `cmd` sarmalayıcıları kendiliğinden çıkar.
 import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -47,10 +48,19 @@ export function devPort(args: string[], base: string): number {
   return u.port ? Number(u.port) : DEFAULT_PORT;
 }
 
+/** `--host` bayrağı (başlatıcıya giden); joker adreste (0.0.0.0, ::) ya da yoksa localhost'tan denetlenir. */
+export function devHost(args: string[]): string {
+  for (let i = 0; i < args.length; i++) {
+    const v = args[i] === '--host' ? args[i + 1] : args[i].startsWith('--host=') ? args[i].slice('--host='.length) : undefined;
+    if (v && v !== '0.0.0.0' && v !== '::' && v !== 'true') return v.includes(':') ? `[${v}]` : v;
+  }
+  return 'localhost';
+}
+
 /** Portta P3D sunucusu mu çalışıyor (`/api/status` P3D'ye özgü alanlarla yanıt veriyor). */
-export async function p3dAt(port: number, timeoutMs = 1500): Promise<boolean> {
+export async function p3dAt(port: number, timeoutMs = 1500, host = 'localhost'): Promise<boolean> {
   try {
-    const r = await fetch(`http://localhost:${port}/api/status`, { signal: AbortSignal.timeout(timeoutMs) });
+    const r = await fetch(`http://${host}:${port}/api/status`, { signal: AbortSignal.timeout(timeoutMs) });
     if (!r.ok) return false;
     const j = (await r.json()) as Record<string, unknown>;
     return typeof j.bridge === 'boolean' && 'llm' in j && 'backend' in j;
@@ -84,13 +94,19 @@ function logTail(file: string, lines = 15): string {
  * `npm run dev -- …`'a gider. Sunucu erken kapanır ya da süre dolarsa günlüğün sonuyla hata.
  */
 export async function startDetached(repoRoot: string, args: string[], port: number, waitMs = 60_000): Promise<DevState> {
+  // Port açıkça başlatıcıya gider (P3D_URL'den gelen port da): beklenen portla sunucunun portu ayrışmasın.
+  const flags = args.some((a) => a === '--port' || a.startsWith('--port=')) ? args : [...args, `--port=${port}`];
+  // Port başka bir uygulamada: Vite bir sonraki porta kayar, beklenen port hiç yanıt vermezdi.
+  if (listeningPid(port)) throw new Error(`Port ${port} başka bir uygulamada (P3D değil); başka port verin: p3d dev --detach --port N`);
+  const host = devHost(flags);
   const log = devLogFile(port);
   const fd = openSync(log, 'w');
   const win = process.platform === 'win32';
   let exited: number | null | undefined;
+  let spawnError: string | undefined;
   let child;
   try {
-    child = spawn(win ? 'npm.cmd' : 'npm', ['run', 'dev', ...(args.length ? ['--', ...args] : [])], {
+    child = spawn(win ? 'npm.cmd' : 'npm', ['run', 'dev', '--', ...flags], {
       cwd: repoRoot,
       detached: true,
       stdio: ['ignore', fd, fd],
@@ -100,18 +116,22 @@ export async function startDetached(repoRoot: string, args: string[], port: numb
   } finally {
     closeSync(fd);
   }
+  child.on('error', (e) => (spawnError = e.message));
   child.on('exit', (code) => (exited = code));
   child.unref();
-  if (!child.pid) throw new Error(`Sunucu başlatılamadı (npm bulunamadı?). Günlük: ${log}`);
-  const state: DevState = { pid: child.pid, port, url: `http://localhost:${port}`, log, started: new Date().toISOString() };
+  if (!child.pid) {
+    await sleep(50); // 'error' olayı bir sonraki turda gelir
+    throw new Error(`Sunucu başlatılamadı (npm bulunamadı?${spawnError ? ` ${spawnError}` : ''}). Günlük: ${log}`);
+  }
+  const state: DevState = { pid: child.pid, port, url: `http://${host}:${port}`, log, started: new Date().toISOString() };
   writeFileSync(devStateFile(port), JSON.stringify(state, null, 2));
   const until = Date.now() + waitMs;
   while (Date.now() < until) {
-    if (await p3dAt(port, 1000)) return state;
-    if (exited !== undefined) break;
+    if (await p3dAt(port, 1000, host)) return state;
+    if (exited !== undefined || spawnError) break;
     await sleep(300);
   }
-  if (exited === undefined) killTree(child.pid);
+  if (exited === undefined) killTree(child.pid, true);
   rmSync(devStateFile(port), { force: true });
   const tail = logTail(log);
   throw new Error(
@@ -120,7 +140,7 @@ export async function startDetached(repoRoot: string, args: string[], port: numb
   );
 }
 
-/** Portu dinleyen sürecin PID'i (Windows: netstat; diğerleri: lsof); bulunamazsa undefined. */
+/** Portu dinleyen sürecin PID'i (Windows: netstat; diğerleri: lsof, yoksa ss); bulunamazsa undefined. */
 export function listeningPid(port: number): number | undefined {
   try {
     if (process.platform === 'win32') {
@@ -138,25 +158,30 @@ export function listeningPid(port: number): number | undefined {
       }
       return undefined;
     }
-    const out = execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' });
-    const pid = Number(out.trim().split(/\s+/)[0]);
-    return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+    try {
+      const out = execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      const pid = Number(out.trim().split(/\s+/)[0]);
+      if (Number.isInteger(pid) && pid > 0) return pid;
+    } catch {
+      // lsof yok ya da dinleyen yok: ss'e bak
+    }
+    // ss -ltnpH 'sport = :5173' → … users:(("node",pid=1234,fd=23))
+    const out = execFileSync('ss', ['-ltnpH', `sport = :${port}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const m = /pid=(\d+)/.exec(out);
+    return m ? Number(m[1]) : undefined;
   } catch {
     return undefined;
   }
 }
 
-/** Süreci alt süreçleriyle kapatır. */
-function killTree(pid: number): void {
+/**
+ * Süreci alt süreçleriyle kapatır. `group`: süreç grubunun lideri olduğu biliniyor (yalnızca kendi başlattığımız, henüz
+ * yaşayan çocuk) — POSIX'te tüm grup; değilse yalnızca süreç (dinleyen node; sarmalayıcılar kendiliğinden çıkar).
+ */
+function killTree(pid: number, group = false): void {
   try {
     if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-    else {
-      try {
-        process.kill(-pid, 'SIGTERM'); // ayrık başlatılan: süreç grubunun lideri
-      } catch {
-        process.kill(pid, 'SIGTERM');
-      }
-    }
+    else process.kill(group ? -pid : pid, 'SIGTERM');
   } catch {
     // zaten kapanmış
   }
@@ -165,21 +190,20 @@ function killTree(pid: number): void {
 export type StopResult = { stopped: true; pids: number[] } | { stopped: false; reason: 'not-running' | 'not-p3d-pid' | 'still-running'; pids: number[] };
 
 /**
- * Portta çalışan P3D sunucusunu durdurur: durum dosyasındaki süreç ağacı (ayrık başlatılan) ve portu dinleyen süreç (ön planda
- * ya da başka yolla başlatılan; `npm run dev`'in alt node süreci). Portta P3D yanıt vermiyorsa hiçbir şeyi kapatmaz.
+ * Portta çalışan P3D sunucusunu durdurur: portu dinleyen süreç (ayrık, ön planda ya da başka yolla başlatılmış; `npm run dev`'in
+ * alt node süreci) alt süreçleriyle kapatılır. Durum dosyasındaki PID kullanılmaz (yeniden kullanılmış olabilir). Portta P3D yanıt
+ * vermiyorsa hiçbir şeyi kapatmaz.
  */
 export async function stopServer(port: number, waitMs = 10_000): Promise<StopResult> {
   const state = readDevState(port);
   if (!(await p3dAt(port))) {
-    if (state && !alive(state.pid)) rmSync(devStateFile(port), { force: true });
+    if (state) rmSync(devStateFile(port), { force: true });
     return { stopped: false, reason: 'not-running', pids: [] };
   }
-  const pids: number[] = [];
-  if (state && alive(state.pid)) pids.push(state.pid);
   const listen = listeningPid(port);
-  if (listen && !pids.includes(listen)) pids.push(listen);
-  if (!pids.length) return { stopped: false, reason: 'not-p3d-pid', pids };
-  for (const pid of pids) killTree(pid);
+  if (!listen) return { stopped: false, reason: 'not-p3d-pid', pids: [] };
+  const pids = [listen];
+  killTree(listen);
   const until = Date.now() + waitMs;
   while (Date.now() < until) {
     if (!(await p3dAt(port, 500))) {

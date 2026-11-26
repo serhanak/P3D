@@ -93,38 +93,64 @@ async function bridgeUp(base: string): Promise<boolean> {
   }
 }
 
+/**
+ * Geçici sunucuların değiştirdiği ortam: köprü açık olmalı (`P3D_BRIDGE`, istek anında okunur) ve vite.config.ts çağıranın
+ * klasöründeki `.env`'den eksik anahtarları yazar. İlk sunucu açılırken anlık görüntü alınır, son sunucu kapanınca (hata
+ * yollarında da) geri yüklenir; aynı süreçte iç içe oturumlar sayaçla.
+ */
+const ENV_KEYS = ['P3D_BRIDGE', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'P3D_MODEL', 'P3D_EFFORT', 'P3D_LLM', 'P3D_CLAUDE_BIN'];
+let envUsers = 0;
+let envSaved: Record<string, string | undefined> = {};
+function acquireEnv(): void {
+  if (envUsers++ === 0) envSaved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
+  process.env.P3D_BRIDGE = '1';
+}
+function releaseEnv(): void {
+  if (--envUsers > 0) return;
+  for (const k of ENV_KEYS) {
+    if (envSaved[k] === undefined) delete process.env[k];
+    else process.env[k] = envSaved[k];
+  }
+}
+
 /** Bu süreçte geçici Vite sunucusu (depodaki vite.config.ts; köprü açık). */
 async function startTemporaryServer(): Promise<{ url: string; close: () => Promise<void> }> {
-  const prevBridge = process.env.P3D_BRIDGE;
-  // Köprü isteğe göre okunur (server/config.ts → bridgeEnabled); bu süreçte açık olmalı.
-  process.env.P3D_BRIDGE = '1';
-  const { createServer } = await import('vite');
-  const server = await createServer({
-    root: REPO_ROOT,
-    configFile: path.join(REPO_ROOT, 'vite.config.ts'),
-    logLevel: 'error',
-    clearScreen: false,
-    server: { host: '127.0.0.1', port: 0, strictPort: false, hmr: false, watch: null },
-  });
+  acquireEnv();
+  let server: import('vite').ViteDevServer | undefined;
   try {
+    const { createServer } = await import('vite');
+    server = await createServer({
+      root: REPO_ROOT,
+      configFile: path.join(REPO_ROOT, 'vite.config.ts'),
+      logLevel: 'error',
+      clearScreen: false,
+      server: { host: '127.0.0.1', port: 0, strictPort: false, hmr: false, watch: null },
+    });
     await server.listen();
+    const addr = server.httpServer?.address();
+    if (!addr || typeof addr === 'string') throw new Error('Geçici P3D sunucusunun adresi okunamadı.');
+    const s = server;
+    let closed = false;
+    return {
+      url: `http://127.0.0.1:${addr.port}`,
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        try {
+          await s.close();
+        } finally {
+          releaseEnv();
+        }
+      },
+    };
   } catch (e) {
-    await server.close();
+    try {
+      await server?.close();
+    } finally {
+      releaseEnv();
+    }
     throw e;
   }
-  const addr = server.httpServer?.address();
-  if (!addr || typeof addr === 'string') {
-    await server.close();
-    throw new Error('Geçici P3D sunucusunun adresi okunamadı.');
-  }
-  return {
-    url: `http://127.0.0.1:${addr.port}`,
-    close: async () => {
-      await server.close();
-      if (prevBridge === undefined) delete process.env.P3D_BRIDGE;
-      else process.env.P3D_BRIDGE = prevBridge;
-    },
-  };
 }
 
 /** 'GENxYÜK' / width-height → sınırlara oturtulmuş boyut (geçersiz yazımda hata). */
@@ -185,23 +211,35 @@ export async function openSnapshotTab(opts: NodeSnapshotSessionOptions = {}): Pr
     base = t.url;
     stopServer = t.close;
   }
-  const { findChrome, launchHeadless } = await import('../scripts/headless');
-  const { existsSync } = await import('node:fs');
-  const chrome = findChrome();
-  const fail = async (msg: string): Promise<never> => {
-    await stopServer?.();
-    throw new Error(msg);
-  };
-  if (!chrome) return fail('Chrome ya da Edge bulunamadı. Tarayıcının çalıştırılabilir dosyasını P3D_CHROME ortam değişkenine yazın.');
-  if (!existsSync(chrome)) return fail(`Tarayıcı bulunamadı: ${chrome}${process.env.P3D_CHROME ? ' (P3D_CHROME)' : ''}`);
+  // Tarayıcı açılamazsa (bulunamadı, çalıştırılamadı) geçici sunucu kapatılır.
+  let browser: import('../scripts/headless').HeadlessBrowser;
+  let chrome: string;
   const ws = `_snap-${Math.random().toString(36).slice(2, 10)}`;
-  const browser = launchHeadless(chrome, base + wsPath(ws));
+  try {
+    const { findChrome, launchHeadless } = await import('../scripts/headless');
+    const { existsSync } = await import('node:fs');
+    const found = findChrome();
+    if (!found) throw new Error('Chrome ya da Edge bulunamadı. Tarayıcının çalıştırılabilir dosyasını P3D_CHROME ortam değişkenine yazın.');
+    if (!existsSync(found)) throw new Error(`Tarayıcı bulunamadı: ${found}${process.env.P3D_CHROME ? ' (P3D_CHROME)' : ''}`);
+    chrome = found;
+    browser = launchHeadless(chrome, base + wsPath(ws));
+  } catch (e) {
+    await stopServer?.();
+    throw e;
+  }
   let closing: Promise<void> | null = null;
   const close = () =>
     (closing ??= (async () => {
-      await browser.close();
-      await stopServer?.();
+      try {
+        await browser.close();
+      } finally {
+        await stopServer?.();
+      }
     })());
+  // Bağlanma beklenirken Ctrl+C: görünmez tarayıcı, geçici profil ve geçici sunucu geride kalmasın (bekleme bitince kaldırılır).
+  const interrupted = () => void close().finally(() => process.exit(130));
+  process.once('SIGINT', interrupted);
+  process.once('SIGTERM', interrupted);
   try {
     const deadline = Date.now() + CONNECT_MS;
     for (;;) {
@@ -215,16 +253,26 @@ export async function openSnapshotTab(opts: NodeSnapshotSessionOptions = {}): Pr
   } catch (e) {
     await close();
     throw e;
+  } finally {
+    process.off('SIGINT', interrupted);
+    process.off('SIGTERM', interrupted);
   }
   const post = async (body: Record<string, unknown>) => (await call(base!, 'POST', '/api/bridge/ops', { ws, ...body })) as BridgeResult;
+  let queue: Promise<unknown> = Promise.resolve();
   return {
     server: base,
     temporary: !!stopServer,
     close,
-    async send(project, req) {
-      if (closing) throw new Error('Görüntü oturumu kapatıldı.');
-      const load = await post({ action: 'load', project, assets: usedAssets(project), label: `snapshot: ${project.name}` });
-      return { load, result: await post({ action: 'snapshot', snapshot: req }) };
+    // Aynı sekmede load + snapshot çifti bölünmemeli: eşzamanlı çağrılar sıraya girer (A'nın görüntüsü B olmasın).
+    send(project, req) {
+      const run = async () => {
+        if (closing) throw new Error('Görüntü oturumu kapatıldı.');
+        const load = await post({ action: 'load', project, assets: usedAssets(project), label: `snapshot: ${project.name}` });
+        return { load, result: await post({ action: 'snapshot', snapshot: req }) };
+      };
+      const next = queue.then(run, run);
+      queue = next.catch(() => undefined);
+      return next;
     },
   };
 }
