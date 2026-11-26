@@ -152,7 +152,7 @@ const has = (name: string) => rest.includes(name);
 const list = (name: string) => flag(name)?.split(',').map((s) => s.trim()).filter(Boolean);
 
 const VALUE_FLAGS = new Set([
-  '--label', '--views', '--size', '--out', '--name', '--role', '--color', '--max-tris', '--parts', '--focus', '--axis', '--at', '--file',
+  '--label', '--views', '--size', '--out', '--name', '--role', '--color', '--max-tris', '--parts', '--focus', '--columns', '--gap', '--axis', '--at', '--file',
   '--tol', '--ops', '--profile', '--units', '--normals', '--sample', '--eye', '--target', '--fov', '--eye-height', '--style',
   '--projection',
 ]);
@@ -280,6 +280,11 @@ interface SourceFile {
 function fileFlag(command: string): SourceFile | undefined {
   const f = flag('--file');
   if (f === undefined) return undefined;
+  return sourceOf(command, f);
+}
+
+/** `--file` değerindeki bir yol → kaynak (uzantı ve komuta göre denetlenir). */
+function sourceOf(command: string, f: string): SourceFile {
   const file = fromCaller(f);
   const kind = fileKind(file);
   const readsMesh = MESH_READERS.has(command) && !(command === 'sketch' && has('--clear'));
@@ -841,12 +846,38 @@ function snapshotCameraFlags(): SnapshotCamera {
  * yükler, görüntü alır (`src/snapshot-node.ts`; P3D sunucusu çalışmıyorsa bu süreçte geçici sunucu). Tarayıcı süreç ağacı,
  * geçici profil ve geçici sunucu her durumda (hata dahil) kapatılır/silinir.
  */
-async function snapshotFile(src: SourceFile): Promise<void> {
+async function snapshotFile(srcs: SourceFile[]): Promise<void> {
   const req = snapshotRequest(); // geçersiz --size/--views/--style tarayıcı açılmadan hata versin
-  const { file } = src;
-  const loaded = await readSource(src, false);
-  printLoadNotes(loaded);
-  const { project } = loaded;
+  const file = srcs.length === 1 ? srcs[0].file : `${srcs.length} dosya`;
+  // Izgara seçenekleri tarayıcı açılmadan denetlenir.
+  const num = (name: string, ok: (n: number) => boolean, what: string) => {
+    const raw = flag(name);
+    if (raw === undefined) return undefined;
+    const n = Number(raw);
+    if (!ok(n)) throw new Error(`${name} ${what} olmalı ('${raw}').`);
+    return n;
+  };
+  const columns = num('--columns', (n) => Number.isInteger(n) && n >= 1, 'pozitif tam sayı');
+  const gap = num('--gap', (n) => Number.isFinite(n) && n >= 0, 'mm (≥ 0)');
+  if (srcs.length === 1 && (columns !== undefined || gap !== undefined)) throw new Error('--columns / --gap yalnızca birden çok --file ile (a.p3d.json,b.p3d.json) geçerli.');
+  const loadedAll = [];
+  for (const s of srcs) {
+    const l = await readSource(s, false);
+    if (srcs.length > 1 && (l.dropped.length || l.warnings.length)) console.log(`${path.basename(s.file)}:`);
+    printLoadNotes(l);
+    loadedAll.push(l);
+  }
+  let project = loadedAll[0].project;
+  if (srcs.length > 1) {
+    const { gridProjects } = await import('../src/combine.ts');
+    const prefix = (f: string) => path.basename(f).replace(/\.p3d\.json$/i, '').replace(/\.(stl|obj|3mf|glb)$/i, '');
+    const grid = gridProjects(
+      loadedAll.map((l, i) => ({ project: l.project, prefix: prefix(srcs[i].file) })),
+      { name: 'ızgara', ...(columns !== undefined ? { columns } : {}), ...(gap !== undefined ? { gap } : {}) },
+    );
+    project = grid.project;
+    for (const c of grid.cells) console.log(`ızgara: ${c.prefix} → ${vec(c.box.min)} … ${vec(c.box.max)}`);
+  }
   // Çalışan P3D sunucusu (P3D_URL) varsa o, yoksa bu süreçte geçici sunucu (BoltRush #2; eskiden "sunucu çalışmıyor" hatası).
   const { openSnapshotTab } = await import('../src/snapshot-node.ts');
   const tab = await openSnapshotTab({ server: 'auto' });
@@ -1031,6 +1062,7 @@ const USAGE = [
   '  section --axis x|y|z --at v1,v2 [--parts a,b] [--file m.p3d.json | ağ.stl|obj|3mf|glb] [--tol 0.1]',
   '  export <çıktı.stl|3mf|obj|glb> [--file m.p3d.json] [--parts a,b] [--merge] [--skeleton] [--cull-hidden] [--units m|mm] [--normals flat|smooth]',
   '  snapshot --file m.p3d.json|ağ.glb [--views …] [--size …] [--dims] [--style …] [--projection …] [--out klasör]   (görünmez Chrome/Edge; P3D_CHROME)',
+  '           --file a.p3d.json,b.p3d.json,… [--columns N] [--gap mm]   ızgara: dosyalar tek sahnede yan yana (önek dosya adı)',
   '  sketch [--file m.p3d.json] [--json] [--sample 8]   (kullanıcının çizdiği eskiz yolları)',
   '  sketch --clear [ad] [--file m.p3d.json] [--label "metin"]   (ad yoksa tüm eskiz silinir)',
   '',
@@ -1312,8 +1344,12 @@ async function main(): Promise<void> {
       return;
     }
     case 'snapshot': {
+      // Birden çok dosya (virgülle): ızgaraya dizilmiş tek sahne (BoltRush #1).
+      const many = flag('--file')?.split(',').map((s) => s.trim()).filter(Boolean);
+      if (many && many.length > 1) return snapshotFile(many.map((f) => sourceOf('snapshot', f)));
       const src = fileFlag('snapshot');
-      if (src) return snapshotFile(src);
+      if (src) return snapshotFile([src]);
+      if (flag('--columns') !== undefined || flag('--gap') !== undefined) throw new Error('--columns / --gap yalnızca birden çok --file ile (a.p3d.json,b.p3d.json) geçerli.');
       const req = snapshotRequest();
       writeSnapshots(await post(req), req.snapshot);
       return;

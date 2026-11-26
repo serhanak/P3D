@@ -33,6 +33,7 @@ describe('src/api.ts yüzeyi', () => {
       'buildGlb', 'loadProjectFile', 'saveProjectFile', 'exportFile', 'sceneSummary', 'build3mf', 'getAsset', 'usedAssets',
       'readMeshFile', 'samplePath', 'sketchKind', 'pathProfile', 'toPlane2D', 'isPlanar', 'solidBox', 'solidPartsBox',
       'printableParts', 'isDecal', 'defaultMaxTris', 'projectFromMesh', 'loadMeshFileProject', 'snapshot', 'snapshotSession',
+      'combineProjects', 'gridProjects',
     ];
     for (const f of fns) expect(typeof (api as Record<string, unknown>)[f], f).toBe('function');
     expect(new api.THREE.Vector3(3, 4, 0).length()).toBe(5);
@@ -377,6 +378,77 @@ describe('exportFile', () => {
     q.parts.push({ id: 'p_m', name: 'tarama', shape: 'mesh', params: { scale: 1 }, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, color: '#888888', visible: true, geom: { kind: 'mesh', asset: 'a_yok67890' } });
     await expect(api.exportFile(q, path.join(dir, 'eksik.stl'))).rejects.toThrow("ağ verisi yüklü değil: 'tarama'");
     expect(() => readFileSync(path.join(dir, 'eksik.stl'))).toThrow();
+  });
+});
+
+describe('combineProjects / gridProjects (BoltRush #1)', () => {
+  // Braket ailesi: gruplu gövde, cuts'sız delikler (uzun mil komşu hücreye taşar), farklı proje çözünürlüğü.
+  const variant = (w: number, res = 96) => {
+    const p = api.newProject(`braket-${w}`);
+    p.settings.resolution = res;
+    const r = api.applyOps(
+      p,
+      [
+        { op: 'create', shape: 'box', name: 'taban', params: [{ name: 'width', value: w }, { name: 'depth', value: 30 }, { name: 'height', value: 6 }], position: { x: 0, y: 0, z: 3 } },
+        { op: 'create', shape: 'cylinder', name: 'kulak', params: [{ name: 'diameter', value: 20 }, { name: 'height', value: 30 }], position: { x: w / 2, y: 0, z: 21 } },
+        { op: 'create', shape: 'cylinder', name: 'delik', role: 'hole', params: [{ name: 'diameter', value: 8 }, { name: 'height', value: 20 }], position: { x: 0, y: 0, z: 3 } },
+        { op: 'create', shape: 'cylinder', name: 'mil', role: 'hole', params: [{ name: 'diameter', value: 6 }, { name: 'height', value: 400 }], position: { x: 0, y: 0, z: 25 }, rotation: { x: 0, y: 90, z: 0 } },
+        { op: 'group', parts: ['taban', 'kulak'], name: 'gövde' },
+      ] as api.Op[],
+      null,
+    );
+    expect(r.errors).toEqual([]);
+    return p;
+  };
+  const solidVol = (p: api.Project, prefix = '') =>
+    p.parts.filter((x) => x.role !== 'hole' && x.name.startsWith(prefix)).reduce((s, x) => s + api.solidVolume(p, x), 0);
+
+  it('önek, öteleme, yeni kimlik, grup ve pivot; cuts sabitlenir (kesim kaynaktaki gibi); çözünürlük korunur', () => {
+    const fam = [variant(40), variant(60, 12)];
+    const before = fam.map((p) => solidVol(p));
+    const snapshot = fam.map((p) => JSON.stringify(p));
+    const out = api.combineProjects([{ project: fam[0], prefix: 'a' }, { project: fam[1], prefix: 'b', offset: { x: 30 } }]);
+    expect(fam.map((p) => JSON.stringify(p))).toEqual(snapshot); // kaynaklar değişmez
+    expect(out.parts.map((p) => p.name)).toEqual(['a/taban', 'a/kulak', 'a/delik', 'a/mil', 'b/taban', 'b/kulak', 'b/delik', 'b/mil']);
+    expect(new Set(out.parts.map((p) => p.id)).size).toBe(8);
+    expect(out.parts.some((p) => fam.some((f) => f.parts.some((q) => q.id === p.id)))).toBe(false);
+    expect(out.groups).toEqual([{ name: 'a/gövde', pivot: expect.any(Object) }, { name: 'b/gövde', pivot: expect.any(Object) }]);
+    expect(out.groups![1].pivot.x - fam[1].groups![0].pivot.x).toBeCloseTo(30);
+    const b = (n: string) => out.parts.find((p) => p.name === n)!;
+    expect(b('b/taban').position.x).toBeCloseTo(30);
+    expect(b('b/taban').group).toBe('b/gövde');
+    // Uzun mil (400 mm) öbür braketin kulağından da geçer: cuts kaynaktaki sonuca sabitlendi.
+    expect(b('a/mil').cuts).toEqual([b('a/kulak').id]);
+    expect(b('b/delik').cuts).toEqual([b('b/taban').id]);
+    expect(solidVol(out, 'a/')).toBeCloseTo(before[0], 6);
+    expect(solidVol(out, 'b/')).toBeCloseTo(before[1], 6);
+    // Proje çözünürlüğü farklı kaynak: yuvarlak parçaya kaynağınki yazılır, kutuya yazılmaz.
+    expect(out.settings.resolution).toBe(96);
+    expect(b('b/kulak').resolution).toBe(12);
+    expect(b('b/taban').resolution).toBeUndefined();
+    expect(() => api.combineProjects([{ project: fam[0], prefix: 'x' }, { project: fam[1], prefix: 'X' }])).toThrow(/'X\/taban' parça adı iki kez/);
+    // Dosya gidiş-dönüşü onarımsız.
+    const raw = JSON.parse(api.projectToJson(out));
+    expect(api.parseProject(raw)).toEqual(raw);
+  });
+
+  it('ızgara: eşit hücreler, sütun sayısı, aralık; önek proje adı; aralık 0 da kesimi bozmaz', () => {
+    const fam = [variant(40), variant(60), variant(80)];
+    const vols = fam.map((p) => solidVol(p));
+    const g = api.gridProjects(fam.map((project) => ({ project })), { columns: 2, gap: 20 });
+    expect(g.cells.map((c) => c.prefix)).toEqual(['braket-40', 'braket-60', 'braket-80']);
+    const cx = g.cells.map((c) => (c.box.min.x + c.box.max.x) / 2);
+    const cy = g.cells.map((c) => (c.box.min.y + c.box.max.y) / 2);
+    expect(cx[1] - cx[0]).toBeCloseTo(cx[1] - cx[2]); // 2 sütun: 3. hücre 1. sütunda
+    expect(cy[0]).toBeCloseTo(cy[1]);
+    expect(cy[0] - cy[2]).toBeGreaterThan(30); // ikinci satır önde (−Y)
+    const width = Math.max(...fam.map((p) => api.partsBox(p.parts.filter((x) => x.role !== 'hole'), 96)).map((b) => b.max.x - b.min.x));
+    expect(cx[1] - cx[0]).toBeCloseTo(width + 20, 6);
+    const z = api.gridProjects(fam.map((project) => ({ project })), { columns: 3, gap: 0 });
+    z.cells.forEach((c, i) => expect(solidVol(z.project, `${c.prefix}/`)).toBeCloseTo(vols[i], 6));
+    // Aynı adlı projelere sıra numarası.
+    const same = api.gridProjects([{ project: fam[0] }, { project: fam[0] }]);
+    expect(same.cells.map((c) => c.prefix)).toEqual(['braket-40 1', 'braket-40 2']);
   });
 });
 

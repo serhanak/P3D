@@ -57,3 +57,7 @@ export type { MeshFileProject } from './files';
 // Node'da görüntü (görünmez Chrome/Edge; çalışan P3D sunucusu yoksa geçici sunucu) — BoltRush isteği #2
 export { snapshot, snapshotSession } from './snapshot-node';
 export type { NodeSnapshotOptions, NodeSnapshotResult, NodeSnapshotSessionOptions, SnapshotSession } from './snapshot-node';
+
+// Projeleri tek sahnede birleştirme / ızgaraya dizme (önek + öteleme; varyant aileleri) — BoltRush isteği #1
+export { combineProjects, gridProjects } from './combine';
+export type { CombineEntry, CombineOptions, GridCell, GridEntry, GridOptions } from './combine';

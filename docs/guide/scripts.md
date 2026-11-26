@@ -29,6 +29,7 @@ console.log(new THREE.Vector3(width, 60, 30).length(), issues);
   `exportableParts`, `printableParts`, `isDecal`, `baseIndexed`, `roleOf`, `solidVolume`, `solidBox`, `solidPartsBox`, `parseMeshFile`,
   `meshAssetFromSoup`, `registerAsset`, `decodedAsset`, `getAsset`, `usedAssets`, `buildStl`, `build3mf`, `buildGlb`, `sceneSummary`,
   `SHAPES`, `THREE`;
+  `combineProjects`, `gridProjects`;
   Node yardımcıları `loadProjectFile`, `saveProjectFile`, `exportFile`, `readMeshFile`, `snapshot`, `snapshotSession`; tipler `Project`, `Part`, `Op` …
   P3D'nin iç modüllerini (`…/P3D/src/*.ts`) doğrudan içe aktarmayın — iç yapı değişebilir, bu yüzey değişmez.
 - Kutular: `partBox(part, seg)` / `partsBox(parts, seg)` şeklin **kesimsiz** kutusudur (hızlı, delik uygulanmaz; sahne özetindeki
@@ -62,4 +63,19 @@ console.log(new THREE.Vector3(width, 60, 30).length(), issues);
   ```
   Hatalar (bulunamayan `parts` adı, yüklenemeyen parça) `r.errors`'tadır; geçersiz seçenek (bilinmeyen görünüm, `parts` +
   `focus`) istisna atar. Oturumu her durumda `close()` ile kapatın (geçici sunucu ve tarayıcı kalmasın).
+- **Aileyi tek sahnede görmek** (`gridProjects`, `combineProjects`): her varyantı kendi projesinde kurun, sonra birleştirin — işlem
+  listelerini kopyalayıp ad öneki eklemek ve konum kaydırmak gerekmez. Birleşik sahnede parça ve grup adları `önek/ad`, kimlikler yeni,
+  konumlar ve grup pivotları ötelenmiş; `cuts`'ı olmayan deliklere kaynakta kestikleri katılar `cuts` olarak yazılır (komşu
+  varyantı kesmez, her varyantın sonucu aynen kalır); proje çözünürlüğü farklı kaynağın yuvarlak parçalarına kaynağınki parça
+  `resolution`'ı olarak yazılır; tabla sahneyi alacak kadar büyür; eskiz alınmaz. Aynı önek (ad çakışması) hatadır.
+  ```ts
+  import { gridProjects, combineProjects, snapshot } from 'p3d';
+  const aile = [40, 60, 80].map(kur);   // her biri applyOps ile kurulmuş Project (adı önek olur: proje adı)
+  const { project, cells } = gridProjects(aile.map((p) => ({ project: p })), { columns: 3, gap: 20 });   // gap mm, varsayılan %15
+  await snapshot(project, { views: ['iso', 'top'], out: 'aile' });
+  // Elle yerleşim: combineProjects([{ project: a, prefix: 'kisa', offset: { x: -150 } }, { project: b, prefix: 'uzun' }])
+  ```
+  Izgara: eşit hücreler (en büyük varyantın genişlik/derinliği + aralık), sütunlar soldan sağa (+X), satırlar arkadan öne (üstten
+  görünümde yukarıdan aşağı), her varyant hücresinde XY'de ortalanır, z değişmez; `cells[i]` önek, öteleme ve kutu verir. CLI'de
+  dosyalarla: `p3d snapshot --file a.p3d.json,b.p3d.json,c.p3d.json [--columns N] [--gap mm]` (önek dosya adı).
 - Tek seferlik işlem listeleri için betik yerine `p3d apply --file model.p3d.json --ops ops.json` yeterlidir.
