@@ -382,7 +382,7 @@ export class Viewer {
     const xray = style === 'xray';
     const fill = xray ? L.opacity * XRAY_FILL : L.opacity;
     // Tel kafeste kaplama dolgusu derinlik yazmaz ve saydam sırada (uzaktan yakına) katılardan ve diğer çizgilerden sonra
-    // çizilir, kendi tel çizgileri de ondan sonra: dolgu polygonOffset −1/−2 ile öne çekilir, polygonOffset çizgilere
+    // çizilir, kendi tel çizgileri de ondan sonra: dolgu polygonOffset −2 birimle öne çekilir, polygonOffset çizgilere
     // uygulanmaz; derinlik yazsaydı kendi çizgilerini örterdi. Taşıyıcının çizgilerini yine örter, üst üste kaplamalar sıralı kalır.
     const decalWire = e.decal && style === 'wire';
     const see = fill < 1 || decalWire;
@@ -543,15 +543,17 @@ export class Viewer {
 
   private createEntry(part: Part): Entry {
     const group = new THREE.Group();
-    // Katılar kenar çizgilerinin arkasına itilir (+1); kaplama ise öne çekilir (−1): taşıyıcı yüzeyden lift kadar ayrık olsa da
-    // uzaktan derinlik çözünürlüğü yetmez, titremesin. Parçanın şekli değişmez (update şekil değiştirmez).
+    // Katılar kenar çizgilerinin arkasına itilir (eğimle +1, +1 birim); kaplama yalnızca sabit birimle öne çekilir (−2): taşıyıcı
+    // yüzeyden lift kadar ayrık olsa da uzaktan derinlik çözünürlüğü yetmez, titremesin — taşıyıcı kendi eğimi kadar geride kalır.
+    // Kaplamaya eğim katsayısı verilmez: neredeyse yandan görülen kaplamada eğim × piksel onlarca mm eder ve opak katının içindeki
+    // kaplama önündeki yüzün üstüne çizgi olarak çıkıyordu (BoltRush #29). Parçanın şekli değişmez (update şekil değiştirmez).
     const decal = part.shape === 'decal';
     const material = new THREE.MeshStandardMaterial({
       color: part.color,
       roughness: 0.55,
       metalness: 0.05,
       polygonOffset: true,
-      polygonOffsetFactor: decal ? -1 : 1,
+      polygonOffsetFactor: decal ? 0 : 1,
       polygonOffsetUnits: decal ? -2 : 1,
     });
     const mesh = new THREE.Mesh(new THREE.BufferGeometry(), material);

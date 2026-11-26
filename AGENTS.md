@@ -321,7 +321,8 @@ Arayüz düzenleme ──┘                    │ (önceki JSON undo yığın�
 - Kamera tipi (perspektif / ortografik) yalnızca bellektedir; `this.camera` iki tipten biridir ve onu kullanan kod (ışın, ekran
   izdüşümü, piksel ölçeği, sığdırma, kırpma düzlemleri) ikisini de desteklemeli. Ortoda kamera sahne kutusunun (tabla + parçalar +
   eskiz) dışında durur. `snapshot` kendi kameralarını kullanır (`projection`; arayüz kamerasından bağımsız).
-- Kaplama malzemesi `polygonOffset` −1/−2 (katılar +1/+1) ve `double` ise iki yüzlü çizilir.
+- Kaplama malzemesi `polygonOffset` 0/−2 (katılar +1/+1: taşıyıcı kendi eğimi kadar geride kalır) ve `double` ise iki yüzlü çizilir.
+  Kaplamaya eğim katsayısı (factor) vermeyin: yandan görülen kaplama opak katının içinden öne çıkar (BoltRush #29).
 - `snapshot`: dik görünümler kutuya sığdırılır; perspektif görünümler `eye` (göz hizası, `SnapshotCamera.eyeHeight`) ve
   `camera` (`eye` zorunlu) `perspectiveCamera`'dadır; yakın düzlem uzaklıkla orantılıdır.
 - GLB: malzeme anahtarı renk + saydamlık + iki yüzlülük. `cullHidden` (yalnız GLB; kural `src/cull.ts`: ε küçültülüp ε dışarı
